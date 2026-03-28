@@ -23,8 +23,8 @@ jobs:
         with:
           node-version: '20'
 
-      - name: List Files (Debug)
-        run: ls -R
+      - name: Check file content (Debug)
+        run: cat frontend/app/api/predict/route.ts
 
       - name: Install Dependencies
         working-directory: frontend
