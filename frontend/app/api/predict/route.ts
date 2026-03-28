@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import axios from 'axios';
-import { cleanAndIngest, queryMarketData, queryEarningsData } from '../../../lib/influx';
+import { cleanAndIngest, queryMarketData, queryEarningsData } from '@/lib/influx';
 
 const ALPHA_VANTAGE_API_KEY = process.env.ALPHA_VANTAGE_API_KEY;
 
