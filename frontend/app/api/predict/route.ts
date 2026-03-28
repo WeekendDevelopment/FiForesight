@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import axios from 'axios';
-import { cleanAndIngest, queryMarketData, queryEarningsData } from '@/lib/influx';
+import { cleanAndIngest, queryMarketData, queryEarningsData } from '../../../lib/influx';
 
 const ALPHA_VANTAGE_API_KEY = process.env.ALPHA_VANTAGE_API_KEY;
 
@@ -11,7 +11,7 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
  * Calculates the Relative Strength Index (RSI) for a series of prices.
  */
 function calculateRSI(prices: number[], period: number = 14): number {
-  if (prices.length <= period) return 50; // Default if not enough data
+  if (prices.length <= period) return 50;
 
   let gains = 0;
   let losses = 0;
@@ -60,7 +60,6 @@ export async function POST(request: Request) {
   try {
     console.log(`Fetching data for: ${symbol}`);
 
-    // 1. Fetch Fresh Data from Alpha Vantage
     const historicalResponse = await axios.get(`https://www.alphavantage.co/query`, {
       params: {
         function: 'TIME_SERIES_MONTHLY_ADJUSTED',
@@ -69,7 +68,7 @@ export async function POST(request: Request) {
       }
     });
 
-    await sleep(2000); // Respect rate limit
+    await sleep(2000);
 
     const earningsResponse = await axios.get(`https://www.alphavantage.co/query`, {
       params: {
@@ -86,22 +85,18 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: `Could not find data for ${symbol}.` }, { status: 400 });
     }
 
-    // 2. Ingest to InfluxDB
     try {
       await cleanAndIngest(symbol, historicalResponse.data, earningsResponse.data);
     } catch (ingestError) {
       console.warn('Ingestion failed:', ingestError);
     }
 
-    // 3. Query Historical Data Back for AI Features
     const historicalPrices = await queryMarketData(symbol, '-2y');
     const earningsHistory = await queryEarningsData(symbol, '-5y');
 
-    // 4. Calculate AI Features (RSI, etc.)
     const closes = historicalPrices.map((row: any) => row.close);
     const rsi = calculateRSI(closes);
 
-    // 5. Prediction Logic (Enhanced with RSI and Earnings)
     const lastMonthDate = Object.keys(monthlySeries)[0];
     const lastMonthData = monthlySeries[lastMonthDate];
     const currentPrice = parseFloat(lastMonthData['4. close']);
@@ -110,10 +105,9 @@ export async function POST(request: Request) {
 
     const volatility = (high - low) / 20;
     
-    // AI Adjustment based on RSI (Overbought/Oversold)
     let bias = 1.0;
-    if (rsi > 70) bias = 0.8; // Overbought, expect smaller gains
-    if (rsi < 30) bias = 1.2; // Oversold, expect stronger bounce
+    if (rsi > 70) bias = 0.8;
+    if (rsi < 30) bias = 1.2;
 
     const predictedHigh = currentPrice + (volatility * 0.5 * bias);
     const predictedLow = currentPrice - (volatility * 0.5 * (2 - bias));

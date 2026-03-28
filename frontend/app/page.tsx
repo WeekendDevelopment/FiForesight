@@ -80,7 +80,6 @@ export default function Home() {
 
           {prediction && (
             <div className="mt-8 space-y-6">
-              {/* Header: Symbol and Trend */}
               <div className="flex justify-between items-center">
                 <span className="text-3xl font-extrabold">{prediction.symbol}</span>
                 <span className={`badge badge-lg py-4 font-bold ${prediction.prediction.trend === 'Bullish' ? 'badge-success' : 'badge-error'}`}>
@@ -88,7 +87,6 @@ export default function Home() {
                 </span>
               </div>
               
-              {/* Current Price and Range */}
               <div className="grid grid-cols-1 gap-4">
                 <div className="bg-base-200 p-6 rounded-2xl">
                   <p className="text-xs uppercase opacity-50 font-bold mb-1">Current Price</p>
@@ -107,7 +105,6 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Technical Analysis Section */}
               <div className="divider text-[10px] uppercase opacity-30 tracking-[0.2em]">Technical Indicators</div>
               
               <div className="grid grid-cols-2 gap-4">
@@ -131,7 +128,7 @@ export default function Home() {
               </div>
               
               <p className="text-[9px] mt-8 text-center opacity-40 uppercase tracking-[0.3em] font-medium">
-                Analysis Completed at {new Date(prediction.lastUpdated).toLocaleTimeString()}
+                Data provided by Alpha Vantage • Analysis Completed at {new Date(prediction.lastUpdated).toLocaleTimeString()}
               </p>
             </div>
           )}
