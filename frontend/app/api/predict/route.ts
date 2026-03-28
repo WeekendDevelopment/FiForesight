@@ -1,27 +1,17 @@
 import { NextResponse } from 'next/server';
 import axios from 'axios';
 
-const ALPHA_VANTAGE_API_KEY = process.env.ALPHA_VANTAGE_API_KEY;
-
 export async function POST(request: Request) {
   const { data } = await request.json();
   const symbol = (data || 'SPY').toUpperCase();
-
-  if (!ALPHA_VANTAGE_API_KEY) {
-    return NextResponse.json({ 
-      error: 'Alpha Vantage API Key is missing. Please add it to your .env.local file.' 
-    }, { status: 500 });
-  }
 
   try {
     console.log(`Fetching quote for: ${symbol}`);
     
     // Using GLOBAL_QUOTE for real-time price info (usually very stable on free tier)
-    const response = await axios.get(`https://www.alphavantage.co/query`, {
+    const response = await axios.get(`http://localhost:8000/global-quote`, {
       params: {
-        function: 'GLOBAL_QUOTE',
-        symbol: symbol,
-        apikey: ALPHA_VANTAGE_API_KEY
+        symbol: symbol
       }
     });
 

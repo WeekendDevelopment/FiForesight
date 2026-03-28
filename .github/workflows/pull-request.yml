@@ -1,13 +1,16 @@
-name: Node build
+name: Build
 on:
   pull_request:
     branches:
       - "**"
-    paths:
-      - "frontend/**"
-
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+env:
+  IMAGE_NAME: ghcr.io/weekend-development/fi-foresight
 jobs:
-  compile:
+  build-frontend:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -32,3 +35,86 @@ jobs:
         working-directory: frontend
         shell: bash
         run: pnpm run build
+  build-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+          cache: 'pip'
+
+      - name: Install Latest pip
+        working-directory: backend
+        shell: bash
+        run: pip install --upgrade pip
+
+      - name: Install Dependencies
+        working-directory: backend
+        shell: bash
+        run: pip install -r requirements.txt
+
+      - name: Install Ruff
+        working-directory: backend
+        shell: bash
+        run: pip install ruff
+
+      - name: Run Ruff Linter
+        working-directory: backend
+        shell: bash
+        run: ruff check .
+  build-image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Application
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          load: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Run container in background
+        env:
+          ALPHA_VANTAGE_API_KEY: ${{ secrets.ALPHA_VANTAGE_API_KEY }}
+        run: |
+          docker run -d \
+          --name fi-foresight-test \
+          -p 3000:3000 \
+          ${{ env.IMAGE_NAME }}:latest
+
+      - name: Wait for container to be ready
+        run: |
+          for i in {1..30}; do
+            if curl -f http://localhost:3000/ 2>/dev/null; then
+              echo "Application is up!" >> $GITHUB_STEP_SUMMARY
+              exit 0
+            fi
+            echo "Waiting for application..."
+            sleep 2
+          done
+          echo "Application failed to start in time"
+          docker logs fi-foresight-test
+          exit 1
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f fi-foresight-test
