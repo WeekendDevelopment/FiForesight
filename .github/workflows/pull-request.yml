@@ -1,0 +1,30 @@
+name: Node build
+on:
+  pull_request:
+    branches:
+      - "**"
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        shell: bash
+        run: npm install --global pnpm
+
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 'latest'
+          cache: 'pnpm'
+
+      - name: Install Dependencies
+        shell: bash
+        run: pnpm install --lockfile
+
+      - name: Run Build
+        shell: bash
+        run: pnpm run build
