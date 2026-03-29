@@ -3,13 +3,13 @@ import json
 import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import List
+from typing import List, Optional
 
 import httpx
 import pandas as pd
 import numpy as np
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Query, Body
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
 from pydantic import BaseModel
@@ -66,7 +66,7 @@ def calculate_rsi(prices: List[float], periods: int = 14) -> float:
     last_rsi = rsi.iloc[-1]
     return float(last_rsi) if not np.isnan(last_rsi) else 50.0
 
-async def generate_ai_prediction(symbol: str, price_history: List[dict], rsi: float):
+async def generate_ai_prediction(symbol: str, price_history: List[dict], earnings_history: List[dict], rsi: float):
     if not ai_client:
         return {"predictedHigh": 0, "predictedLow": 0, "analystNote": "AI API Key missing.", "confidence": "low"}
 
@@ -75,7 +75,7 @@ async def generate_ai_prediction(symbol: str, price_history: List[dict], rsi: fl
     prompt = f"Analyze {symbol} (Current RSI: {rsi:.2f}). Recent history:\n{price_str}\nProvide 48h forecast and analyst note in JSON: {{'predictedHigh': float, 'predictedLow': float, 'analystNote': string, 'confidence': 'low|medium|high'}}"
 
     # Model priority list based on user's available models
-    models_to_try = ["gemini-2.5-flash"]
+    models_to_try = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"]
     
     for model_name in models_to_try:
         try:
@@ -93,11 +93,12 @@ async def generate_ai_prediction(symbol: str, price_history: List[dict], rsi: fl
             logger.warning(f"Model {model_name} failed: {e}")
             continue
 
+    # All models failed
     last_price = price_history[-1]['close'] if price_history else 100.0
     return {
         "predictedHigh": round(last_price * 1.02, 2),
         "predictedLow": round(last_price * 0.98, 2),
-        "analystNote": f"Technical trend suggests {'bullish' if rsi > 50 else 'bearish'} momentum.",
+        "analystNote": f"AI models unavailable. Technical trend suggests {'bullish' if rsi > 50 else 'bearish'} momentum.",
         "confidence": "medium"
     }
 
@@ -110,8 +111,7 @@ async def ingest_to_influx(symbol: str, historical_data: dict, earnings_data: li
                 point.field("close", float(historical_data['c'][i]))
                 point.time(datetime.fromtimestamp(historical_data['t'][i], tz=timezone.utc), WritePrecision.NS)
                 points.append(point)
-            except (ValueError, KeyError, TypeError):
-                continue
+            except: continue
     
     for earning in earnings_data:
         try:
@@ -121,14 +121,11 @@ async def ingest_to_influx(symbol: str, historical_data: dict, earnings_data: li
             date_str = earning.get('period') or datetime.now(timezone.utc).strftime('%Y-%m-%d')
             point.time(datetime.strptime(date_str, '%Y-%m-%d'), WritePrecision.NS)
             points.append(point)
-        except (ValueError, KeyError, TypeError):
-            continue
+        except: continue
 
     if points:
-        try:
-            write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=points)
-        except Exception as e:
-            logger.error(f"InfluxDB Write Error: {e}")
+        try: write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=points)
+        except Exception as e: logger.error(f"InfluxDB Write Error: {e}")
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(payload: dict = Body(...)):
@@ -165,12 +162,13 @@ async def predict(payload: dict = Body(...)):
 
     # Database Query
     query_market = f'from(bucket: "{INFLUXDB_BUCKET}") |> range(start: -100d) |> filter(fn: (r) => r["_measurement"] == "market_data" and r["symbol"] == "{symbol}") |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value") |> sort(columns: ["_time"], desc: false)'
+    query_earnings = f'from(bucket: "{INFLUXDB_BUCKET}") |> range(start: -5y) |> filter(fn: (r) => r["_measurement"] == "earnings_data" and r["symbol"] == "{symbol}") |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value") |> sort(columns: ["_time"], desc: false)'
     
-    historical_prices = []
+    historical_prices, earnings_history = [], []
     try:
         historical_prices = [r.values for t in query_api.query(query_market) for r in t.records]
-    except Exception as e:
-        logger.error(f"InfluxDB query error: {e}")
+        earnings_history = [r.values for t in query_api.query(query_earnings) for r in t.records]
+    except: pass
 
     # API Fallback if DB empty
     if not historical_prices:
@@ -190,12 +188,12 @@ async def predict(payload: dict = Body(...)):
     historical_prices.sort(key=lambda x: x['_time'])
     closes = [float(p['close']) for p in historical_prices]
     rsi = calculate_rsi(closes)
-    ai_result = await generate_ai_prediction(symbol, historical_prices, rsi)
+    ai_result = await generate_ai_prediction(symbol, historical_prices, earnings_history, rsi)
 
     history_formatted = [{"date": p['_time'].strftime('%m/%d') if isinstance(p['_time'], datetime) else str(p['_time'])[5:10], "price": p['close']} for p in historical_prices[-20:]]
 
     return {
-        "symbol": symbol, "currentPrice": f"{live_price if live_price > 0 else closes[-1]:.2f}", "rsi": f"{rsi:.2f}",
+        "symbol": symbol, "currentPrice": f"{live_price if live_price > 0 else (closes[-1] if closes else 0):.2f}", "rsi": f"{rsi:.2f}",
         "prediction": {"highRange": str(ai_result.get('predictedHigh', 0)), "lowRange": str(ai_result.get('predictedLow', 0)), "trend": "Bullish" if rsi > 50 else "Bearish"},
         "analystNote": ai_result.get('analystNote', ""), "confidence": ai_result.get('confidence', "low"),
         "history": history_formatted, "lastUpdated": now.isoformat()
