@@ -10,7 +10,7 @@ COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN pnpm install --no-frozen-lockfile
 COPY frontend/ ./
 # Skip linting/type checking during build to avoid errors from orphaned files
-RUN npm_config_loglevel=silent pnpm build --no-lint
+RUN pnpm build --no-lint
 
 # Build stage for Backend
 FROM python:3.11-slim AS backend-builder
