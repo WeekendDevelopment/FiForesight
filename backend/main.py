@@ -75,7 +75,7 @@ async def generate_ai_prediction(symbol: str, price_history: List[dict], rsi: fl
     prompt = f"Analyze {symbol} (Current RSI: {rsi:.2f}). Recent history:\n{price_str}\nProvide 48h forecast and analyst note in JSON: {{'predictedHigh': float, 'predictedLow': float, 'analystNote': string, 'confidence': 'low|medium|high'}}"
 
     # Model priority list based on user's available models
-    models_to_try = ["gemini-2.0-flash", "gemini-1.5-flash"]
+    models_to_try = ["gemini-2.5-flash"]
     
     for model_name in models_to_try:
         try:
