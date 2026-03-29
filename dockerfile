@@ -3,7 +3,8 @@
 # 1. Frontend Build Stage
 FROM node:20-alpine AS frontend-builder
 WORKDIR /app/frontend
-RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
+# Use npm to install pnpm instead of corepack to avoid intermittent socket errors
+RUN npm install -g pnpm@10.33.0
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY frontend/ ./
@@ -15,7 +16,7 @@ RUN pnpm build --no-lint
 FROM python:3.11-slim
 WORKDIR /app
 
-# Install Node.js
+# Install Node.js and system tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
@@ -33,16 +34,18 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 
 # Copy root config
 COPY package.json pnpm-lock.yaml ./
+# Install root dependencies (concurrently)
 RUN pnpm install --prod --frozen-lockfile
 
 # Copy build artifacts
-# In standalone mode, server.js is in .next/standalone
+# Standalone Next.js creates its own node_modules inside the standalone folder
+# We copy the entire folder into /app/frontend
 COPY --from=frontend-builder /app/frontend/.next/standalone ./frontend/
 COPY --from=frontend-builder /app/frontend/.next/static ./frontend/.next/static
 COPY --from=frontend-builder /app/frontend/public ./frontend/public
 COPY backend/ ./backend/
 
-# Expose the frontend port
+# Expose only the frontend port
 EXPOSE 3000
 
 # Start script
