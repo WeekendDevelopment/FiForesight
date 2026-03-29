@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 env:
   GH_TOKEN: ${{ github.token }}
-  IMAGE_NAME: ghcr.io/weekend-development/fi-foresight
+  IMAGE_NAME: ghcr.io/weekenddevelopment/fiforesight
 permissions:
   contents: write
   id-token: write
