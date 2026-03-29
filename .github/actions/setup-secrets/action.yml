@@ -7,10 +7,10 @@ runs:
       shell: bash
       run: |
         koyeb secrets create ghcr \
-          --type registry \
+          --type registry-private \
           --url ghcr.io \
           --username ${{ github.actor }} \
-          --password ${{ env.GH_TOKEN }} || koyeb secrets update ghcr --password ${{ env.GH_TOKEN }}
+          --value ${{ env.GH_TOKEN }} || koyeb secrets update ghcr --value ${{ env.GH_TOKEN }}
 
     - name: Create GOOGLE_GENAI_API_KEY secret
       uses: koyeb/action-git-deploy/secret@v1
