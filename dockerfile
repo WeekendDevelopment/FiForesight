@@ -5,7 +5,7 @@ WORKDIR /app/frontend
 # Use corepack for pnpm management
 RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
 
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 RUN pnpm install
 COPY frontend/ ./
 RUN pnpm build
