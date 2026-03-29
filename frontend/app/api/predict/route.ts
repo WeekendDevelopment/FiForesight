@@ -2,43 +2,6 @@ import { NextResponse } from 'next/server';
 import axios from 'axios';
 import { cleanAndIngest, queryMarketData, queryEarningsData } from '../../../lib/influx';
 
-const ALPHA_VANTAGE_API_KEY = process.env.ALPHA_VANTAGE_API_KEY;
-
-// Utility function to handle API rate limiting
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-/**
- * Calculates the Relative Strength Index (RSI) for a series of prices.
- */
-function calculateRSI(prices: number[], period: number = 14): number {
-  if (prices.length <= period) return 50;
-
-  let gains = 0;
-  let losses = 0;
-
-  for (let i = 1; i <= period; i++) {
-    const change = prices[i] - prices[i - 1];
-    if (change > 0) gains += change;
-    else losses -= change;
-  }
-
-  let avgGain = gains / period;
-  let avgLoss = losses / period;
-
-  for (let i = period + 1; i < prices.length; i++) {
-    const change = prices[i] - prices[i - 1];
-    const gain = change > 0 ? change : 0;
-    const loss = change < 0 ? -change : 0;
-
-    avgGain = (avgGain * (period - 1) + gain) / period;
-    avgLoss = (avgLoss * (period - 1) + loss) / period;
-  }
-
-  if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return 100 - (100 / (1 + rs));
-}
-
 export async function POST(request: Request) {
   let symbol: string;
   let requestBody: any;
@@ -51,20 +14,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid request body. Expected JSON.' }, { status: 400 });
   }
 
-  if (!ALPHA_VANTAGE_API_KEY) {
-    return NextResponse.json({ 
-      error: 'Alpha Vantage API Key is missing. Please add it to your .env.local file.' 
-    }, { status: 500 });
-  }
-
   try {
-    console.log(`Fetching data for: ${symbol}`);
-
-    const historicalResponse = await axios.get(`https://www.alphavantage.co/query`, {
+    console.log(`Fetching quote for: ${symbol}`);
+    
+    // Using GLOBAL_QUOTE for real-time price info (usually very stable on free tier)
+    const response = await axios.get(`http://localhost:8000/global-quote`, {
       params: {
-        function: 'TIME_SERIES_MONTHLY_ADJUSTED',
-        symbol: symbol,
-        apikey: ALPHA_VANTAGE_API_KEY
+        symbol: symbol
       }
     });
 
