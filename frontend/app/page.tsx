@@ -4,14 +4,14 @@ import React, { useState, useMemo } from 'react';
 import axios from 'axios';
 import { 
   Box, Container, Typography, TextField, Button, Card, CardContent, 
-  Grid, Badge, Divider, CircularProgress, Alert, ThemeProvider, createTheme, 
-  CssBaseline, Paper, IconButton, Chip, Stack
+  Grid, Divider, CircularProgress, Alert, ThemeProvider, createTheme, 
+  CssBaseline, Paper, Chip, Stack
 } from '@mui/material';
 import { 
-  TrendingUp, TrendingDown, Info, Search, BrainCircuit, Activity, BarChart3, Clock
+  TrendingUp, TrendingDown, Search, BrainCircuit, Activity, Clock
 } from 'lucide-react';
 import { 
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area
 } from 'recharts';
 
 interface PredictionData {
@@ -57,6 +57,7 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
+      // Calls our Next.js API route which proxies to the Python backend
       const response = await axios.post('/api/predict', { data: symbol });
       setPrediction(response.data);
     } catch (err: any) {
@@ -204,7 +205,7 @@ export default function Dashboard() {
                         "{prediction.analystNote}"
                       </Typography>
                       <Box sx={{ mt: 2 }}>
-                        <Typography variant="caption" sx={{ opacity: 0.4 }}>CONFIDENCE: {prediction.confidence.toUpperCase()}</Typography>
+                        <Typography variant="caption" sx={{ opacity: 0.4 }}>CONFIDENCE: {prediction.confidence?.toUpperCase()}</Typography>
                       </Box>
                     </CardContent>
                   </Card>
