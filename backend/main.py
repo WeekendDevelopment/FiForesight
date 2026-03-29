@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone, timedelta
 from typing import List
 
@@ -31,7 +32,9 @@ INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "FiForesightBucket")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 GOOGLE_GENAI_API_KEY = os.getenv("GOOGLE_GENAI_API_KEY")
 
-# Clients
+# Clients initialization
+write_api = None
+query_api = None
 try:
     influx_client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG)
     write_api = influx_client.write_api(write_options=SYNCHRONOUS)
@@ -74,30 +77,27 @@ async def generate_ai_prediction(symbol: str, price_history: List[dict], rsi: fl
     
     prompt = f"Analyze {symbol} (Current RSI: {rsi:.2f}). Recent history:\n{price_str}\nProvide 48h forecast and analyst note in JSON: {{'predictedHigh': float, 'predictedLow': float, 'analystNote': string, 'confidence': 'low|medium|high'}}"
 
-    # Model priority list based on user's available models
-    models_to_try = ["gemini-2.5-flash"]
-    
-    for model_name in models_to_try:
-        try:
-            logger.info(f"Attempting AI prediction with {model_name}")
-            response = await asyncio.to_thread(
-                ai_client.models.generate_content, 
-                model=model_name, 
-                contents=prompt
-            )
-            text = response.text.strip()
-            start, end = text.find('{'), text.rfind('}') + 1
-            if start != -1 and end != 0:
-                return json.loads(text[start:end])
-        except Exception as e:
-            logger.warning(f"Model {model_name} failed: {e}")
-            continue
+    # Using only 2.5 flash as requested
+    model_name = "gemini-2.5-flash"
+    try:
+        logger.info(f"Attempting AI prediction with {model_name}")
+        response = await asyncio.to_thread(
+            ai_client.models.generate_content, 
+            model=model_name, 
+            contents=prompt
+        )
+        text = response.text.strip()
+        match = re.search(r"\{.*}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+    except Exception as e:
+        logger.warning(f"Model {model_name} failed: {e}")
 
     last_price = price_history[-1]['close'] if price_history else 100.0
     return {
         "predictedHigh": round(last_price * 1.02, 2),
         "predictedLow": round(last_price * 0.98, 2),
-        "analystNote": f"Technical trend suggests {'bullish' if rsi > 50 else 'bearish'} momentum.",
+        "analystNote": f"AI analysis temporarily unavailable. Technical trend suggests {'bullish' if rsi > 50 else 'bearish'} momentum.",
         "confidence": "medium"
     }
 
@@ -124,11 +124,15 @@ async def ingest_to_influx(symbol: str, historical_data: dict, earnings_data: li
         except (ValueError, KeyError, TypeError):
             continue
 
-    if points:
+    if points and write_api:
         try:
             write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=points)
         except Exception as e:
             logger.error(f"InfluxDB Write Error: {e}")
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(payload: dict = Body(...)):
@@ -168,7 +172,8 @@ async def predict(payload: dict = Body(...)):
     
     historical_prices = []
     try:
-        historical_prices = [r.values for t in query_api.query(query_market) for r in t.records]
+        if query_api:
+            historical_prices = [r.values for t in query_api.query(query_market) for r in t.records]
     except Exception as e:
         logger.error(f"InfluxDB query error: {e}")
 
@@ -200,3 +205,8 @@ async def predict(payload: dict = Body(...)):
         "analystNote": ai_result.get('analystNote', ""), "confidence": ai_result.get('confidence', "low"),
         "history": history_formatted, "lastUpdated": now.isoformat()
     }
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
