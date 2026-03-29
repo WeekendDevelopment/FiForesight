@@ -6,7 +6,6 @@ WORKDIR /app/frontend
 # Use npm to install pnpm instead of corepack to avoid intermittent socket errors
 RUN npm install -g pnpm@10.33.0
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
-# Use --no-frozen-lockfile to allow building even if the lockfile is slightly out of sync
 RUN pnpm install --no-frozen-lockfile
 COPY frontend/ ./
 # Build frontend with standalone output
@@ -33,10 +32,15 @@ RUN npm install -g pnpm@10.33.0
 COPY backend/requirements.txt ./backend/
 RUN pip install --no-cache-dir -r backend/requirements.txt
 
-# Copy root config
+# Copy root package.json and pnpm-lock.yaml for concurrently
 COPY package.json pnpm-lock.yaml ./
-# Install root dependencies (concurrently)
 RUN pnpm install --prod --no-frozen-lockfile
+
+# --- CRITICAL FIX: Copy frontend package.json and lockfile to the final image ---
+# This ensures 'pnpm start' in the final image correctly resolves to 'node server.js'
+RUN mkdir -p frontend # Ensure directory exists
+COPY frontend/package.json ./frontend/package.json
+COPY frontend/pnpm-lock.yaml ./frontend/pnpm-lock.yaml
 
 # Copy build artifacts
 # Standalone Next.js creates its own node_modules inside the standalone folder
