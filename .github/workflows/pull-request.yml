@@ -73,9 +73,9 @@ jobs:
 
       - name: Smoke Test (Backend Health Check)
         run: |
-          docker run -d --name fi-foresight-test -p 8000:8000 ${{ env.IMAGE_NAME }}:latest
+          docker run -d --name fi-foresight-test -p 8081:8000 ${{ env.IMAGE_NAME }}:latest
           for i in {1..30}; do
-            if curl -f http://localhost:8000/ 2>/dev/null; then
+            if curl -f http://localhost:8081/health 2>/dev/null; then
               echo "Backend is up!" >> $GITHUB_STEP_SUMMARY
               exit 0
             fi
