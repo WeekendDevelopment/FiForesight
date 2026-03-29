@@ -1,24 +1,51 @@
-# Dedicated Backend Build for Koyeb/Cloud
-# Using Python 3.11 slim (Debian) for maximum compatibility with pandas/numpy
-FROM python:3.11-slim
+# --- Multi-stage build ---
 
+# 1. Frontend Build Stage
+FROM node:20-alpine AS frontend-builder
+WORKDIR /app/frontend
+RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
+COPY frontend/package.json frontend/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY frontend/ ./
+# Build frontend with standalone output for better Docker performance
+ENV NEXT_PRIVATE_STANDALONE=true
+RUN pnpm build --no-lint
+
+# 2. Final Runtime Stage
+# Using Python 3.11 slim as the base because backend has complex compiled dependencies
+FROM python:3.11-slim
 WORKDIR /app
 
-# Install build dependencies for compiled packages
+# Install Node.js in the Python environment (Alpine is too hard for pandas/numpy)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
+    curl \
+    ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y node-js \
+    && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python requirements
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install pnpm
+RUN npm install -g pnpm@10.33.0
 
-# Copy backend source code
-COPY backend/ .
+# Install Backend dependencies
+COPY backend/requirements.txt ./backend/
+RUN pip install --no-cache-dir -r backend/requirements.txt
 
-# Expose the port (FastAPI default)
-EXPOSE 8000
+# Copy root config
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --prod --frozen-lockfile
 
-# Start command optimized for cloud environments
-# Bind to 0.0.0.0 and use the PORT environment variable provided by the host
-CMD ["sh", "-c", "python3 -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Copy build artifacts and source code
+COPY --from=frontend-builder /app/frontend/.next/standalone ./frontend/
+COPY --from=frontend-builder /app/frontend/.next/static ./frontend/.next/static
+COPY --from=frontend-builder /app/frontend/public ./frontend/public
+COPY backend/ ./backend/
+
+# Expose only the frontend port (3000)
+# Backend will run on 8000 but be unreachable from outside
+EXPOSE 3000
+
+# Start script
+# We start both but only expose the port for the frontend
+CMD ["pnpm", "run", "app:start"]

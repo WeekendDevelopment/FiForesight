@@ -1,24 +1,33 @@
 import { NextResponse } from 'next/server';
 import axios from 'axios';
 
-const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000';
+// Since both frontend and backend are in the same container,
+// the frontend can talk to the backend via localhost:8000 internally.
+// This address is NOT exposed to the public internet.
+const INTERNAL_BACKEND_URL = 'http://127.0.0.1:8000';
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
     const symbol = (body.data || 'SPY').toUpperCase();
 
-    // Delegate prediction logic to the Python backend
-    const response = await axios.post(`${BACKEND_URL}/predict`, { data: symbol });
+    console.log(`[Internal Proxy] Routing ${symbol} to ${INTERNAL_BACKEND_URL}/predict`);
+
+    const response = await axios.post(`${INTERNAL_BACKEND_URL}/predict`, { 
+      data: symbol 
+    }, {
+      timeout: 25000, // High timeout for free tier wake-ups
+      headers: { 'Content-Type': 'application/json' }
+    });
 
     return NextResponse.json(response.data);
 
   } catch (error: any) {
-    console.error('Backend Proxy Error:', error.response?.data || error.message);
+    const errorMessage = error.response?.data?.detail || error.message;
+    console.error(`[Internal Proxy] Backend Error:`, errorMessage);
     
-    const status = error.response?.status || 500;
-    const detail = error.response?.data?.detail || 'Internal server error';
-    
-    return NextResponse.json({ error: detail }, { status });
+    return NextResponse.json({ 
+      error: `Service error: ${errorMessage}` 
+    }, { status: error.response?.status || 500 });
   }
 }
