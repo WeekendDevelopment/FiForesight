@@ -3,6 +3,14 @@ description: "Creates secrets in Koyeb"
 runs:
   using: "composite"
   steps:
+    - name: Create GHCR Registry Secret
+      shell: bash
+      run: |
+        koyeb registry create ghcr \
+          --url ghcr.io \
+          --username ${{ github.actor }} \
+          --password ${{ env.GH_TOKEN }} || koyeb registry update ghcr --password ${{ env.GH_TOKEN }}
+
     - name: Create GOOGLE_GENAI_API_KEY secret
       uses: koyeb/action-git-deploy/secret@v1
       with:
