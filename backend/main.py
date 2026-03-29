@@ -2,7 +2,7 @@ import os
 import json
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
 import httpx
@@ -28,7 +28,7 @@ INFLUXDB_URL = os.getenv("INFLUXDB_URL", "http://localhost:8086")
 INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN")
 INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "WeekendDevelopment")
 INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "FiForesightBucket")
-FMP_API_KEY = os.getenv("FMP_API_KEY")
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 GOOGLE_GENAI_API_KEY = os.getenv("GOOGLE_GENAI_API_KEY")
 
 # Clients
@@ -72,41 +72,57 @@ async def generate_ai_prediction(symbol: str, price_history: List[dict], earning
 
     price_str = "\n".join([f"Date: {p['_time']}, Close: {p['close']}" for p in price_history[-20:]])
     
-    prompt = f"Analyze {symbol} (RSI: {rsi:.2f}). Recent history:\n{price_str}\nProvide 48h forecast and analyst note in JSON: {{'predictedHigh': float, 'predictedLow': float, 'analystNote': string, 'confidence': 'low|medium|high'}}"
+    prompt = f"Analyze {symbol} (Current RSI: {rsi:.2f}). Recent history:\n{price_str}\nProvide 48h forecast and analyst note in JSON: {{'predictedHigh': float, 'predictedLow': float, 'analystNote': string, 'confidence': 'low|medium|high'}}"
 
-    try:
-        # Use 1.5-flash as it usually has a separate (or higher) quota than 2.0-flash
-        response = await asyncio.to_thread(ai_client.models.generate_content, model="gemini-2.5-flash", contents=prompt)
-        text = response.text.strip()
-        start, end = text.find('{'), text.rfind('}') + 1
-        return json.loads(text[start:end])
-    except Exception as e:
-        logger.warning(f"AI Quota/Error: {e}")
-        last_price = price_history[-1]['close'] if price_history else 100.0
-        return {
-            "predictedHigh": round(last_price * 1.02, 2),
-            "predictedLow": round(last_price * 0.98, 2),
-            "analystNote": "Technical RSI analysis indicates neutral momentum. AI analysis currently cooling down.",
-            "confidence": "low"
-        }
-
-async def ingest_to_influx(symbol: str, historical_data: list, earnings_data: list):
-    points = []
-    for day in historical_data:
+    # Model priority list based on user's available models
+    models_to_try = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"]
+    
+    for model_name in models_to_try:
         try:
-            point = Point("market_data").tag("symbol", symbol)
-            point.field("close", float(day['close']))
-            point.time(datetime.strptime(day['date'], '%Y-%m-%d'), WritePrecision.NS)
-            points.append(point)
-        except: continue
+            logger.info(f"Attempting AI prediction with {model_name}")
+            response = await asyncio.to_thread(
+                ai_client.models.generate_content, 
+                model=model_name, 
+                contents=prompt
+            )
+            text = response.text.strip()
+            start, end = text.find('{'), text.rfind('}') + 1
+            if start != -1 and end != 0:
+                return json.loads(text[start:end])
+        except Exception as e:
+            logger.warning(f"Model {model_name} failed: {e}")
+            continue
+
+    # All models failed
+    last_price = price_history[-1]['close'] if price_history else 100.0
+    return {
+        "predictedHigh": round(last_price * 1.02, 2),
+        "predictedLow": round(last_price * 0.98, 2),
+        "analystNote": f"AI models unavailable. Technical trend suggests {'bullish' if rsi > 50 else 'bearish'} momentum.",
+        "confidence": "medium"
+    }
+
+async def ingest_to_influx(symbol: str, historical_data: dict, earnings_data: list):
+    points = []
+    if 'c' in historical_data and 't' in historical_data:
+        for i in range(len(historical_data['c'])):
+            try:
+                point = Point("market_data").tag("symbol", symbol)
+                point.field("close", float(historical_data['c'][i]))
+                point.time(datetime.fromtimestamp(historical_data['t'][i], tz=timezone.utc), WritePrecision.NS)
+                points.append(point)
+            except: continue
+    
     for earning in earnings_data:
         try:
             point = Point("earnings_data").tag("symbol", symbol)
-            surprise = earning.get('surprisePercentage') or earning.get('surprise') or 0
+            surprise = earning.get('surprisePercent') or 0
             point.field("surprise_percentage", float(surprise))
-            point.time(datetime.strptime(earning['date'], '%Y-%m-%d'), WritePrecision.NS)
+            date_str = earning.get('period') or datetime.now(timezone.utc).strftime('%Y-%m-%d')
+            point.time(datetime.strptime(date_str, '%Y-%m-%d'), WritePrecision.NS)
             points.append(point)
         except: continue
+
     if points:
         try: write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=points)
         except Exception as e: logger.error(f"InfluxDB Write Error: {e}")
@@ -114,31 +130,34 @@ async def ingest_to_influx(symbol: str, historical_data: list, earnings_data: li
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(payload: dict = Body(...)):
     symbol = payload.get('data', 'SPY').upper()
-    api_url = "https://financialmodelingprep.com/api/v3"
-    stable_url = "https://financialmodelingprep.com/stable"
+    base_url = "https://finnhub.io/api/v1"
     
-    headers = {"User-Agent": "Mozilla/5.0"}
-    live_price, historical_data, earnings_data = 0.0, [], []
+    live_price, prev_close, historical_data, earnings_data = 0.0, 0.0, {}, []
 
-    async with httpx.AsyncClient(headers=headers, timeout=10.0) as client:
-        # 1. Fetch Quote (Using /stable/quote which we know works)
-        q_resp = await client.get(f"{stable_url}/quote", params={"symbol": symbol, "apikey": FMP_API_KEY})
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        # 1. Fetch Quote
+        q_resp = await client.get(f"{base_url}/quote", params={"symbol": symbol, "token": FINNHUB_API_KEY})
         if q_resp.status_code == 200:
-            q_data = q_resp.json()
-            if isinstance(q_data, list) and len(q_data) > 0:
-                live_price = float(q_data[0].get('price', 0))
+            q_json = q_resp.json()
+            live_price = float(q_json.get('c', 0))
+            prev_close = float(q_json.get('pc', 0))
 
-        # 2. Fetch History (Using /v3 but with Query Parameter style to avoid Legacy 403)
-        h_resp = await client.get(f"{api_url}/historical-price-full", params={"symbol": symbol, "timeseries": 100, "apikey": FMP_API_KEY})
+        # 2. Fetch History
+        now = datetime.now(timezone.utc)
+        end = int(now.timestamp())
+        start = int((now - timedelta(days=150)).timestamp())
+        h_resp = await client.get(f"{base_url}/stock/candle", params={
+            "symbol": symbol, "resolution": "D", "from": start, "to": end, "token": FINNHUB_API_KEY
+        })
         if h_resp.status_code == 200:
-            historical_data = h_resp.json().get('historical', [])
+            historical_data = h_resp.json()
         
-        # 3. Fetch Earnings (Using Query Parameter style)
-        e_resp = await client.get(f"{api_url}/earnings-surprises", params={"symbol": symbol, "apikey": FMP_API_KEY})
+        # 3. Fetch Earnings
+        e_resp = await client.get(f"{base_url}/stock/earnings", params={"symbol": symbol, "token": FINNHUB_API_KEY})
         if e_resp.status_code == 200:
             earnings_data = e_resp.json()
 
-        if historical_data:
+        if historical_data and historical_data.get('s') == 'ok':
             await ingest_to_influx(symbol, historical_data, earnings_data)
 
     # Database Query
@@ -151,11 +170,17 @@ async def predict(payload: dict = Body(...)):
         earnings_history = [r.values for t in query_api.query(query_earnings) for r in t.records]
     except: pass
 
-    if not historical_prices and historical_data:
-        historical_prices = [{"_time": datetime.strptime(d['date'], '%Y-%m-%d'), "close": float(d['close'])} for d in sorted(historical_data, key=lambda x: x['date'])]
+    # API Fallback if DB empty
+    if not historical_prices:
+        if historical_data and historical_data.get('s') == 'ok':
+            for i in range(len(historical_data['c'])):
+                historical_prices.append({"_time": datetime.fromtimestamp(historical_data['t'][i], tz=timezone.utc), "close": float(historical_data['c'][i])})
+        elif live_price > 0:
+            for i in range(10, 0, -1):
+                historical_prices.append({"_time": now - timedelta(days=i), "close": prev_close if i > 1 else live_price})
     
-    if live_price > 0:
-        historical_prices.append({"_time": datetime.now(timezone.utc), "close": live_price})
+    if live_price > 0 and (not historical_prices or historical_prices[-1]['close'] != live_price):
+        historical_prices.append({"_time": now, "close": live_price})
     
     if not historical_prices:
         raise HTTPException(status_code=404, detail=f"No data available for {symbol}.")
@@ -168,8 +193,8 @@ async def predict(payload: dict = Body(...)):
     history_formatted = [{"date": p['_time'].strftime('%m/%d') if isinstance(p['_time'], datetime) else str(p['_time'])[5:10], "price": p['close']} for p in historical_prices[-20:]]
 
     return {
-        "symbol": symbol, "currentPrice": f"{live_price if live_price > 0 else closes[-1]:.2f}", "rsi": f"{rsi:.2f}",
+        "symbol": symbol, "currentPrice": f"{live_price if live_price > 0 else (closes[-1] if closes else 0):.2f}", "rsi": f"{rsi:.2f}",
         "prediction": {"highRange": str(ai_result.get('predictedHigh', 0)), "lowRange": str(ai_result.get('predictedLow', 0)), "trend": "Bullish" if rsi > 50 else "Bearish"},
         "analystNote": ai_result.get('analystNote', ""), "confidence": ai_result.get('confidence', "low"),
-        "history": history_formatted, "lastUpdated": datetime.now(timezone.utc).isoformat()
+        "history": history_formatted, "lastUpdated": now.isoformat()
     }
