@@ -3,5 +3,6 @@ frontend/.next
 frontend/.env.local
 .idea
 .venv
+.env
 node_modules
 backend/.venv

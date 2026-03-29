@@ -1,0 +1,43 @@
+name: Setup Koyeb Secrets
+description: "Creates secrets in Koyeb"
+runs:
+  using: "composite"
+  steps:
+    - name: Install Koyeb CLI
+      uses: koyeb-community/koyeb-actions@v2
+
+    - name: Create GOOGLE_GENAI_API_KEY secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: GOOGLE_GENAI_API_KEY
+        secret-value: "${{ env.GOOGLE_GENAI_API_KEY }}"
+
+    - name: Create FINNHUB_API_KEY secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: FINNHUB_API_KEY
+        secret-value: "${{ env.FINNHUB_API_KEY }}"
+
+    - name: Create INFLUXDB_BUCKET secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: INFLUXDB_BUCKET
+        secret-value: "${{ env.INFLUXDB_BUCKET }}"
+
+    - name: Create INFLUXDB_ORG secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: INFLUXDB_ORG
+        secret-value: "${{ env.INFLUXDB_ORG }}"
+
+    - name: Create INFLUXDB_TOKEN secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: INFLUXDB_TOKEN
+        secret-value: "${{ env.INFLUXDB_TOKEN }}"
+
+    - name: Create INFLUXDB_URL secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: INFLUXDB_URL
+        secret-value: "${{ env.INFLUXDB_URL }}"
