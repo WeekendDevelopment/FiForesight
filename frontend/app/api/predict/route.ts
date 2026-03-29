@@ -1,40 +1,44 @@
 import { NextResponse } from 'next/server';
 import axios from 'axios';
 
-// Check both possible environment variable names for maximum compatibility
-let BACKEND_URL = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
-
-if (BACKEND_URL.endsWith('/')) {
-  BACKEND_URL = BACKEND_URL.slice(0, -1);
-}
-
 export async function POST(request: Request) {
+  // Check both possible names
+  const envBackendUrl = process.env.BACKEND_URL;
+  const publicBackendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+  
+  const FINAL_URL = envBackendUrl || publicBackendUrl;
+
+  // If this error shows up on the website, the Vercel variables are definitely not reaching the code
+  if (!FINAL_URL) {
+    console.error('[Proxy] Environment Variable Missing. Deployment needs redeploy.');
+    return NextResponse.json({ 
+      error: 'Configuration Error: No Backend URL found. Please redeploy this branch in Vercel.' 
+    }, { status: 500 });
+  }
+
+  const sanitizedUrl = FINAL_URL.endsWith('/') ? FINAL_URL.slice(0, -1) : FINAL_URL;
+
   try {
     const body = await request.json();
     const symbol = (body.data || 'SPY').toUpperCase();
 
-    // This will show up in your Vercel Runtime Logs
-    console.log(`[Proxy] Target: ${BACKEND_URL}, Symbol: ${symbol}`);
+    console.log(`[Proxy] Target: ${sanitizedUrl}/predict`);
 
-    if (BACKEND_URL.includes('127.0.0.1') || BACKEND_URL.includes('localhost')) {
-      console.warn('[Proxy] WARNING: BACKEND_URL is still pointing to localhost. Ensure environment variables are set in Vercel.');
-    }
-
-    // Delegate prediction logic to the Python backend
-    const response = await axios.post(`${BACKEND_URL}/predict`, { data: symbol });
+    const response = await axios.post(`${sanitizedUrl}/predict`, { 
+      data: symbol 
+    }, {
+      timeout: 25000,
+      headers: { 'Content-Type': 'application/json' }
+    });
 
     return NextResponse.json(response.data);
 
   } catch (error: any) {
-    // Log the full error for debugging in Vercel
-    console.error('[Proxy] Error:', error.message);
-    if (error.response) {
-      console.error('[Proxy] Backend Response Data:', error.response.data);
-    }
+    const errorMessage = error.response?.data?.detail || error.message;
+    console.error(`[Proxy] Backend Error:`, errorMessage);
     
-    const status = error.response?.status || 500;
-    const detail = error.response?.data?.detail || 'Failed to communicate with forecasting engine.';
-    
-    return NextResponse.json({ error: detail }, { status });
+    return NextResponse.json({ 
+      error: `Backend error: ${errorMessage}`
+    }, { status: error.response?.status || 500 });
   }
 }
