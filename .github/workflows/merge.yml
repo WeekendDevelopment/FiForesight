@@ -156,7 +156,7 @@ jobs:
           service-name: fi-foresight-service
           service-env: FINNHUB_API_KEY=@FINNHUB_API_KEY,GOOGLE_GENAI_API_KEY=@GOOGLE_GENAI_API_KEY,INFLUXDB_BUCKET=@INFLUXDB_BUCKET,INFLUXDB_ORG=@INFLUXDB_ORG,INFLUXDB_TOKEN=@INFLUXDB_TOKEN,INFLUXDB_URL=@INFLUXDB_URL
           service-ports: "3000:http"
-          service-routes: "/:443"
+          service-routes: "/:3000"
           service-regions: fra
           service-instance-type: free
           docker: ${{ env.IMAGE_NAME }}:${{ needs.create-release.outputs.tag }}
