@@ -1,33 +1,22 @@
 import { NextResponse } from 'next/server';
 import axios from 'axios';
 
+// Since both frontend and backend are in the same container,
+// the frontend can talk to the backend via localhost:8000 internally.
+// This address is NOT exposed to the public internet.
+const INTERNAL_BACKEND_URL = 'http://127.0.0.1:8000';
+
 export async function POST(request: Request) {
-  // Check both possible names
-  const envBackendUrl = process.env.BACKEND_URL;
-  const publicBackendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
-  
-  const FINAL_URL = envBackendUrl || publicBackendUrl;
-
-  // If this error shows up on the website, the Vercel variables are definitely not reaching the code
-  if (!FINAL_URL) {
-    console.error('[Proxy] Environment Variable Missing. Deployment needs redeploy.');
-    return NextResponse.json({ 
-      error: 'Configuration Error: No Backend URL found. Please redeploy this branch in Vercel.' 
-    }, { status: 500 });
-  }
-
-  const sanitizedUrl = FINAL_URL.endsWith('/') ? FINAL_URL.slice(0, -1) : FINAL_URL;
-
   try {
     const body = await request.json();
     const symbol = (body.data || 'SPY').toUpperCase();
 
-    console.log(`[Proxy] Target: ${sanitizedUrl}/predict`);
+    console.log(`[Internal Proxy] Routing ${symbol} to ${INTERNAL_BACKEND_URL}/predict`);
 
-    const response = await axios.post(`${sanitizedUrl}/predict`, { 
+    const response = await axios.post(`${INTERNAL_BACKEND_URL}/predict`, { 
       data: symbol 
     }, {
-      timeout: 25000,
+      timeout: 25000, // High timeout for free tier wake-ups
       headers: { 'Content-Type': 'application/json' }
     });
 
@@ -35,10 +24,10 @@ export async function POST(request: Request) {
 
   } catch (error: any) {
     const errorMessage = error.response?.data?.detail || error.message;
-    console.error(`[Proxy] Backend Error:`, errorMessage);
+    console.error(`[Internal Proxy] Backend Error:`, errorMessage);
     
     return NextResponse.json({ 
-      error: `Backend error: ${errorMessage}`
+      error: `Service error: ${errorMessage}` 
     }, { status: error.response?.status || 500 });
   }
 }
