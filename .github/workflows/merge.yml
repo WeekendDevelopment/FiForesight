@@ -100,7 +100,10 @@ jobs:
         shell: bash
         run: pip install -r requirements.txt
   build-image:
-    needs: create-release
+    needs:
+      - create-release
+      - build-frontend
+      - build-backend
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -127,3 +130,31 @@ jobs:
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ needs.create-release.outputs.tag }}
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Install and configure the Koyeb CLI
+        uses: koyeb-community/koyeb-actions@v2
+        with:
+          api_token: "${{ secrets.KOYEB_API_TOKEN }}"
+
+      - name: Create application secrets
+        uses: ./.github/actions/setup-secrets
+        env:
+          GOOGLE_GENAI_API_KEY: ${{ secrets.GOOGLE_GENAI_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          INFLUXDB_BUCKET: ${{ secrets.INFLUXDB_BUCKET }}
+          INFLUXDB_ORG: ${{ secrets.INFLUXDB_ORG }}
+          INFLUXDB_TOKEN: ${{ secrets.INFLUXDB_TOKEN }}
+          INFLUXDB_URL: ${{ secrets.INFLUXDB_URL }}
+          KOYEB_API_TOKEN: ${{ secrets.KOYEB_API_TOKEN }}
+
+      - name: Build and deploy the application to Koyeb
+        uses: koyeb/action-git-deploy@v1
+        with:
+          app-name: fi-foresight
+          service-name: fi-foresight-service
+          service-env: FINNHUB_API_KEY=@FINNHUB_API_KEY,GOOGLE_GENAI_API_KEY=@GOOGLE_GENAI_API_KEY,INFLUXDB_BUCKET=@INFLUXDB_BUCKET,INFLUXDB_ORG=@INFLUXDB_ORG,INFLUXDB_TOKEN=@INFLUXDB_TOKEN,INFLUXDB_URL=@INFLUXDB_URL
+          service-ports: "3000:http"
+          service-routes: "/:443"
+          service-regions: fra
+          service-instance-type: free
+          docker: ${{ env.IMAGE_NAME }}:${{ needs.create-release.outputs.tag }}
