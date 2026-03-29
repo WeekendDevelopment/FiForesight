@@ -57,7 +57,6 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      // Calls our Next.js API route which proxies to the Python backend
       const response = await axios.post('/api/predict', { data: symbol });
       setPrediction(response.data);
     } catch (err: any) {
@@ -85,7 +84,7 @@ export default function Dashboard() {
           <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" alignItems="center" spacing={4} sx={{ mb: 8 }}>
             <Box>
               <Typography variant="h4" component="h1" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                <BrainCircuit size={40} className="text-primary" />
+                <Box sx={{ color: 'primary.main', display: 'flex' }}><BrainCircuit size={40} /></Box>
                 FiForesight <Box component="span" sx={{ color: 'primary.main' }}>AI</Box>
               </Typography>
               <Typography variant="body2" sx={{ opacity: 0.6, letterSpacing: 1 }}>
@@ -108,7 +107,7 @@ export default function Dashboard() {
                 disabled={loading}
                 sx={{ borderRadius: 3, py: 1 }}
               >
-                {loading ? <CircularProgress size={24} /> : <Search size={20} />}
+                {loading ? <CircularProgress size={24} color="inherit" /> : <Search size={20} />}
               </Button>
             </Paper>
           </Stack>
@@ -187,7 +186,7 @@ export default function Dashboard() {
                     <CardContent sx={{ p: 3 }}>
                       <Stack direction="row" justifyContent="space-between">
                         <Box>
-                          <Typography variant="overline" sx={{ opacity: 0.5, fontWeight: 900 }}>RSI (14M)</Typography>
+                          <Typography variant="overline" sx={{ opacity: 0.5, fontWeight: 900 }}>RSI (Daily)</Typography>
                           <Typography variant="h4" sx={{ fontWeight: 900 }}>{prediction.rsi}</Typography>
                         </Box>
                         <Chip label={rsiInfo?.label} color={rsiInfo?.color} size="small" />
@@ -198,7 +197,7 @@ export default function Dashboard() {
                   <Card sx={{ background: 'rgba(99, 102, 241, 0.05)', border: '1px dashed rgba(99, 102, 241, 0.3)' }}>
                     <CardContent sx={{ p: 3 }}>
                       <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-                        <BrainCircuit size={16} className="text-primary" />
+                        <Box sx={{ color: 'primary.main', display: 'flex' }}><BrainCircuit size={16} /></Box>
                         <Typography variant="overline" sx={{ fontWeight: 900, color: 'primary.main' }}>AI Analyst Note</Typography>
                       </Stack>
                       <Typography variant="body2" sx={{ fontStyle: 'italic', lineHeight: 1.6 }}>
