@@ -3,9 +3,6 @@ description: "Creates secrets in Koyeb"
 runs:
   using: "composite"
   steps:
-    - name: Install Koyeb CLI
-      uses: koyeb-community/koyeb-actions@v2
-
     - name: Create GOOGLE_GENAI_API_KEY secret
       uses: koyeb/action-git-deploy/secret@v1
       with:
