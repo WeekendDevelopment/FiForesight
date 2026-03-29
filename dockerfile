@@ -1,47 +1,24 @@
-# Build stage for Frontend
-FROM node:20-alpine AS frontend-builder
-WORKDIR /app/frontend
+# Dedicated Backend Build for Koyeb/Cloud
+# Using Python 3.11 slim (Debian) for maximum compatibility with pandas/numpy
+FROM python:3.11-slim
 
-# Use corepack for pnpm management
-RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
-
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
-# Use --no-frozen-lockfile to handle cross-platform lockfile updates
-RUN pnpm install --no-frozen-lockfile
-COPY frontend/ ./
-# Skip linting/type checking during build to avoid errors from orphaned files
-RUN pnpm build --no-lint
-
-# Build stage for Backend
-FROM python:3.11-slim AS backend-builder
-WORKDIR /app/backend
-COPY backend/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
-COPY backend/ ./
-
-# Final production image
-FROM node:20-alpine
 WORKDIR /app
 
-# Install Python
-RUN apk add --no-cache python3 py3-pip
+# Install build dependencies for compiled packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy root package.json and install dependencies using corepack
-COPY package.json pnpm-lock.yaml ./
-RUN corepack enable && corepack prepare pnpm@10.33.0 --activate && pnpm install --no-frozen-lockfile
+# Install Python requirements
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend
-COPY --from=backend-builder /app/backend /app/backend
-COPY --from=backend-builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
-COPY --from=backend-builder /usr/local/bin/uvicorn /usr/local/bin/uvicorn
+# Copy backend source code
+COPY backend/ .
 
-# Copy frontend build artifacts (Next.js)
-COPY --from=frontend-builder /app/frontend/.next /app/frontend/.next
-COPY --from=frontend-builder /app/frontend/node_modules /app/frontend/node_modules
-COPY --from=frontend-builder /app/frontend/package.json /app/frontend/package.json
+# Expose the port (FastAPI default)
+EXPOSE 8000
 
-# Expose only the frontend port (Next.js defaults to 3000)
-EXPOSE 3000
-
-# Start script using pnpm run
-CMD ["pnpm", "run", "app:start"]
+# Start command optimized for cloud environments
+# Bind to 0.0.0.0 and use the PORT environment variable provided by the host
+CMD ["sh", "-c", "python3 -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
