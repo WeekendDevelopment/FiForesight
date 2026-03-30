@@ -7,6 +7,13 @@ on:
 env:
   GH_TOKEN: ${{ github.token }}
   IMAGE_NAME: ghcr.io/weekenddevelopment/fiforesight
+  OCI_CLI_USER: ${{ secrets.OCI_USER_OCID }}
+  OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+  OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+  OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_PRIVATE_KEY }}
+  OCI_CLI_REGION: uk-london-1
+  OKE_CLUSTER_ID: ${{ secrets.OKE_CLUSTER_ID }}
+  REGISTRY: ghcr.io
 permissions:
   contents: write
   id-token: write
@@ -49,6 +56,22 @@ jobs:
           gh release create ${{ steps.tag.outputs.tag }} \
             --title "${{ steps.tag.outputs.tag }}" \
             --notes "Automated release for latest commit after merge"
+  terraform:
+    needs: create-release
+    runs-on: ubuntu-latest
+    environment:
+      name: "terraform.apply"
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: '0'
+
+      - name: Terraform run
+        uses: ./.github/actions/terraform
+        env:
+          TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+
   build-frontend:
     needs: create-release
     runs-on: ubuntu-latest
@@ -106,6 +129,7 @@ jobs:
       - create-release
       - build-frontend
       - build-backend
+      - terraform
     runs-on: ubuntu-latest
     environment:
       name: live
@@ -164,3 +188,33 @@ jobs:
           service-instance-type: free
           docker: ${{ env.IMAGE_NAME }}:${{ needs.create-release.outputs.tag }}
           docker-private-registry-secret: ghcr
+
+      - name: Set up OCI CLI
+        uses: oracle-actions/setup-oci-cli@v1
+        with:
+          user: ${{ env.OCI_CLI_USER }}
+          tenancy: ${{ env.OCI_CLI_TENANCY }}
+          fingerprint: ${{ env.OCI_CLI_FINGERPRINT }}
+          key_content: ${{ env.OCI_CLI_KEY_CONTENT }}
+          region: ${{ env.OCI_CLI_REGION }}
+
+      - name: Install kubectl and helm
+        run: |
+          sudo apt-get update && sudo apt-get install -y kubectl
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Get OKE Kubeconfig
+        run: |
+          mkdir -p $HOME/.kube
+          oci ce cluster create-kubeconfig --cluster-id $OKE_CLUSTER_ID --file $HOME/.kube/config --region $OCI_CLI_REGION --token-version 2.0.0
+
+      - name: Deploy with Helm
+        run: |
+          # Lowercase the image name for Helm/K8s compatibility
+          IMAGE_LOWER=$(echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE_TAG=$(echo "${{ needs.create-release.outputs.tag }}")
+
+          helm upgrade --install fiforesight ./charts/fiforesight \
+            --set image.repository=$IMAGE_LOWER \
+            --set image.tag=$IMAGE_TAG \
+            --wait

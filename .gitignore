@@ -6,3 +6,5 @@ frontend/.env.local
 .env
 node_modules
 backend/.venv
+terraform/*.lock.hcl
+terraform/.terraform
