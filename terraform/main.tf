@@ -82,7 +82,7 @@ resource "oci_core_subnet" "lb_subnet" {
   compartment_id    = var.compartment_id
   vcn_id            = oci_core_vcn.oke_vcn.id
   route_table_id    = oci_core_route_table.oke_rt.id
-  security_list_ids = [oci_core_security_list.worker_sec_list.id] # Usually has its own SL, but reusable for now
+  security_list_ids = [oci_core_security_list.worker_sec_list.id]
 }
 
 # Subnet for Worker Nodes
@@ -130,11 +130,15 @@ resource "oci_containerengine_node_pool" "oke_node_pool" {
   }
 
   node_config_details {
-    placement_configs {
-      availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
-      subnet_id           = oci_core_subnet.worker_subnet.id
+    # Distribute nodes across all available ADs to handle capacity issues
+    dynamic "placement_configs" {
+      for_each = data.oci_identity_availability_domains.ads.availability_domains
+      content {
+        availability_domain = placement_configs.value.name
+        subnet_id           = oci_core_subnet.worker_subnet.id
+      }
     }
-    size = 1 # Number of nodes
+    size = 1 # Total nodes across all placement configs
   }
 
   ssh_public_key = var.ssh_public_key
