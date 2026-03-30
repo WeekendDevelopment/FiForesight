@@ -119,9 +119,13 @@ resource "oci_containerengine_node_pool" "oke_node_pool" {
   name               = "fiforesight-nodepool"
   node_shape         = var.node_shape
 
-  node_shape_config {
-    memory_in_gbs = var.node_memory_in_gbs
-    ocpus         = var.node_ocpus
+  # Only include node_shape_config if it's a Flex shape
+  dynamic "node_shape_config" {
+    for_each = length(regexall("Flex", var.node_shape)) > 0 ? [1] : []
+    content {
+      memory_in_gbs = var.node_memory_in_gbs
+      ocpus         = var.node_ocpus
+    }
   }
 
   node_source_details {
@@ -130,15 +134,11 @@ resource "oci_containerengine_node_pool" "oke_node_pool" {
   }
 
   node_config_details {
-    # Distribute nodes across all available ADs to handle capacity issues
-    dynamic "placement_configs" {
-      for_each = data.oci_identity_availability_domains.ads.availability_domains
-      content {
-        availability_domain = placement_configs.value.name
-        subnet_id           = oci_core_subnet.worker_subnet.id
-      }
+    placement_configs {
+      availability_domain = data.oci_identity_availability_domains.ads.availability_domains[var.availability_domain_index].name
+      subnet_id           = oci_core_subnet.worker_subnet.id
     }
-    size = 1 # Total nodes across all placement configs
+    size = 1 # Number of nodes
   }
 
   ssh_public_key = var.ssh_public_key
