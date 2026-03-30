@@ -1,4 +1,3 @@
-# backend/models.py
 import logging
 import pandas as pd
 import numpy as np
@@ -12,17 +11,14 @@ try:
     from statsmodels.tsa.statespace.sarimax import SARIMAX
     from prophet import Prophet
     from sklearn.ensemble import RandomForestRegressor
-
     MODELS_AVAILABLE = True
 except ImportError:
     pass
 
 logger = logging.getLogger(__name__)
 
-
 def calculate_rsi(prices: List[float], periods: int = 14) -> float:
-    if len(prices) < periods + 1:
-        return 50.0
+    if len(prices) < periods + 1: return 50.0
     series = pd.Series(prices)
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=periods).mean()
@@ -32,11 +28,10 @@ def calculate_rsi(prices: List[float], periods: int = 14) -> float:
     rsi = 100 - (100 / (1 + rs))
     return float(rsi.iloc[-1]) if not np.isnan(rsi.iloc[-1]) else 50.0
 
-
 def run_ensemble_forecast(prices: List[float], symbol: str) -> Dict:
     last_price = prices[-1] if prices else 100.0
     volatility = np.std(prices[-10:]) / np.mean(prices[-10:]) if len(prices) >= 10 else 0.02
-
+    
     fallback = {
         "high": round(last_price * (1 + volatility + 0.01), 2),
         "low": round(last_price * (1 - volatility - 0.01), 2),
@@ -56,10 +51,10 @@ def run_ensemble_forecast(prices: List[float], symbol: str) -> Dict:
         r_pred = RandomForestRegressor(n_estimators=50).fit(X, prices).predict([[len(prices) + 1]])[0]
 
         avg_pred = (p_pred * 0.4) + (s_pred * 0.4) + (r_pred * 0.2)
-
+        
         p_dir = "bullish" if p_pred > last_price else "bearish"
         s_dir = "strong" if abs(s_pred - last_price) > abs(p_pred - last_price) else "steady"
-
+        
         note = (
             f"Ensemble Analysis: Prophet indicates a {p_dir} long-term drift (${p_pred:.2f}), "
             f"while SARIMA inertia suggests {s_dir} short-term movement (${s_pred:.2f}). "
@@ -67,15 +62,14 @@ def run_ensemble_forecast(prices: List[float], symbol: str) -> Dict:
         )
 
         return {
-            "high": round(avg_pred * (1 + volatility / 2 + 0.005), 2),
-            "low": round(avg_pred * (1 - volatility / 2 - 0.005), 2),
+            "high": round(avg_pred * (1 + volatility/2 + 0.005), 2),
+            "low": round(avg_pred * (1 - volatility/2 - 0.005), 2),
             "note": note,
             "conf": "high" if len(prices) > 40 else "medium"
         }
     except Exception as e:
         logger.error(f"Ensemble execution error: {e}")
         return fallback
-
 
 def generate_synthetic_history(symbol: str, live_price: float, prev_close: float) -> List[Dict]:
     base_price = prev_close if prev_close > 0 else (live_price * 0.99)

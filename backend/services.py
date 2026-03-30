@@ -1,4 +1,3 @@
-# backend/services.py
 import re
 import logging
 import httpx
@@ -35,15 +34,11 @@ class InfluxService:
 class SerpService:
     @staticmethod
     def clean_price(price_str):
-        if price_str is None:
-            return 0.0
-        if isinstance(price_str, (int, float)):
-            return float(price_str)
+        if price_str is None: return 0.0
+        if isinstance(price_str, (int, float)): return float(price_str)
         cleaned = re.sub(r'[^\d.-]', '', str(price_str))
-        try:
-            return float(cleaned)
-        except ValueError:
-            return 0.0
+        try: return float(cleaned)
+        except ValueError: return 0.0
 
     async def fetch_data(self, query: str) -> dict:
         async with httpx.AsyncClient(timeout=25.0) as client:
