@@ -75,6 +75,16 @@ resource "oci_core_security_list" "worker_sec_list" {
   }
 }
 
+# Subnet for Load Balancer
+resource "oci_core_subnet" "lb_subnet" {
+  cidr_block        = "10.0.20.0/24"
+  display_name      = "fiforesight-lb-subnet"
+  compartment_id    = var.compartment_id
+  vcn_id            = oci_core_vcn.oke_vcn.id
+  route_table_id    = oci_core_route_table.oke_rt.id
+  security_list_ids = [oci_core_security_list.worker_sec_list.id] # Usually has its own SL, but reusable for now
+}
+
 # Subnet for Worker Nodes
 resource "oci_core_subnet" "worker_subnet" {
   cidr_block        = "10.0.10.0/24"
@@ -93,7 +103,7 @@ resource "oci_containerengine_cluster" "oke_cluster" {
   vcn_id             = oci_core_vcn.oke_vcn.id
 
   options {
-    service_lb_subnet_ids = [oci_core_subnet.worker_subnet.id]
+    service_lb_subnet_ids = [oci_core_subnet.lb_subnet.id]
     add_ons {
       is_kubernetes_dashboard_enabled = false
       is_tiller_enabled               = false
