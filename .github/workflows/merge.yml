@@ -150,7 +150,7 @@ jobs:
           INFLUXDB_ORG: ${{ secrets.INFLUXDB_ORG }}
           INFLUXDB_TOKEN: ${{ secrets.INFLUXDB_TOKEN }}
           INFLUXDB_URL: ${{ secrets.INFLUXDB_URL }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_PAT_TOKEN: ${{ secrets.GHCR_PAT_TOKEN }}
 
       - name: Build and deploy the application to Koyeb
         uses: koyeb/action-git-deploy@v1
