@@ -17,7 +17,7 @@ jobs:
       name: "terraform.plan"
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Terraform run
         uses: ./.github/actions/terraform
@@ -32,7 +32,7 @@ jobs:
       vm_host: ${{ steps.tf_outputs.outputs.public_ip }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Terraform run
         uses: ./.github/actions/terraform
