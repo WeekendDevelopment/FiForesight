@@ -161,6 +161,9 @@ jobs:
       - build-image
       - terraform-preview
     runs-on: ubuntu-latest
+    concurrency:
+      group: pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     environment:
       name: preview
       url: http://fiforesight-preview.duckdns.org
