@@ -134,9 +134,6 @@ jobs:
       - build-backend
       - terraform
     runs-on: ubuntu-latest
-    environment:
-      name: live
-      url: https://fi-foresight-weekend-development-a6cff98f.koyeb.app
     steps:
       - name: Checkout
         uses: actions/checkout@v6
