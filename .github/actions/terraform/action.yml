@@ -9,22 +9,22 @@ runs:
         cli_config_credentials_token: ${{ env.TF_API_TOKEN }}
 
     - name: Terraform Init
-      working-directory: terraform
+      working-directory: ${{ env.WORKING_DIR }}
       shell: bash
       run: terraform init
 
     - name: Terraform Validate
-      working-directory: terraform
+      working-directory: ${{ env.WORKING_DIR }}
       shell: bash
       run: terraform validate
 
     - name: Terraform Plan
-      working-directory: terraform
+      working-directory: ${{ env.WORKING_DIR }}
       shell: bash
       run: terraform plan
 
     - name: Terraform Apply
-      working-directory: terraform
+      working-directory: ${{ env.WORKING_DIR }}
       shell: bash
-      if: github.event_name == 'push'
+      if: ${{ github.event_name == 'push' || env.WORKING_DIR == 'terraform-preview' }}
       run: terraform apply -auto-approve

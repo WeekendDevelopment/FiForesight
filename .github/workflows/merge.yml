@@ -7,13 +7,6 @@ on:
 env:
   GH_TOKEN: ${{ github.token }}
   IMAGE_NAME: ghcr.io/weekenddevelopment/fiforesight
-  OCI_CLI_USER: ${{ secrets.OCI_USER_OCID }}
-  OCI_CLI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
-  OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
-  OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_PRIVATE_KEY }}
-  OCI_CLI_REGION: uk-london-1
-  OKE_CLUSTER_ID: ${{ secrets.OKE_CLUSTER_ID }}
-  REGISTRY: ghcr.io
 permissions:
   contents: write
   id-token: write
@@ -73,6 +66,7 @@ jobs:
         uses: ./.github/actions/terraform
         env:
           TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+          WORKING_DIR: "terraform"
 
       - name: Get Terraform Outputs
         id: tf_outputs
@@ -168,6 +162,25 @@ jobs:
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ needs.create-release.outputs.tag }}
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
+  deploy-koyeb:
+    needs:
+      - create-release
+      - build-frontend
+      - build-backend
+      - build-image
+    runs-on: ubuntu-latest
+    environment:
+      name: live-koyeb
+      url: https://fi-foresight-weekend-development-a6cff98f.koyeb.app
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Deploy to Koyeb
+        uses: ./.github/actions/deploy-koyeb
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          IMAGE_TAG: ${{ needs.create-release.outputs.tag }}
 
       - name: Install and configure the Koyeb CLI
         uses: koyeb-community/koyeb-actions@v2
@@ -197,38 +210,34 @@ jobs:
           service-instance-type: free
           docker: ${{ env.IMAGE_NAME }}:${{ needs.create-release.outputs.tag }}
           docker-private-registry-secret: ghcr
+  deploy-oracle:
+    needs:
+      - create-release
+      - build-frontend
+      - build-backend
+      - build-image
+      - terraform
+    runs-on: ubuntu-latest
+    environment:
+      name: live
+      url: http://fiforesight.duckdns.org
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
 
-      - name: SSH and Deploy
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ needs.terraform.outputs.vm_host }}
-          username: ubuntu
-          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
-          script: |
-            # Lowercase the image name for compatibility
-            IMAGE_LOWER=$(echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
-            IMAGE_TAG=${{ needs.create-release.outputs.tag }}
-
-            # Log in to GHCR
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-            # Stop and remove existing container (if any)
-            docker stop fiforesight || true
-            docker rm fiforesight || true
-
-            # Pull and run the new container
-            docker pull $IMAGE_LOWER:$IMAGE_TAG
-            docker run -d \
-              --name fiforesight \
-              --restart always \
-              -p 80:3000 \
-              -e GOOGLE_GENAI_API_KEY=${{ secrets.GOOGLE_GENAI_API_KEY }} \
-              -e FINNHUB_API_KEY=${{ secrets.FINNHUB_API_KEY }} \
-              -e INFLUXDB_BUCKET=${{ secrets.INFLUXDB_BUCKET }} \
-              -e INFLUXDB_ORG=${{ secrets.INFLUXDB_ORG }} \
-              -e INFLUXDB_TOKEN=${{ secrets.INFLUXDB_TOKEN }} \
-              -e INFLUXDB_URL=${{ secrets.INFLUXDB_URL }} \
-              $IMAGE_LOWER:$IMAGE_TAG
-
-            # Clean up old images
-            docker image prune -af
+      - name: Deploy to Oracle
+        uses: ./.github/actions/deploy-oracle
+        env:
+          VM_IP_ADDRESS: ${{ needs.terraform.outputs.vm_host }}
+          DOMAIN: "fiforesight"
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          IMAGE_TAG: ${{ needs.create-release.outputs.tag }}
+          DUCK_DNS_TOKEN: ${{ secrets.DUCK_DNS_TOKEN }}
+          VM_SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOGLE_GENAI_API_KEY: ${{ secrets.GOOGLE_GENAI_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          INFLUXDB_BUCKET: ${{ secrets.INFLUXDB_BUCKET }}
+          INFLUXDB_ORG: ${{ secrets.INFLUXDB_ORG }}
+          INFLUXDB_TOKEN: ${{ secrets.INFLUXDB_TOKEN }}
+          INFLUXDB_URL: ${{ secrets.INFLUXDB_URL }}

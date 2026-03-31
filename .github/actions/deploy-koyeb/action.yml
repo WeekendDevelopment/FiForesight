@@ -1,0 +1,33 @@
+name: Deploy to Koyeb
+description: "Deploys to Koyeb Instance"
+runs:
+  using: "composite"
+  steps:
+    - name: Install and configure the Koyeb CLI
+      uses: koyeb-community/koyeb-actions@v2
+      with:
+        api_token: "${{ secrets.KOYEB_API_TOKEN }}"
+
+    - name: Create application secrets
+      uses: ./.github/actions/setup-secrets
+      env:
+        GOOGLE_GENAI_API_KEY: ${{ secrets.GOOGLE_GENAI_API_KEY }}
+        FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+        INFLUXDB_BUCKET: ${{ secrets.INFLUXDB_BUCKET }}
+        INFLUXDB_ORG: ${{ secrets.INFLUXDB_ORG }}
+        INFLUXDB_TOKEN: ${{ secrets.INFLUXDB_TOKEN }}
+        INFLUXDB_URL: ${{ secrets.INFLUXDB_URL }}
+        GHCR_PAT_TOKEN: ${{ secrets.GHCR_PAT_TOKEN }}
+
+    - name: Build and deploy the application to Koyeb
+      uses: koyeb/action-git-deploy@v1
+      with:
+        app-name: fi-foresight
+        service-name: fi-foresight-service
+        service-env: FINNHUB_API_KEY=@FINNHUB_API_KEY,GOOGLE_GENAI_API_KEY=@GOOGLE_GENAI_API_KEY,INFLUXDB_BUCKET=@INFLUXDB_BUCKET,INFLUXDB_ORG=@INFLUXDB_ORG,INFLUXDB_TOKEN=@INFLUXDB_TOKEN,INFLUXDB_URL=@INFLUXDB_URL
+        service-ports: "3000:http"
+        service-routes: "/:3000"
+        service-regions: fra
+        service-instance-type: free
+        docker: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+        docker-private-registry-secret: ghcr
