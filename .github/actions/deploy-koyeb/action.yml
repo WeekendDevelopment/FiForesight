@@ -6,18 +6,18 @@ runs:
     - name: Install and configure the Koyeb CLI
       uses: koyeb-community/koyeb-actions@v2
       with:
-        api_token: "${{ secrets.KOYEB_API_TOKEN }}"
+        api_token: ${{ env.KOYEB_API_TOKEN }}
 
     - name: Create application secrets
       uses: ./.github/actions/setup-secrets
       env:
-        GOOGLE_GENAI_API_KEY: ${{ secrets.GOOGLE_GENAI_API_KEY }}
-        FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
-        INFLUXDB_BUCKET: ${{ secrets.INFLUXDB_BUCKET }}
-        INFLUXDB_ORG: ${{ secrets.INFLUXDB_ORG }}
-        INFLUXDB_TOKEN: ${{ secrets.INFLUXDB_TOKEN }}
-        INFLUXDB_URL: ${{ secrets.INFLUXDB_URL }}
-        GHCR_PAT_TOKEN: ${{ secrets.GHCR_PAT_TOKEN }}
+        GOOGLE_GENAI_API_KEY: ${{ env.GOOGLE_GENAI_API_KEY }}
+        FINNHUB_API_KEY: ${{ env.FINNHUB_API_KEY }}
+        INFLUXDB_BUCKET: ${{ env.INFLUXDB_BUCKET }}
+        INFLUXDB_ORG: ${{ env.INFLUXDB_ORG }}
+        INFLUXDB_TOKEN: ${{ env.INFLUXDB_TOKEN }}
+        INFLUXDB_URL: ${{ env.INFLUXDB_URL }}
+        GHCR_PAT_TOKEN: ${{ env.GHCR_PAT_TOKEN }}
 
     - name: Build and deploy the application to Koyeb
       uses: koyeb/action-git-deploy@v1

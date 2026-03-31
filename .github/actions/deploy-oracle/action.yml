@@ -6,7 +6,7 @@ runs:
     - name: Update IP in DNS Entry
       shell: bash
       run: |
-        curl -v https://www.duckdns.org/update?domains=${{ env.DOMAIN }}&token=${{ env.DUCK_DNS_TOKEN }}&ip=${{ env.VM_IP_ADDRESS }}
+        curl https://www.duckdns.org/update?domains=${{ env.DOMAIN }}&token=${{ env.DUCK_DNS_TOKEN }}&ip=${{ env.VM_IP_ADDRESS }}&verbose=true
 
     - name: SSH and Deploy
       uses: appleboy/ssh-action@v1.0.3

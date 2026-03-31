@@ -58,7 +58,7 @@ jobs:
       name: "terraform.apply"
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: '0'
 
@@ -181,35 +181,15 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.IMAGE_NAME }}
           IMAGE_TAG: ${{ needs.create-release.outputs.tag }}
-
-      - name: Install and configure the Koyeb CLI
-        uses: koyeb-community/koyeb-actions@v2
-        with:
-          api_token: "${{ secrets.KOYEB_API_TOKEN }}"
-
-      - name: Create application secrets
-        uses: ./.github/actions/setup-secrets
-        env:
+          GHCR_PAT_TOKEN: ${{ secrets.GHCR_PAT_TOKEN }}
+          KOYEB_API_TOKEN: ${{ secrets.KOYEB_API_TOKEN }}
           GOOGLE_GENAI_API_KEY: ${{ secrets.GOOGLE_GENAI_API_KEY }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           INFLUXDB_BUCKET: ${{ secrets.INFLUXDB_BUCKET }}
           INFLUXDB_ORG: ${{ secrets.INFLUXDB_ORG }}
           INFLUXDB_TOKEN: ${{ secrets.INFLUXDB_TOKEN }}
           INFLUXDB_URL: ${{ secrets.INFLUXDB_URL }}
-          GHCR_PAT_TOKEN: ${{ secrets.GHCR_PAT_TOKEN }}
 
-      - name: Build and deploy the application to Koyeb
-        uses: koyeb/action-git-deploy@v1
-        with:
-          app-name: fi-foresight
-          service-name: fi-foresight-service
-          service-env: FINNHUB_API_KEY=@FINNHUB_API_KEY,GOOGLE_GENAI_API_KEY=@GOOGLE_GENAI_API_KEY,INFLUXDB_BUCKET=@INFLUXDB_BUCKET,INFLUXDB_ORG=@INFLUXDB_ORG,INFLUXDB_TOKEN=@INFLUXDB_TOKEN,INFLUXDB_URL=@INFLUXDB_URL
-          service-ports: "3000:http"
-          service-routes: "/:3000"
-          service-regions: fra
-          service-instance-type: free
-          docker: ${{ env.IMAGE_NAME }}:${{ needs.create-release.outputs.tag }}
-          docker-private-registry-secret: ghcr
   deploy-oracle:
     needs:
       - create-release

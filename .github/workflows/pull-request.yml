@@ -17,7 +17,7 @@ jobs:
       name: "terraform.plan"
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Terraform run
         uses: ./.github/actions/terraform
@@ -32,7 +32,7 @@ jobs:
       vm_host: ${{ steps.tf_outputs.outputs.public_ip }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Terraform run
         uses: ./.github/actions/terraform
@@ -161,6 +161,9 @@ jobs:
       - build-image
       - terraform-preview
     runs-on: ubuntu-latest
+    concurrency:
+      group: pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     environment:
       name: preview
       url: http://fiforesight-preview.duckdns.org
