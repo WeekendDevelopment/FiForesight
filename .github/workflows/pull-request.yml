@@ -7,6 +7,7 @@ permissions:
   contents: read
   id-token: write
   packages: write
+  pull-requests: write
 env:
   IMAGE_NAME: ghcr.io/weekenddevelopment/fiforesight
 jobs:
@@ -22,6 +23,29 @@ jobs:
         uses: ./.github/actions/terraform
         env:
           TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+          WORKING_DIR: "terraform"
+  terraform-preview:
+    runs-on: ubuntu-latest
+    environment:
+      name: "preview.terraform.apply"
+    outputs:
+      vm_host: ${{ steps.tf_outputs.outputs.public_ip }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Terraform run
+        uses: ./.github/actions/terraform
+        env:
+          TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+          WORKING_DIR: "terraform-preview"
+
+      - name: Get Terraform Outputs
+        id: tf_outputs
+        working-directory: terraform-preview
+        run: |
+          PUBLIC_IP=$(terraform output -raw public_ip)
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
   build-frontend:
     runs-on: ubuntu-latest
     steps:
@@ -101,10 +125,9 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: false
+          push: true
           load: true
           tags: |
-            ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
 
       - name: Run container in background
@@ -114,7 +137,7 @@ jobs:
           docker run -d \
           --name fi-foresight-test \
           -p 3000:3000 \
-          ${{ env.IMAGE_NAME }}:latest
+          ${{ env.IMAGE_NAME }}:${{ github.sha }}
 
       - name: Wait for container to be ready
         run: |
@@ -133,3 +156,38 @@ jobs:
       - name: Cleanup
         if: always()
         run: docker rm -f fi-foresight-test
+  deploy-preview:
+    needs:
+      - build-image
+      - terraform-preview
+    runs-on: ubuntu-latest
+    environment:
+      name: preview
+      url: http://fiforesight-preview.duckdns.org
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Deploy to Oracle
+        uses: ./.github/actions/deploy-oracle
+        env:
+          VM_IP_ADDRESS: ${{ needs.terraform-preview.outputs.vm_host }}
+          DOMAIN: "fiforesight-preview"
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+          DUCK_DNS_TOKEN: ${{ secrets.DUCK_DNS_TOKEN }}
+          VM_SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOGLE_GENAI_API_KEY: ${{ secrets.GOOGLE_GENAI_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          INFLUXDB_BUCKET: ${{ secrets.INFLUXDB_BUCKET }}
+          INFLUXDB_ORG: ${{ secrets.INFLUXDB_ORG }}
+          INFLUXDB_TOKEN: ${{ secrets.INFLUXDB_TOKEN }}
+          INFLUXDB_URL: ${{ secrets.INFLUXDB_URL }}
+
+      - name: Create Comment
+        run: |
+          gh pr comment $PR_NUM --body "Deployed to preview env 🚀. Preview URL: http://fiforesight-preview.duckdns.org"
+        env:
+          PR_NUM: ${{ github.event.pull_request.number }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
