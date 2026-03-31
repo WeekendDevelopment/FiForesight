@@ -189,32 +189,38 @@ jobs:
           docker: ${{ env.IMAGE_NAME }}:${{ needs.create-release.outputs.tag }}
           docker-private-registry-secret: ghcr
 
-      - name: Set up OCI CLI
-        uses: oracle-actions/setup-oci-cli@v1
+      - name: SSH and Deploy
+        uses: appleboy/ssh-action@v1.0.3
         with:
-          user: ${{ env.OCI_CLI_USER }}
-          tenancy: ${{ env.OCI_CLI_TENANCY }}
-          fingerprint: ${{ env.OCI_CLI_FINGERPRINT }}
-          key_content: ${{ env.OCI_CLI_KEY_CONTENT }}
-          region: ${{ env.OCI_CLI_REGION }}
+          host: ${{ secrets.VM_HOST }}
+          username: ubuntu
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          script: |
+            # Lowercase the image name for compatibility
+            IMAGE_LOWER=$(echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+            IMAGE_TAG=${{ needs.build-and-push.outputs.image_tag }}
 
-      - name: Install kubectl and helm
-        run: |
-          sudo apt-get update && sudo apt-get install -y kubectl
-          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+            # Log in to GHCR
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Get OKE Kubeconfig
-        run: |
-          mkdir -p $HOME/.kube
-          oci ce cluster create-kubeconfig --cluster-id $OKE_CLUSTER_ID --file $HOME/.kube/config --region $OCI_CLI_REGION --token-version 2.0.0
+            # Stop and remove existing container (if any)
+            docker stop fiforesight || true
+            docker rm fiforesight || true
 
-      - name: Deploy with Helm
-        run: |
-          # Lowercase the image name for Helm/K8s compatibility
-          IMAGE_LOWER=$(echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
-          IMAGE_TAG=$(echo "${{ needs.create-release.outputs.tag }}")
+            # Pull and run the new container
+            docker pull $IMAGE_LOWER:$IMAGE_TAG
+            docker run -d \
+              --name fiforesight \
+              --restart always \
+              -p 80:3000 \
+              -e GOOGLE_GENAI_API_KEY=${{ secrets.GOOGLE_GENAI_API_KEY }} \
+              -e FINNHUB_API_KEY=${{ secrets.FINNHUB_API_KEY }} \
+              -e INFLUXDB_BUCKET=${{ secrets.INFLUXDB_BUCKET }} \
+              -e INFLUXDB_ORG=${{ secrets.INFLUXDB_ORG }} \
+              -e INFLUXDB_TOKEN=${{ secrets.INFLUXDB_TOKEN }} \
+              -e INFLUXDB_URL=${{ secrets.INFLUXDB_URL }} \
+              -e GHCR_PAT_TOKEN=${{ secrets.GHCR_PAT_TOKEN }} \
+              $IMAGE_LOWER:$IMAGE_TAG
 
-          helm upgrade --install fiforesight ./charts/fiforesight \
-            --set image.repository=$IMAGE_LOWER \
-            --set image.tag=$IMAGE_TAG \
-            --wait
+            # Clean up old images
+            docker image prune -af

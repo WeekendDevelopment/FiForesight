@@ -21,138 +21,107 @@ provider "oci" {
   region       = var.region
 }
 
-# VCN for OKE
-resource "oci_core_vcn" "oke_vcn" {
+# VCN
+resource "oci_core_vcn" "fiforesight_vcn" {
   cidr_block     = "10.0.0.0/16"
   compartment_id = var.compartment_id
-  display_name   = "fiforesight-oke-vcn"
-  dns_label      = "okevcn"
+  display_name   = "fiforesight-vcn"
+  dns_label      = "fiforesight"
 }
 
 # Internet Gateway
-resource "oci_core_internet_gateway" "oke_igw" {
+resource "oci_core_internet_gateway" "igw" {
   compartment_id = var.compartment_id
-  vcn_id         = oci_core_vcn.oke_vcn.id
-  display_name   = "fiforesight-oke-igw"
+  vcn_id         = oci_core_vcn.fiforesight_vcn.id
+  display_name   = "fiforesight-igw"
 }
 
-# Route Table for Public Subnets
-resource "oci_core_route_table" "oke_rt" {
+# Route Table
+resource "oci_core_route_table" "rt" {
   compartment_id = var.compartment_id
-  vcn_id         = oci_core_vcn.oke_vcn.id
-  display_name   = "fiforesight-oke-rt"
+  vcn_id         = oci_core_vcn.fiforesight_vcn.id
+  display_name   = "fiforesight-rt"
 
   route_rules {
     destination       = "0.0.0.0/0"
     destination_type  = "CIDR_BLOCK"
-    network_entity_id = oci_core_internet_gateway.oke_igw.id
+    network_entity_id = oci_core_internet_gateway.igw.id
   }
 }
 
-# Security List for Worker Nodes
-resource "oci_core_security_list" "worker_sec_list" {
+# Security List
+resource "oci_core_security_list" "sl" {
   compartment_id = var.compartment_id
-  vcn_id         = oci_core_vcn.oke_vcn.id
-  display_name   = "fiforesight-worker-seclist"
-
-  egress_security_rules {
-    protocol    = "all"
-    destination = "0.0.0.0/0"
-  }
+  vcn_id         = oci_core_vcn.fiforesight_vcn.id
+  display_name   = "fiforesight-sl"
 
   ingress_security_rules {
-    protocol = "all"
-    source   = "10.0.0.0/16" # Allow intra-VCN traffic
-  }
-
-  ingress_security_rules {
-    protocol = "6" # SSH
+    protocol = "6" # TCP
     source   = "0.0.0.0/0"
     tcp_options {
       min = 22
       max = 22
     }
   }
+
+  ingress_security_rules {
+    protocol = "6" # TCP
+    source   = "0.0.0.0/0"
+    tcp_options {
+      min = 80
+      max = 80
+    }
+  }
+
+  egress_security_rules {
+    protocol    = "all"
+    destination = "0.0.0.0/0"
+  }
 }
 
-# Subnet for Load Balancer
-resource "oci_core_subnet" "lb_subnet" {
-  cidr_block        = "10.0.20.0/24"
-  display_name      = "fiforesight-lb-subnet"
+# Subnet
+resource "oci_core_subnet" "subnet" {
+  cidr_block        = "10.0.1.0/24"
   compartment_id    = var.compartment_id
-  vcn_id            = oci_core_vcn.oke_vcn.id
-  route_table_id    = oci_core_route_table.oke_rt.id
-  security_list_ids = [oci_core_security_list.worker_sec_list.id]
+  vcn_id            = oci_core_vcn.fiforesight_vcn.id
+  route_table_id    = oci_core_route_table.rt.id
+  security_list_ids = [oci_core_security_list.sl.id]
+  display_name      = "fiforesight-subnet"
 }
 
-# Subnet for Worker Nodes
-resource "oci_core_subnet" "worker_subnet" {
-  cidr_block        = "10.0.10.0/24"
-  display_name      = "fiforesight-worker-subnet"
-  compartment_id    = var.compartment_id
-  vcn_id            = oci_core_vcn.oke_vcn.id
-  route_table_id    = oci_core_route_table.oke_rt.id
-  security_list_ids = [oci_core_security_list.worker_sec_list.id]
-}
+# Compute Instance
+resource "oci_core_instance" "vm" {
+  availability_domain = data.oci_identity_availability_domains.ads.availability_domains[var.availability_domain_index].name
+  compartment_id      = var.compartment_id
+  shape               = "VM.Standard.E2.1.Micro" # Always Free
+  display_name        = "fiforesight-vm"
 
-# OKE Cluster
-resource "oci_containerengine_cluster" "oke_cluster" {
-  compartment_id     = var.compartment_id
-  kubernetes_version = var.kubernetes_version
-  name               = "fiforesight-cluster"
-  vcn_id             = oci_core_vcn.oke_vcn.id
-
-  options {
-    service_lb_subnet_ids = [oci_core_subnet.lb_subnet.id]
-    add_ons {
-      is_kubernetes_dashboard_enabled = false
-      is_tiller_enabled               = false
-    }
-  }
-}
-
-# OKE Node Pool
-resource "oci_containerengine_node_pool" "oke_node_pool" {
-  cluster_id         = oci_containerengine_cluster.oke_cluster.id
-  compartment_id     = var.compartment_id
-  kubernetes_version = var.kubernetes_version
-  name               = "fiforesight-nodepool"
-  node_shape         = var.node_shape
-
-  # Only include node_shape_config if it's a Flex shape
-  dynamic "node_shape_config" {
-    for_each = length(regexall("Flex", var.node_shape)) > 0 ? [1] : []
-    content {
-      memory_in_gbs = var.node_memory_in_gbs
-      ocpus         = var.node_ocpus
-    }
+  create_vnic_details {
+    subnet_id        = oci_core_subnet.subnet.id
+    assign_public_ip = true
+    display_name     = "primary-vnic"
   }
 
-  node_source_details {
-    image_id    = data.oci_core_images.oracle_linux.images[0].id
-    source_type = "IMAGE"
+  source_details {
+    source_type = "image"
+    source_id   = data.oci_core_images.ubuntu.images[0].id
   }
 
-  node_config_details {
-    placement_configs {
-      availability_domain = data.oci_identity_availability_domains.ads.availability_domains[var.availability_domain_index].name
-      subnet_id           = oci_core_subnet.worker_subnet.id
-    }
-    size = 1 # Number of nodes
+  metadata = {
+    ssh_authorized_keys = var.ssh_public_key
+    user_data           = base64encode(file("${path.module}/scripts/setup.sh"))
   }
-
-  ssh_public_key = var.ssh_public_key
 }
 
 data "oci_identity_availability_domains" "ads" {
   compartment_id = var.compartment_id
 }
 
-data "oci_core_images" "oracle_linux" {
+data "oci_core_images" "ubuntu" {
   compartment_id           = var.compartment_id
-  operating_system         = "Oracle Linux"
-  operating_system_version = "8"
-  shape                    = var.node_shape
+  operating_system         = "Canonical Ubuntu"
+  operating_system_version = "22.04"
+  shape                    = "VM.Standard.E2.1.Micro"
   sort_by                  = "TIMECREATED"
   sort_order               = "DESC"
 }
