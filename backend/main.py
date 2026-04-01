@@ -1,3 +1,4 @@
+# backend/main.py
 import asyncio
 import logging
 import re
@@ -22,6 +23,7 @@ app = FastAPI(title="FiForesight Quantum Engine")
 influx_svc = InfluxService()
 serp_svc = SerpService()
 
+
 class PredictionResponse(BaseModel):
     symbol: str
     currentPrice: str
@@ -35,14 +37,16 @@ class PredictionResponse(BaseModel):
     trending: List[dict]
     lastUpdated: str
 
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "timestamp": datetime.now(timezone.utc)}
 
+
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(payload: dict = Body(...)):
     symbol = payload.get('data', 'NVDA').upper()
-    
+
     if not re.match(r"^[A-Z0-9.-:]+$", symbol):
         raise HTTPException(status_code=400, detail="Invalid ticker symbol format.")
 
@@ -51,7 +55,7 @@ async def predict(payload: dict = Body(...)):
 
     # 1. Fetch Data via SerpService
     data = await serp_svc.fetch_data(symbol)
-    
+
     # Fallback to NASDAQ if no initial result
     if not data or not data.get('summary', {}).get('price'):
         if ":" not in symbol:
@@ -60,7 +64,8 @@ async def predict(payload: dict = Body(...)):
             if data and data.get('summary', {}).get('price'):
                 symbol = f"{symbol}:NASDAQ"
 
-    if not data: raise HTTPException(status_code=404, detail="Ticker not found on Google Finance")
+    if not data:
+        raise HTTPException(status_code=404, detail="Ticker not found on Google Finance")
 
     summary = data.get('summary', {})
     live_price = serp_svc.clean_price(summary.get('price')) or serp_svc.clean_price(data.get('price'))
@@ -72,7 +77,7 @@ async def predict(payload: dict = Body(...)):
         "prev_close": str(summary.get('previous_close') or data.get('previous_close', 'N/A')),
         "range_52w": str(summary.get('52_week_high_low') or data.get('52_week_high_low', 'N/A'))
     }
-    
+
     news = []
     for item in (data.get('news') or data.get('news_results') or [])[:5]:
         news.append({
@@ -82,7 +87,7 @@ async def predict(payload: dict = Body(...)):
             "thumbnail": item.get('thumbnail'),
             "date": item.get('date', 'Today')
         })
-    
+
     trending = []
     for category, items in data.get('markets', {}).items():
         if isinstance(items, list):
@@ -117,12 +122,15 @@ async def predict(payload: dict = Body(...)):
 
     return {
         "symbol": symbol, "currentPrice": f"{live_price:.2f}", "rsi": f"{rsi:.2f}",
-        "prediction": {"highRange": str(forecast['high']), "lowRange": str(forecast['low']), "trend": "Bullish" if rsi > 50 else "Bearish"},
+        "prediction": {"highRange": str(forecast['high']), "lowRange": str(forecast['low']),
+                       "trend": "Bullish" if rsi > 50 else "Bearish"},
         "analystNote": forecast['note'], "confidence": forecast['conf'],
         "metrics": metrics, "news": news, "trending": trending,
-        "history": [{"date": p['_time'].strftime('%m/%d'), "price": round(float(p['close']), 2)} for p in historical_prices[-60:]],
+        "history": [{"date": p['_time'].strftime('%m/%d'), "price": round(float(p['close']), 2)} for p in
+                    historical_prices[-60:]],
         "lastUpdated": datetime.now(timezone.utc).isoformat()
     }
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=Config.PORT)
