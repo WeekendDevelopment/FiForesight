@@ -1,0 +1,30 @@
+name: Terraform Run
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v4
+      with:
+        terraform_version: 1.5.7
+        cli_config_credentials_token: ${{ env.TF_API_TOKEN }}
+
+    - name: Terraform Init
+      working-directory: ${{ env.WORKING_DIR }}
+      shell: bash
+      run: terraform init
+
+    - name: Terraform Validate
+      working-directory: ${{ env.WORKING_DIR }}
+      shell: bash
+      run: terraform validate
+
+    - name: Terraform Plan
+      working-directory: ${{ env.WORKING_DIR }}
+      shell: bash
+      run: terraform plan
+
+    - name: Terraform Apply
+      working-directory: ${{ env.WORKING_DIR }}
+      shell: bash
+      if: ${{ github.event_name == 'push' || env.WORKING_DIR == 'terraform-preview' }}
+      run: terraform apply -auto-approve

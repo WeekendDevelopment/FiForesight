@@ -73,9 +73,9 @@ const quantumTheme = createTheme({
     background: { default: '#050a10', paper: '#0d1520' },
   },
   typography: {
-    fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
-    h1: { fontWeight: 900 },
-    h2: { fontWeight: 800 },
+    fontFamily: '"Inter", "Roboto", sans-serif',
+    h1: { fontWeight: 900, letterSpacing: '-0.05em' },
+    h2: { fontWeight: 800, letterSpacing: '-0.03em' },
     h4: { fontWeight: 700 },
   },
   shape: { borderRadius: 12 },
@@ -158,7 +158,7 @@ export default function QuantumDashboard() {
       const response   = await axios.post('/api/predict', { data: fullSymbol });
       setPrediction(response.data);
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Market analysis failed.');
+      setError(err.response?.data?.error || 'Quantum analysis failed.');
     } finally {
       setLoading(false);
     }
@@ -243,7 +243,7 @@ export default function QuantumDashboard() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <ThemeProvider theme={darkTheme}>
+    <ThemeProvider theme={quantumTheme}>
       <CssBaseline />
       <Box sx={{ minHeight: '100vh', py: 4, px: 2, background: 'radial-gradient(circle at 50% -20%, #1a237e 0%, #050a10 60%)' }}>
         <Container maxWidth="xl">
@@ -251,16 +251,16 @@ export default function QuantumDashboard() {
           {/* ── Header ─────────────────────────────────────────────────── */}
           <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" spacing={2} sx={{ mb: 6 }}>
             <Box>
-              <Typography variant="h4" component="h1" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                <BrainCircuit size={40} className="text-primary" />
-                FiForesight <Box component="span" sx={{ color: 'primary.main' }}>AI</Box>
+              <Typography variant="h4" sx={{ display: 'flex', alignItems: 'center', gap: 1.5, color: '#fff' }}>
+                <BrainCircuit size={32} color="#00f2ff" />
+                FiForesight <Box component="span" sx={{ color: 'secondary.main' }}>QUANTUM</Box>
               </Typography>
-              <Typography variant="body2" sx={{ opacity: 0.6, letterSpacing: 1 }}>
-                NEXT-GEN QUANTITATIVE FORECASTING
+              <Typography variant="caption" sx={{ letterSpacing: 4, color: 'primary.main', opacity: 0.8 }}>
+                AI-POWERED QUANTITATIVE ENGINE
               </Typography>
             </Box>
 
-            <Paper sx={{ p: 1, display: 'flex', alignItems: 'center', width: { xs: '100%', md: 400 }, background: 'rgba(255,255,255,0.05)', backdropFilter: 'blur(10px)' }}>
+            <Paper sx={{ p: 0.5, display: 'flex', gap: 1, alignItems: 'center', width: { xs: '100%', md: 500 }, background: 'rgba(255,255,255,0.03)', backdropFilter: 'blur(20px)', borderRadius: 4 }}>
               <TextField
                 sx={{ flexGrow: 1, input: { px: 2, fontWeight: 700 } }}
                 placeholder="Search Ticker…"
@@ -285,7 +285,7 @@ export default function QuantumDashboard() {
                 disabled={loading}
                 sx={{ borderRadius: 3, minWidth: 50, py: 1, boxShadow: '0 0 20px rgba(0,242,255,0.3)' }}
               >
-                {loading ? <CircularProgress size={24} /> : <Search size={20} />}
+                {loading ? <CircularProgress size={20} color="inherit" /> : <Search size={20} />}
               </Button>
             </Paper>
           </Stack>
@@ -681,6 +681,106 @@ export default function QuantumDashboard() {
                 </Stack>
               </Grid>
 
+                    <Card>
+                      <CardContent>
+                        <Typography variant="overline" sx={{ opacity: 0.5 }}>Fundamentals</Typography>
+                        <Grid container spacing={2} sx={{ mt: 1 }}>
+                          <Grid item xs={6}>
+                            <Typography variant="caption" sx={{ opacity: 0.5 }}>MARKET CAP</Typography>
+                            <Typography variant="body2" sx={{ fontWeight: 700 }}>{prediction.metrics.market_cap}</Typography>
+                          </Grid>
+                          <Grid item xs={6}>
+                            <Typography variant="caption" sx={{ opacity: 0.5 }}>P/E RATIO</Typography>
+                            <Typography variant="body2" sx={{ fontWeight: 700 }}>{prediction.metrics.pe_ratio}</Typography>
+                          </Grid>
+                          <Grid item xs={6}>
+                            <Typography variant="caption" sx={{ opacity: 0.5 }}>RSI (DAILY)</Typography>
+                            <Typography variant="body2" sx={{ fontWeight: 700, color: `${rsiInfo?.color}.main` }}>{prediction.rsi}</Typography>
+                          </Grid>
+                          <Grid item xs={6}>
+                            <Typography variant="caption" sx={{ opacity: 0.5 }}>52W RANGE</Typography>
+                            <Typography variant="body2" sx={{ fontWeight: 700 }}>{prediction.metrics.range_52w}</Typography>
+                          </Grid>
+                        </Grid>
+                      </CardContent>
+                    </Card>
+                  </>
+                )}
+
+                <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
+                  <Zap size={20} color="#00ffa3" /> Active Markets
+                </Typography>
+                <Stack spacing={1}>
+                  {(prediction?.trending || []).map((t, i) => {
+                    const meta = CATEGORY_META[(t as any).category as string] ?? { label: '??', color: '#64748b' };
+                    const isUp = String(t.change ?? '').startsWith('+');
+                    const sparkColor = isUp ? '#00ffa3' : '#ff0055';
+                    const sparkData = trendingSparklines[i] ?? [];
+                    const rawPrice = parseFloat(String(t.price).replace(/[^\d.]/g, ''));
+                    const priceStr = isNaN(rawPrice)
+                      ? String(t.price)
+                      : rawPrice >= 10000
+                      ? rawPrice.toLocaleString('en-US', { maximumFractionDigits: 0 })
+                      : rawPrice >= 1
+                      ? rawPrice.toFixed(2)
+                      : rawPrice.toFixed(5);
+                    return (
+                      <Paper
+                        key={i}
+                        sx={{
+                          px: 1.5, py: 1.2,
+                          background: 'rgba(255,255,255,0.02)',
+                          display: 'flex', alignItems: 'center', gap: 1,
+                          overflow: 'hidden',
+                          border: '1px solid transparent',
+                          '&:hover': { border: `1px solid ${sparkColor}44`, background: 'rgba(255,255,255,0.04)' },
+                          transition: 'all 0.2s ease',
+                        }}
+                      >
+                        {/* Category badge */}
+                        <Box sx={{
+                          width: 26, height: 26, borderRadius: '6px',
+                          background: `${meta.color}20`, border: `1px solid ${meta.color}50`,
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                        }}>
+                          <Typography sx={{ fontSize: '0.5rem', fontWeight: 900, color: meta.color, lineHeight: 1 }}>
+                            {meta.label}
+                          </Typography>
+                        </Box>
+
+                        {/* Name & ticker */}
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography sx={{
+                            fontSize: '0.7rem', fontWeight: 700, display: 'block',
+                            lineHeight: 1.3, color: '#fff',
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          }}>
+                            {(t as any).name || t.symbol}
+                          </Typography>
+                          {(t as any).name && t.symbol && (
+                            <Typography sx={{ fontSize: '0.55rem', opacity: 0.3, lineHeight: 1 }}>
+                              {t.symbol}
+                            </Typography>
+                          )}
+                        </Box>
+
+                        {/* Mini sparkline */}
+                        {sparkData.length > 0 && <MiniSparkline data={sparkData} color={sparkColor} />}
+
+                        {/* Price & change */}
+                        <Box sx={{ textAlign: 'right', flexShrink: 0 }}>
+                          <Typography sx={{ fontSize: '0.7rem', fontWeight: 700, display: 'block', color: '#fff' }}>
+                            {priceStr}
+                          </Typography>
+                          <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: sparkColor }}>
+                            {String(t.change ?? '0%')}
+                          </Typography>
+                        </Box>
+                      </Paper>
+                    );
+                  })}
+                </Stack>
+              </Stack>
             </Grid>
           </Grid>
 

@@ -1,5 +1,5 @@
 # Build stage for Frontend
-FROM node:20-alpine AS frontend-builder
+FROM node:20-slim AS frontend-builder
 WORKDIR /app/frontend
 
 # Use corepack for pnpm management
@@ -11,11 +11,16 @@ COPY frontend/ ./
 RUN pnpm build
 
 # Final production image
-FROM node:20-alpine
+FROM node:20-slim
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    make \
+    gcc \
+    g++
+
 # Install Python and build dependencies
-RUN apk add --no-cache python3 py3-pip
+RUN apt install python3 python3-pip python3-venv -y
 
 # Create a virtual environment for Python to keep it clean and set PATH
 ENV VIRTUAL_ENV=/opt/venv

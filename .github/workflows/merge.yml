@@ -49,6 +49,32 @@ jobs:
           gh release create ${{ steps.tag.outputs.tag }} \
             --title "${{ steps.tag.outputs.tag }}" \
             --notes "Automated release for latest commit after merge"
+  terraform:
+    needs: create-release
+    runs-on: ubuntu-latest
+    outputs:
+      vm_host: ${{ steps.tf_outputs.outputs.public_ip }}
+    environment:
+      name: "terraform.apply"
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: '0'
+
+      - name: Terraform run
+        uses: ./.github/actions/terraform
+        env:
+          TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
+          WORKING_DIR: "terraform"
+
+      - name: Get Terraform Outputs
+        id: tf_outputs
+        working-directory: terraform
+        run: |
+          PUBLIC_IP=$(terraform output -raw public_ip)
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+
   build-frontend:
     needs: create-release
     runs-on: ubuntu-latest
@@ -106,10 +132,8 @@ jobs:
       - create-release
       - build-frontend
       - build-backend
+      - terraform
     runs-on: ubuntu-latest
-    environment:
-      name: live
-      url: https://fi-foresight-weekend-development-a6cff98f.koyeb.app
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -135,32 +159,64 @@ jobs:
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ needs.create-release.outputs.tag }}
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
+  deploy-koyeb:
+    needs:
+      - create-release
+      - build-frontend
+      - build-backend
+      - build-image
+    runs-on: ubuntu-latest
+    environment:
+      name: live-koyeb
+      url: https://fi-foresight-weekend-development-a6cff98f.koyeb.app
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
 
-      - name: Install and configure the Koyeb CLI
-        uses: koyeb-community/koyeb-actions@v2
-        with:
-          api_token: "${{ secrets.KOYEB_API_TOKEN }}"
-
-      - name: Create application secrets
-        uses: ./.github/actions/setup-secrets
+      - name: Deploy to Koyeb
+        uses: ./.github/actions/deploy-koyeb
         env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          IMAGE_TAG: ${{ needs.create-release.outputs.tag }}
+          GHCR_PAT_TOKEN: ${{ secrets.GHCR_PAT_TOKEN }}
+          KOYEB_API_TOKEN: ${{ secrets.KOYEB_API_TOKEN }}
           GOOGLE_GENAI_API_KEY: ${{ secrets.GOOGLE_GENAI_API_KEY }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           INFLUXDB_BUCKET: ${{ secrets.INFLUXDB_BUCKET }}
           INFLUXDB_ORG: ${{ secrets.INFLUXDB_ORG }}
           INFLUXDB_TOKEN: ${{ secrets.INFLUXDB_TOKEN }}
           INFLUXDB_URL: ${{ secrets.INFLUXDB_URL }}
-          GHCR_PAT_TOKEN: ${{ secrets.GHCR_PAT_TOKEN }}
+          SERP_API_KEY: ${{ secrets.SERP_API_KEY }}
 
-      - name: Build and deploy the application to Koyeb
-        uses: koyeb/action-git-deploy@v1
-        with:
-          app-name: fi-foresight
-          service-name: fi-foresight-service
-          service-env: FINNHUB_API_KEY=@FINNHUB_API_KEY,GOOGLE_GENAI_API_KEY=@GOOGLE_GENAI_API_KEY,INFLUXDB_BUCKET=@INFLUXDB_BUCKET,INFLUXDB_ORG=@INFLUXDB_ORG,INFLUXDB_TOKEN=@INFLUXDB_TOKEN,INFLUXDB_URL=@INFLUXDB_URL
-          service-ports: "3000:http"
-          service-routes: "/:3000"
-          service-regions: fra
-          service-instance-type: free
-          docker: ${{ env.IMAGE_NAME }}:${{ needs.create-release.outputs.tag }}
-          docker-private-registry-secret: ghcr
+  deploy-oracle:
+    needs:
+      - create-release
+      - build-frontend
+      - build-backend
+      - build-image
+      - terraform
+    runs-on: ubuntu-latest
+    environment:
+      name: live
+      url: http://fiforesight.duckdns.org
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Deploy to Oracle
+        uses: ./.github/actions/deploy-oracle
+        env:
+          VM_IP_ADDRESS: ${{ needs.terraform.outputs.vm_host }}
+          DOMAIN: "fiforesight"
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          IMAGE_TAG: ${{ needs.create-release.outputs.tag }}
+          DUCK_DNS_TOKEN: ${{ secrets.DUCK_DNS_TOKEN }}
+          VM_SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOGLE_GENAI_API_KEY: ${{ secrets.GOOGLE_GENAI_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          INFLUXDB_BUCKET: ${{ secrets.INFLUXDB_BUCKET }}
+          INFLUXDB_ORG: ${{ secrets.INFLUXDB_ORG }}
+          INFLUXDB_TOKEN: ${{ secrets.INFLUXDB_TOKEN }}
+          INFLUXDB_URL: ${{ secrets.INFLUXDB_URL }}
+          SERP_API_KEY: ${{ secrets.SERP_API_KEY }}
