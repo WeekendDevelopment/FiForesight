@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "description": "",
   "scripts": {
-    "app:dev": "concurrently \"cd frontend && pnpm run dev\" \"cd backend && uvicorn main:app --reload\"",
-    "app:start": "concurrently \"cd frontend && pnpm start\" \"cd backend && uvicorn main:app --host 0.0.0.0 --port 8000\""
+    "app:dev": "concurrently \"cd frontend && pnpm run dev\" \"node start_backend.js\"",
+    "app:start": "concurrently \"cd frontend && pnpm start\" \"node start_backend.js\""
   },
   "packageManager": "pnpm@10.33.0",
   "dependencies": {
