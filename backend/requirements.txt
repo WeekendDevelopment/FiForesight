@@ -6,3 +6,6 @@ python-dotenv
 pandas
 numpy
 google-genai
+statsmodels
+prophet
+scikit-learn
