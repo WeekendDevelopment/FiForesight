@@ -285,9 +285,12 @@ def run_ensemble_forecast(prices: List[float], symbol: str) -> Dict:
     pct_change = abs((d5 - last_price) / last_price * 100)
 
     active_models = []
-    if p_fc is not None: active_models.append(f"Prophet (w={w[0]:.0%})")
-    if s_fc is not None: active_models.append(f"SARIMA (w={w[1]:.0%})")
-    if r_fc is not None: active_models.append(f"Random Forest (w={w[2]:.0%})")
+    if p_fc is not None:
+        active_models.append(f"Prophet (w={w[0]:.0%})")
+    if s_fc is not None:
+        active_models.append(f"SARIMA (w={w[1]:.0%})")
+    if r_fc is not None:
+        active_models.append(f"Random Forest (w={w[2]:.0%})")
 
     vol_label = "high" if vol > 0.03 else "moderate" if vol > 0.015 else "low"
     note = (

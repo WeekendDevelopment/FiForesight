@@ -1,7 +1,6 @@
 ﻿# backend/main.py
 import asyncio
 import logging
-import os
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -61,9 +60,12 @@ class PredictionResponse(BaseModel):
 def _fmt_market_cap(cap) -> str:
     try:
         v = float(cap)
-        if v >= 1e12: return f"${v/1e12:.2f}T"
-        if v >= 1e9:  return f"${v/1e9:.2f}B"
-        if v >= 1e6:  return f"${v/1e6:.2f}M"
+        if v >= 1e12:
+            return f"${v/1e12:.2f}T"
+        if v >= 1e9:
+            return f"${v/1e9:.2f}B"
+        if v >= 1e6:
+            return f"${v/1e6:.2f}M"
         return f"${v:,.0f}"
     except Exception:
         return str(cap) if cap else "N/A"

@@ -3,7 +3,7 @@ import re
 import logging
 import httpx
 import pandas as pd
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 try:
     import yfinance as yf
