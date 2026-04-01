@@ -29,7 +29,6 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 # Copy backend requirements and install
 COPY backend/requirements.txt ./backend/
-RUN apt-get update && apt-get install -y build-essential
 RUN pip install --no-cache-dir -r ./backend/requirements.txt
 
 # Copy root package.json and install dependencies
