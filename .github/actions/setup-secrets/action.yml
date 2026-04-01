@@ -51,3 +51,9 @@ runs:
       with:
         secret-name: INFLUXDB_URL
         secret-value: "${{ env.INFLUXDB_URL }}"
+
+    - name: Create SERP_API_KEY secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: SERP_API_KEY
+        secret-value: "${{ env.SERP_API_KEY }}"

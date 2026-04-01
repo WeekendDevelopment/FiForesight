@@ -187,6 +187,7 @@ jobs:
           INFLUXDB_ORG: ${{ secrets.INFLUXDB_ORG }}
           INFLUXDB_TOKEN: ${{ secrets.INFLUXDB_TOKEN }}
           INFLUXDB_URL: ${{ secrets.INFLUXDB_URL }}
+          SERP_API_KEY: ${{ secrets.SERP_API_KEY }}
 
       - name: Create Comment
         run: |
