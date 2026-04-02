@@ -1,11 +1,13 @@
 # backend/main.py
 import asyncio
 import logging
+import traceback
 from datetime import datetime, timezone
 from typing import List, Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from google import genai
 
@@ -18,6 +20,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="FiForesight Quantum Engine")
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    tb = traceback.format_exc()
+    logger.error(f"Unhandled exception on {request.method} {request.url}:\n{tb}")
+    return JSONResponse(status_code=500, content={"detail": str(exc), "traceback": tb})
 
 # AI client (optional - graceful fallback if key missing)
 ai_client: Optional[genai.Client] = None
