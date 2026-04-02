@@ -14,7 +14,7 @@ import {
 import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   LineChart, Line, ReferenceLine, ComposedChart, Area, Legend,
-  BarChart, Bar, Cell,
+  BarChart, Bar, Cell, Customized,
 } from 'recharts';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -231,32 +231,53 @@ function SidebarSkeleton() {
   );
 }
 
-// ── Candlestick bar shape ─────────────────────────────────────────────────────
+// ── Candlestick overlay (Customized layer — has access to real axis scales) ───
 
-function CandlestickShape(props: any) {
-  const { x, width, payload, yAxis } = props;
-  if (!payload || payload.close == null || !yAxis?.scale) return null;
+function CandlestickLayer({ xAxisMap, yAxisMap, data: rawData }: any) {
+  const yAxis = yAxisMap ? (Object.values(yAxisMap)[0] as any) : null;
+  const xAxis = xAxisMap ? (Object.values(xAxisMap)[0] as any) : null;
+  if (!yAxis?.scale || !xAxis?.scale || !rawData?.length) return null;
 
-  const { open, high, low, close } = payload;
-  const scale    = yAxis.scale;
-  const isUp     = close >= open;
-  const color    = isUp ? '#00ffa3' : '#ff0055';
-  const cx       = x + width / 2;
-  const bx       = x + width * 0.1;
-  const bw       = Math.max(width * 0.8, 2);
-  const yHigh    = scale(high);
-  const yLow     = scale(low);
-  const yOpen    = scale(open);
-  const yClose   = scale(close);
-  const bodyTop  = Math.min(yOpen, yClose);
-  const bodyH    = Math.max(Math.abs(yClose - yOpen), 1);
+  const yScale = yAxis.scale;
+  const xScale = xAxis.scale;
+
+  // Band scale (Bar chart) → xScale(date) is left edge + bandwidth()
+  // Point scale (Line/Area) → xScale(date) is the center, no bandwidth
+  const hasBand = typeof xScale.bandwidth === 'function';
+  const visibleDates = (rawData as any[])
+    .filter((d: any) => d.close != null)
+    .map((d: any) => d.date);
+  const bw = hasBand
+    ? xScale.bandwidth()
+    : visibleDates.length > 1
+      ? Math.abs(xScale(visibleDates[1]) - xScale(visibleDates[0])) * 0.7
+      : 4;
 
   return (
     <g>
-      <line x1={cx} y1={yHigh} x2={cx} y2={yLow} stroke={color} strokeWidth={1} opacity={0.8} />
-      <rect x={bx} y={bodyTop} width={bw} height={bodyH}
-        fill={isUp ? 'transparent' : color} stroke={color} strokeWidth={1.5}
-      />
+      {(rawData as any[]).map((d: any, i: number) => {
+        if (d.close == null || d.open == null || d.high == null || d.low == null) return null;
+        const xPos = xScale(d.date);
+        if (xPos == null || isNaN(xPos)) return null;
+
+        const isUp    = d.close >= d.open;
+        const color   = isUp ? '#00ffa3' : '#ff0055';
+        const cx      = hasBand ? xPos + bw / 2 : xPos;
+        const bodyTop = Math.min(yScale(d.open), yScale(d.close));
+        const bodyH   = Math.max(Math.abs(yScale(d.close) - yScale(d.open)), 1);
+
+        return (
+          <g key={i}>
+            <line x1={cx} y1={yScale(d.high)} x2={cx} y2={yScale(d.low)}
+              stroke={color} strokeWidth={1} opacity={0.8} />
+            <rect
+              x={cx - bw * 0.4} y={bodyTop}
+              width={Math.max(bw * 0.8, 2)} height={bodyH}
+              fill={isUp ? 'transparent' : color} stroke={color} strokeWidth={1.5}
+            />
+          </g>
+        );
+      })}
     </g>
   );
 }
@@ -677,7 +698,7 @@ export default function QuantumDashboard() {
                             {chartMode === 'line' ? (
                               <Area type="monotone" dataKey="price" stroke={trendColor} strokeWidth={2.5} fill="url(#histGrad)" dot={false} connectNulls={false} activeDot={{ r: 4, strokeWidth: 0 }} isAnimationActive={false} />
                             ) : (
-                              <Bar dataKey="close" shape={<CandlestickShape />} isAnimationActive={false} />
+                              <Customized component={CandlestickLayer} />
                             )}
 
                             {/* Forecast bands */}
