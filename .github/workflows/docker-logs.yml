@@ -3,6 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       environment:
+        type: choice
         options:
           - preview
           - live
@@ -22,6 +23,11 @@ jobs:
         with:
           terraform_version: 1.5.7
           cli_config_credentials_token: ${{ env.TF_API_TOKEN }}
+
+      - name: Terraform Init
+        working-directory: ${{ (inputs.environment == 'preview' && 'terraform-preview') || 'terraform' }}
+        shell: bash
+        run: terraform init
 
       - name: Get Terraform Outputs
         id: tf_outputs
