@@ -11,13 +11,16 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from google import genai
 
-from config import Config
+from config import Config, SanitizeHttpxFilter
 from models import calculate_rsi, calculate_rsi_series, run_ensemble_forecast, calculate_macd, calculate_bollinger_bands, calculate_sma_series
 from services import DataCleaner, InfluxService, SerpService, YFinanceService
 
 # ---------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Sanitize sensitive parameters in logs
+logging.getLogger("httpx").addFilter(SanitizeHttpxFilter())
 
 app = FastAPI(title="FiForesight Quantum Engine")
 
