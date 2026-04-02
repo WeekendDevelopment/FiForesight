@@ -1,0 +1,59 @@
+name: Docker logs
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        options:
+          - preview
+          - live
+        default: live
+        required: true
+        description: "Select the environment to get logs"
+
+jobs:
+  retrieve-logs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.5.7
+          cli_config_credentials_token: ${{ env.TF_API_TOKEN }}
+
+      - name: Get Terraform Outputs
+        id: tf_outputs
+        working-directory: ${{ (inputs.environment == 'preview' && 'terraform-preview') || 'terraform' }}
+        run: |
+          PUBLIC_IP=$(terraform output -raw public_ip)
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VM_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ steps.tf_outputs.outputs.public_ip }} >> ~/.ssh/known_hosts
+
+      - name: SSH and save logs
+        run: |
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ steps.tf_outputs.outputs.public_ip }} \
+            "docker logs fiforesight 2>&1" | tee docker.log
+
+      - name: Show log
+        run: tail -100 docker.log
+
+      - name: Write to step summary
+        run: |
+          echo '## fiforesight container logs from ${{ inputs.environment }} environment' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tail -100 docker.log >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload log as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-logs
+          path: docker.log
