@@ -160,19 +160,12 @@ class YFinanceService:
             return pd.DataFrame()
         ticker = self._to_yf_symbol(symbol)
         try:
-            import requests as _req
-            session = _req.Session()
-            # Browser-like User-Agent — Yahoo Finance blocks many cloud provider IPs
-            # without it; this significantly improves success rate in deployed envs.
-            session.headers["User-Agent"] = (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            )
+            # yfinance now uses curl_cffi internally for Yahoo's bot detection —
+            # passing a requests.Session raises an error in recent versions.
             df = yf.download(
                 ticker, period=period, interval="1d",
                 progress=False, auto_adjust=True,
-                timeout=20, session=session,
+                timeout=20,
             )
             if df.empty:
                 logger.warning(f"yfinance: no history for {ticker}")
