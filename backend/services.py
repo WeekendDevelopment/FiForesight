@@ -160,7 +160,20 @@ class YFinanceService:
             return pd.DataFrame()
         ticker = self._to_yf_symbol(symbol)
         try:
-            df = yf.download(ticker, period=period, interval="1d", progress=False, auto_adjust=True)
+            import requests as _req
+            session = _req.Session()
+            # Browser-like User-Agent — Yahoo Finance blocks many cloud provider IPs
+            # without it; this significantly improves success rate in deployed envs.
+            session.headers["User-Agent"] = (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            )
+            df = yf.download(
+                ticker, period=period, interval="1d",
+                progress=False, auto_adjust=True,
+                timeout=20, session=session,
+            )
             if df.empty:
                 logger.warning(f"yfinance: no history for {ticker}")
                 return pd.DataFrame()
@@ -263,6 +276,8 @@ class DataCleaner:
 
         # 2. Drop rows where Close is zero or NaN
         df = df[df["Close"].notna() & (df["Close"] > 0)]
+        if df.empty:
+            return df
 
         # 3. Remove outliers: flag Close values more than 4 std-devs from rolling
         #    30-day median (handles bad ticks / splits not adjusted)
@@ -275,12 +290,20 @@ class DataCleaner:
         if removed:
             logger.info(f"DataCleaner: removed {removed} outlier rows")
         df = df[mask]
+        if df.empty:
+            return df   # guard: avoids NaT bdate_range crash below
 
         # 4. Reindex to business-day frequency and forward-fill gaps
         #    (covers market holidays, weekends already excluded by yfinance)
-        full_idx = pd.bdate_range(start=df.index.min(), end=df.index.max(), freq="B")
-        full_idx = full_idx.tz_localize("UTC") if full_idx.tz is None else full_idx
-        df = df.reindex(full_idx).ffill()
+        try:
+            full_idx = pd.bdate_range(start=df.index.min(), end=df.index.max(), freq="B")
+            full_idx = full_idx.tz_localize("UTC") if full_idx.tz is None else full_idx
+            df = df.reindex(full_idx).ffill()
+        except Exception as e:
+            logger.warning(f"DataCleaner: bdate_range reindex failed ({e}), skipping gap-fill")
+
+        if df.empty:
+            return df
 
         # 5. Ensure High >= Close >= Low (yfinance adjusted data can drift)
         if "High" in df.columns and "Low" in df.columns:
@@ -324,10 +347,4 @@ class SerpService:
 
     async def fetch_data(self, query: str) -> dict:
         async with httpx.AsyncClient(timeout=25.0) as client:
-            params = {
-                "engine":  "google_finance",
-                "q":       query,
-                "api_key": Config.SERP_API_KEY,
-            }
-            resp = await client.get("https://serpapi.com/search.json", params=params)
-            return resp.json() if resp.status_code == 200 else {}
+ 

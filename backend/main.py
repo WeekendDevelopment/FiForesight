@@ -113,6 +113,53 @@ async def health():
     return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
+@app.get("/debug")
+async def debug():
+    """Checks every service dependency — hit this in the browser to diagnose 500s."""
+    from models import MODELS_AVAILABLE
+    from services import YFINANCE_AVAILABLE
+
+    results: dict = {
+        "yfinance_installed": YFINANCE_AVAILABLE,
+        "ml_models_available": MODELS_AVAILABLE,
+        "serp_api_key_set": bool(Config.SERP_API_KEY),
+        "gemini_key_set": bool(Config.GOOGLE_GENAI_API_KEY),
+        "influxdb_token_set": bool(Config.INFLUXDB_TOKEN),
+    }
+
+    # Test InfluxDB connectivity
+    try:
+        influx_svc.has_recent_data("DEBUG_TEST")
+        results["influxdb_reachable"] = True
+    except Exception as e:
+        results["influxdb_reachable"] = False
+        results["influxdb_error"] = str(e)
+
+    # Test yfinance (quick 5-day fetch)
+    if YFINANCE_AVAILABLE:
+        try:
+            import requests as _req
+            import yfinance as _yf
+            sess = _req.Session()
+            sess.headers["User-Agent"] = (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            )
+            df = await asyncio.to_thread(
+                lambda: _yf.download("AAPL", period="5d", interval="1d",
+                                     progress=False, auto_adjust=True,
+                                     timeout=10, session=sess)
+            )
+            results["yfinance_reachable"] = not df.empty
+            results["yfinance_rows"] = int(len(df))
+        except Exception as e:
+            results["yfinance_reachable"] = False
+            results["yfinance_error"] = str(e)
+
+    return results
+
+
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(payload: dict = Body(...)):
     symbol = payload.get("data", "SPY").upper()
@@ -123,8 +170,13 @@ async def predict(payload: dict = Body(...)):
     if not influx_svc.has_recent_data(symbol):
         df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "2y")
         if not df.empty:
-            df = DataCleaner.clean(df)
-            await asyncio.to_thread(influx_svc.write_ohlcv_batch, symbol, df)
+            try:
+                df = DataCleaner.clean(df)
+            except Exception as e:
+                logger.warning(f"DataCleaner.clean failed for {symbol}: {e}")
+                df = df.__class__()  # empty DataFrame
+            if not df.empty:
+                await asyncio.to_thread(influx_svc.write_ohlcv_batch, symbol, df)
 
     historical_prices: list = await asyncio.to_thread(influx_svc.query_history, symbol)
 
@@ -132,8 +184,13 @@ async def predict(payload: dict = Body(...)):
     if not historical_prices:
         df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "2y")
         if not df.empty:
-            df = DataCleaner.clean(df)
-            historical_prices = DataCleaner.to_history_list(df)
+            try:
+                df = DataCleaner.clean(df)
+            except Exception as e:
+                logger.warning(f"DataCleaner.clean fallback failed for {symbol}: {e}")
+                df = df.__class__()
+            if not df.empty:
+                historical_prices = DataCleaner.to_history_list(df)
 
     if not historical_prices:
         raise HTTPException(status_code=404, detail=f"No data found for {symbol}.")
@@ -237,4 +294,4 @@ async def predict(payload: dict = Body(...)):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=Config.PORT)
+    uvicorn.run(app, host="0.0.0.0", port=Config.PORT)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
