@@ -1,7 +1,9 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Always load .env from the backend/ directory, regardless of where uvicorn is launched from
+load_dotenv(Path(__file__).parent / ".env")
 
 class Config:
     INFLUXDB_URL = os.getenv("INFLUXDB_URL", "http://localhost:8086")

@@ -1,135 +1,321 @@
 # backend/main.py
 import asyncio
 import logging
-import re
+import traceback
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from google import genai
 
 from config import Config
-from models import calculate_rsi, run_ensemble_forecast, generate_synthetic_history
-from services import InfluxService, SerpService
+from models import calculate_rsi, calculate_rsi_series, run_ensemble_forecast, calculate_macd, calculate_bollinger_bands, calculate_sma_series
+from services import DataCleaner, InfluxService, SerpService, YFinanceService
 
-# Setup logging
+# ---------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="FiForesight Quantum Engine")
 
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    tb = traceback.format_exc()
+    logger.error(f"Unhandled exception on {request.method} {request.url}:\n{tb}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal server error occurred."},
+    )
+
+# AI client (optional - graceful fallback if key missing)
+ai_client: Optional[genai.Client] = None
+if Config.GOOGLE_GENAI_API_KEY:
+    try:
+        ai_client = genai.Client(api_key=Config.GOOGLE_GENAI_API_KEY)
+    except Exception as _e:
+        logger.warning(f"Gemini client init failed: {_e}")
+
 # Services
 influx_svc = InfluxService()
-serp_svc = SerpService()
+serp_svc   = SerpService()
+yf_svc     = YFinanceService()
 
+
+# ---------------------------------------------------------------------------
+# Response schema
+# ---------------------------------------------------------------------------
 
 class PredictionResponse(BaseModel):
-    symbol: str
+    symbol:       str
     currentPrice: str
-    rsi: str
-    prediction: dict
-    analystNote: str
-    confidence: str
-    history: List[dict]
-    metrics: dict
-    news: List[dict]
-    trending: List[dict]
-    lastUpdated: str
+    rsi:          str
+    prediction:   dict
+    analystNote:  str
+    confidence:   str
+    history:      List[dict]
+    forecastDays: List[dict]
+    modelStats:   dict
+    metrics:      dict
+    news:         List[dict]
+    trending:     List[dict]
+    indicators:   dict
+    lastUpdated:  str
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _fmt_market_cap(cap) -> str:
+    try:
+        v = float(cap)
+        if v >= 1e12:
+            return f"${v/1e12:.2f}T"
+        if v >= 1e9:
+            return f"${v/1e9:.2f}B"
+        if v >= 1e6:
+            return f"${v/1e6:.2f}M"
+        return f"${v:,.0f}"
+    except Exception:
+        return str(cap) if cap else "N/A"
+
+
+def _fmt_pct(val) -> str:
+    try:
+        return f"{float(val)*100:.2f}%"
+    except Exception:
+        return "N/A"
+
+
+async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict) -> str:
+    """Return a Gemini analyst note, falling back to the model's own note."""
+    if not ai_client:
+        return forecast["note"]
+    recent    = closes[-20:]
+    price_str = "\n".join(f"  {i+1}. {p:.2f}" for i, p in enumerate(recent))
+    prompt = (
+        f"You are a quantitative analyst. Symbol: {symbol}\n"
+        f"RSI: {rsi:.1f}\n"
+        f"Recent 20-day closes:\n{price_str}\n"
+        f"5-day ensemble forecast: high=${forecast['high']:.2f}, low=${forecast['low']:.2f}\n"
+        f"Write a concise 2-sentence analyst note with the outlook and key risk. "
+        f"Plain text only, no markdown."
+    )
+    try:
+        response = await asyncio.to_thread(
+            ai_client.models.generate_content,
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        return response.text.strip()
+    except Exception as e:
+        logger.warning(f"Gemini note failed: {e}")
+        return forecast["note"]
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "timestamp": datetime.now(timezone.utc)}
+    return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/debug")
+async def debug():
+    """Checks every service dependency — hit this in the browser to diagnose 500s."""
+    from models import MODELS_AVAILABLE
+    from services import YFINANCE_AVAILABLE
+
+    results: dict = {
+        "yfinance_installed": YFINANCE_AVAILABLE,
+        "ml_models_available": MODELS_AVAILABLE,
+        "serp_api_key_set": bool(Config.SERP_API_KEY),
+        "gemini_key_set": bool(Config.GOOGLE_GENAI_API_KEY),
+        "influxdb_token_set": bool(Config.INFLUXDB_TOKEN),
+    }
+
+    # Test InfluxDB connectivity
+    try:
+        influx_svc.has_recent_data("DEBUG_TEST")
+        results["influxdb_reachable"] = True
+    except Exception as e:
+        results["influxdb_reachable"] = False
+        results["influxdb_error"] = str(e)
+
+    # Test yfinance (quick 5-day fetch)
+    if YFINANCE_AVAILABLE:
+        try:
+            import yfinance as _yf
+            df = await asyncio.to_thread(
+                lambda: _yf.download("AAPL", period="5d", interval="1d",
+                                     progress=False, auto_adjust=True,
+                                     timeout=10)
+            )
+            results["yfinance_reachable"] = not df.empty
+            results["yfinance_rows"] = int(len(df))
+        except Exception as e:
+            results["yfinance_reachable"] = False
+            results["yfinance_error"] = str(e)
+
+    return results
 
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(payload: dict = Body(...)):
-    symbol = payload.get('data', 'NVDA').upper()
+    symbol = payload.get("data", "SPY").upper()
+    now    = datetime.now(timezone.utc)
 
-    if not re.match(r"^[A-Z0-9.-:]+$", symbol):
-        raise HTTPException(status_code=400, detail="Invalid ticker symbol format.")
+    # 1. Fetch OHLCV history
+    # Populate InfluxDB from yfinance if we don't have fresh data
+    if not influx_svc.has_recent_data(symbol):
+        df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "2y")
+        if not df.empty:
+            try:
+                df = DataCleaner.clean(df)
+            except Exception as e:
+                logger.warning(f"DataCleaner.clean failed for {symbol}: {e}")
+                df = df.__class__()  # empty DataFrame
+            if not df.empty:
+                await asyncio.to_thread(influx_svc.write_ohlcv_batch, symbol, df)
 
-    if not Config.SERP_API_KEY:
-        raise HTTPException(status_code=500, detail="SERP_API_KEY not configured")
+    historical_prices: list = await asyncio.to_thread(influx_svc.query_history, symbol)
 
-    # 1. Fetch Data via SerpService
-    data = await serp_svc.fetch_data(symbol)
+    # Fallback: use yfinance directly if InfluxDB is unavailable
+    if not historical_prices:
+        df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "2y")
+        if not df.empty:
+            try:
+                df = DataCleaner.clean(df)
+            except Exception as e:
+                logger.warning(f"DataCleaner.clean fallback failed for {symbol}: {e}")
+                df = df.__class__()
+            if not df.empty:
+                historical_prices = DataCleaner.to_history_list(df)
 
-    # Fallback to NASDAQ if no initial result
-    if not data or not data.get('summary', {}).get('price'):
-        if ":" not in symbol:
-            logger.info(f"Retrying with NASDAQ fallback for {symbol}")
-            data = await serp_svc.fetch_data(f"{symbol}:NASDAQ")
-            if data and data.get('summary', {}).get('price'):
-                symbol = f"{symbol}:NASDAQ"
+    if not historical_prices:
+        raise HTTPException(status_code=404, detail=f"No data found for {symbol}.")
 
-    if not data:
-        raise HTTPException(status_code=404, detail="Ticker not found on Google Finance")
+    historical_prices.sort(key=lambda x: x["_time"])
 
-    summary = data.get('summary', {})
-    live_price = serp_svc.clean_price(summary.get('price')) or serp_svc.clean_price(data.get('price'))
+    # 2. Live price
+    live_price = await asyncio.to_thread(yf_svc.get_live_price, symbol)
+    if live_price > 0:
+        historical_prices.append({
+            "_time": now, "close": live_price,
+            "open": live_price, "high": live_price,
+            "low":  live_price, "volume": 0.0,
+        })
+    else:
+        live_price = float(historical_prices[-1]["close"])
 
+    # 3. Fundamentals
+    info = await asyncio.to_thread(yf_svc.fetch_info, symbol)
     metrics = {
-        "market_cap": str(summary.get('market_cap') or data.get('market_cap', 'N/A')),
-        "pe_ratio": str(summary.get('pe_ratio') or data.get('pe_ratio', 'N/A')),
-        "yield": str(summary.get('dividend_yield') or data.get('dividend_yield', 'N/A')),
-        "prev_close": str(summary.get('previous_close') or data.get('previous_close', 'N/A')),
-        "range_52w": str(summary.get('52_week_high_low') or data.get('52_week_high_low', 'N/A'))
+        "market_cap": _fmt_market_cap(info.get("market_cap")),
+        "pe_ratio":   str(info.get("pe_ratio", "N/A")),
+        "yield":      _fmt_pct(info.get("dividend_yield")) if info.get("dividend_yield") not in (None, "N/A") else "N/A",
+        "prev_close": str(info.get("prev_close", "N/A")),
+        "range_52w":  info.get("range_52w", "N/A"),
+        "sector":     info.get("sector",   "N/A"),
+        "currency":   info.get("currency", "USD"),
     }
 
-    news = []
-    for item in (data.get('news') or data.get('news_results') or [])[:5]:
-        news.append({
-            "title": item.get('title', 'Market Update'),
-            "link": item.get('link', '#'),
-            "source": item.get('source', 'Financial News'),
-            "thumbnail": item.get('thumbnail'),
-            "date": item.get('date', 'Today')
-        })
-
-    trending = []
-    for category, items in data.get('markets', {}).items():
-        if isinstance(items, list):
-            for t in items[:3]:
-                trending.append({
-                    "symbol": t.get('symbol') or t.get('name', 'N/A'),
-                    "name": t.get('name', ''),
-                    "price": str(t.get('price', 'N/A')),
-                    "change": str(t.get('price_change_percentage', '0%')),
-                    "category": category
-                })
-
-    # 2. Historical Context via InfluxService
-    historical_prices = await asyncio.to_thread(influx_svc.query_history, symbol)
-
-    if len(historical_prices) < 20 and live_price > 0:
-        prev_close_val = serp_svc.clean_price(metrics['prev_close']) or (live_price * 0.99)
-        historical_prices = generate_synthetic_history(symbol, live_price, prev_close_val)
-
-    if live_price > 0:
-        historical_prices.append({"_time": datetime.now(timezone.utc), "close": live_price})
-
-    # 3. Analytics & Models
-    historical_prices.sort(key=lambda x: x['_time'])
-    closes = [float(p['close']) for p in historical_prices]
-    rsi = calculate_rsi(closes)
+    # 4. Analytics & ensemble forecast
+    closes   = [float(p["close"]) for p in historical_prices]
+    rsi      = calculate_rsi(closes)
     forecast = run_ensemble_forecast(closes, symbol)
 
-    # 4. Background Ingestion
-    if live_price > 0:
-        asyncio.create_task(asyncio.to_thread(influx_svc.write_price, symbol, live_price))
+    # 4b. Technical indicators (full series, sliced to chart window later)
+    macd_data = calculate_macd(closes)
+    bb_data   = calculate_bollinger_bands(closes)
+    sma50     = calculate_sma_series(closes, 50)
+    sma200    = calculate_sma_series(closes, 200)
 
-    return {
-        "symbol": symbol, "currentPrice": f"{live_price:.2f}", "rsi": f"{rsi:.2f}",
-        "prediction": {"highRange": str(forecast['high']), "lowRange": str(forecast['low']),
-                       "trend": "Bullish" if rsi > 50 else "Bearish"},
-        "analystNote": forecast['note'], "confidence": forecast['conf'],
-        "metrics": metrics, "news": news, "trending": trending,
-        "history": [{"date": p['_time'].strftime('%m/%d'), "price": round(float(p['close']), 2)} for p in
-                    historical_prices[-60:]],
-        "lastUpdated": datetime.now(timezone.utc).isoformat()
-    }
+    # 5. AI analyst note
+    note = await _ai_note(symbol, closes, rsi, forecast)
+
+    # 6. News + trending via SerpAPI
+    news: list     = []
+    trending: list = []
+    try:
+        serp_data = await serp_svc.fetch_data(symbol)
+        news = [
+            {
+                "title":     n.get("title",  ""),
+                "link":      n.get("link",   ""),
+                "source":    n.get("source", {}).get("name", "") if isinstance(n.get("source"), dict) else str(n.get("source", "")),
+                "thumbnail": n.get("thumbnail", ""),
+                "date":      n.get("date",   ""),
+            }
+            for n in serp_data.get("news_results", [])[:8]
+        ]
+        for category, items in serp_data.get("markets", {}).items():
+            if isinstance(items, list):
+                for t in items[:3]:
+                    trending.append({
+                        "symbol":   t.get("symbol") or t.get("name", "N/A"),
+                        "name":     t.get("name",  ""),
+                        "price":    str(t.get("price", "N/A")),
+                        "change":   str(t.get("price_change_percentage", "0%")),
+                        "category": category,
+                    })
+    except Exception as e:
+        logger.warning(f"SerpAPI fetch failed: {e}")
+
+    # 7. Background price snapshot
+    asyncio.create_task(asyncio.to_thread(influx_svc.write_price, symbol, live_price))
+
+    # 8. Chart history (last 90 trading days) — attach indicator slices
+    total      = len(historical_prices)
+    slice_start = max(0, total - 90)
+    history = []
+    for idx, p in enumerate(historical_prices[slice_start:], start=slice_start):
+        history.append({
+            "date":       p["_time"].strftime("%m/%d") if hasattr(p["_time"], "strftime") else str(p["_time"])[:10],
+            "price":      round(float(p["close"]),                 2),
+            "open":       round(float(p.get("open",  p["close"])), 2),
+            "high":       round(float(p.get("high",  p["close"])), 2),
+            "low":        round(float(p.get("low",   p["close"])), 2),
+            "volume":     round(float(p.get("volume", 0)),         0),
+            "bb_upper":   bb_data["upper"][idx],
+            "bb_middle":  bb_data["middle"][idx],
+            "bb_lower":   bb_data["lower"][idx],
+            "sma50":      sma50[idx],
+            "sma200":     sma200[idx],
+            "macd":       macd_data["macd"][idx],
+            "macd_signal":macd_data["signal"][idx],
+            "macd_hist":  macd_data["hist"][idx],
+        })
+
+    # RSI series (vectorised — last 90 points)
+    rsi_full   = calculate_rsi_series(closes)
+    rsi_series = rsi_full[slice_start:]
+
+    return PredictionResponse(
+        symbol       = symbol,
+        currentPrice = f"{live_price:.2f}",
+        rsi          = f"{rsi:.2f}",
+        prediction   = {
+            "highRange": f"{forecast['high']:.2f}",
+            "lowRange":  f"{forecast['low']:.2f}",
+            "trend":     "Bullish" if rsi > 50 else "Bearish",
+        },
+        analystNote  = note,
+        confidence   = forecast["conf"],
+        history      = history,
+        forecastDays = forecast["forecast_days"],
+        modelStats   = forecast.get("stats", {}),
+        metrics      = metrics,
+        news         = news,
+        trending     = trending,
+        indicators   = {"rsi_series": rsi_series},
+        lastUpdated  = now.isoformat(),
+    )
 
 
 if __name__ == "__main__":

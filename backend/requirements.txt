@@ -9,3 +9,4 @@ google-genai
 statsmodels
 prophet
 scikit-learn
+yfinance
