@@ -24,6 +24,60 @@ FORECAST_DAYS = 5
 # Technical Indicators
 # ---------------------------------------------------------------------------
 
+def calculate_macd(
+    prices: List[float],
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> Dict:
+    """Returns per-point MACD line, signal line, and histogram lists."""
+    series = pd.Series(prices)
+    ema_fast   = series.ewm(span=fast,   adjust=False).mean()
+    ema_slow   = series.ewm(span=slow,   adjust=False).mean()
+    macd_line  = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    histogram  = macd_line - signal_line
+    return {
+        "macd":   [round(v, 4) if not np.isnan(v) else None for v in macd_line],
+        "signal": [round(v, 4) if not np.isnan(v) else None for v in signal_line],
+        "hist":   [round(v, 4) if not np.isnan(v) else None for v in histogram],
+    }
+
+
+def calculate_bollinger_bands(
+    prices: List[float],
+    window: int = 20,
+    num_std: float = 2.0,
+) -> Dict:
+    """Returns per-point upper, middle, lower Bollinger Band lists."""
+    series = pd.Series(prices)
+    middle = series.rolling(window=window).mean()
+    std    = series.rolling(window=window).std()
+    upper  = middle + num_std * std
+    lower  = middle - num_std * std
+    def _clean(s):
+        return [round(v, 4) if not np.isnan(v) else None for v in s]
+    return {"upper": _clean(upper), "middle": _clean(middle), "lower": _clean(lower)}
+
+
+def calculate_sma_series(prices: List[float], period: int) -> List:
+    """Returns SMA array for given period, None where insufficient data."""
+    series = pd.Series(prices)
+    sma = series.rolling(window=period).mean()
+    return [round(v, 4) if not np.isnan(v) else None for v in sma]
+
+
+def calculate_rsi_series(prices: List[float], periods: int = 14) -> List:
+    """Returns full RSI series (same length as prices), None where insufficient data."""
+    series = pd.Series(prices)
+    delta  = series.diff()
+    gain   = delta.where(delta > 0, 0).ewm(com=periods - 1, min_periods=periods).mean()
+    loss   = (-delta.where(delta < 0, 0)).ewm(com=periods - 1, min_periods=periods).mean()
+    loss   = loss.replace(0, 1e-9)
+    rsi    = 100 - (100 / (1 + gain / loss))
+    return [round(float(v), 2) if not pd.isna(v) else None for v in rsi]
+
+
 def calculate_rsi(prices: List[float], periods: int = 14) -> float:
     if len(prices) < periods + 1:
         return 50.0
