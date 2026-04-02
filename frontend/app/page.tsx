@@ -232,7 +232,6 @@ function SidebarSkeleton() {
 }
 
 // Chart layout constants — must match ComposedChart margin + YAxis width
-const CHART_MARGIN   = { top: 5, right: 10, bottom: 5, left: 10 };
 const YAXIS_WIDTH    = 65;
 const CHART_HEIGHT   = 380;
 
