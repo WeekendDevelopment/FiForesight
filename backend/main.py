@@ -25,7 +25,10 @@ app = FastAPI(title="FiForesight Quantum Engine")
 async def unhandled_exception_handler(request: Request, exc: Exception):
     tb = traceback.format_exc()
     logger.error(f"Unhandled exception on {request.method} {request.url}:\n{tb}")
-    return JSONResponse(status_code=500, content={"detail": str(exc), "traceback": tb})
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal server error occurred."},
+    )
 
 # AI client (optional - graceful fallback if key missing)
 ai_client: Optional[genai.Client] = None
