@@ -5,11 +5,10 @@ import axios from 'axios';
 import {
   Box, Container, Typography, TextField, Button, Card, CardContent,
   Grid, Divider, CircularProgress, Alert, ThemeProvider, createTheme,
-  CssBaseline, Paper, Chip, Stack, MenuItem, Select, Avatar, Link, Tooltip as MuiTooltip,
+  CssBaseline, Paper, Chip, Stack, MenuItem, Select, Avatar, Link,
 } from '@mui/material';
 import {
-  TrendingUp, TrendingDown, Search, BrainCircuit, Activity,
-  Newspaper, Zap, BarChart2,
+  Search, BrainCircuit, Newspaper, Zap, BarChart2,
 } from 'lucide-react';
 import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -681,14 +680,8 @@ export default function QuantumDashboard() {
                 </Stack>
               </Stack>
             </Grid>
-          </Grid>
 
-          {/* Footer */}
-          <Box sx={{ mt: 8, textAlign: 'center', opacity: 0.3 }}>
-            <Typography variant="caption" sx={{ letterSpacing: 2 }}>
-              QUANTUM ENGINE · PROPHET + SARIMA + RANDOM FOREST · REFRESHED: {prediction ? new Date(prediction.lastUpdated).toLocaleTimeString() : 'N/A'}
-            </Typography>
-          </Box>
+          </Grid>
         </Container>
       </Box>
     </ThemeProvider>

@@ -346,5 +346,31 @@ class SerpService:
             return 0.0
 
     async def fetch_data(self, query: str) -> dict:
-        async with httpx.AsyncClient(timeout=25.0) as client:
- 
+        """
+        Query SerpAPI Google Finance for news and trending market data.
+        Returns a dict with keys:
+          - news_results : list of news articles
+          - markets      : dict of category → list of tickers
+        Falls back to empty structure if the API key is missing or the call fails.
+        """
+        if not Config.SERP_API_KEY:
+            logger.warning("SerpAPI key not set — skipping news/trending fetch")
+            return {"news_results": [], "markets": {}}
+
+        params = {
+            "engine":  "google_finance",
+            "q":       query,
+            "api_key": Config.SERP_API_KEY,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=25.0) as client:
+                resp = await client.get("https://serpapi.com/search", params=params)
+                resp.raise_for_status()
+                data = resp.json()
+                return {
+                    "news_results": data.get("news_results", []),
+                    "markets":      data.get("markets", {}),
+                }
+        except Exception as e:
+            logger.error(f"SerpAPI fetch_data error: {e}")
+            return {"news_results": [], "markets": {}}
