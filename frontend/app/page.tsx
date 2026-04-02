@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import axios from 'axios';
 import {
   Box, Container, Typography, TextField, Button, Card, CardContent,
@@ -231,56 +231,10 @@ function SidebarSkeleton() {
   );
 }
 
-// ── Candlestick overlay (Customized layer — has access to real axis scales) ───
-
-function CandlestickLayer({ xAxisMap, yAxisMap, data: rawData }: any) {
-  const yAxis = yAxisMap ? (Object.values(yAxisMap)[0] as any) : null;
-  const xAxis = xAxisMap ? (Object.values(xAxisMap)[0] as any) : null;
-  if (!yAxis?.scale || !xAxis?.scale || !rawData?.length) return null;
-
-  const yScale = yAxis.scale;
-  const xScale = xAxis.scale;
-
-  // Band scale (Bar chart) → xScale(date) is left edge + bandwidth()
-  // Point scale (Line/Area) → xScale(date) is the center, no bandwidth
-  const hasBand = typeof xScale.bandwidth === 'function';
-  const visibleDates = (rawData as any[])
-    .filter((d: any) => d.close != null)
-    .map((d: any) => d.date);
-  const bw = hasBand
-    ? xScale.bandwidth()
-    : visibleDates.length > 1
-      ? Math.abs(xScale(visibleDates[1]) - xScale(visibleDates[0])) * 0.7
-      : 4;
-
-  return (
-    <g>
-      {(rawData as any[]).map((d: any, i: number) => {
-        if (d.close == null || d.open == null || d.high == null || d.low == null) return null;
-        const xPos = xScale(d.date);
-        if (xPos == null || isNaN(xPos)) return null;
-
-        const isUp    = d.close >= d.open;
-        const color   = isUp ? '#00ffa3' : '#ff0055';
-        const cx      = hasBand ? xPos + bw / 2 : xPos;
-        const bodyTop = Math.min(yScale(d.open), yScale(d.close));
-        const bodyH   = Math.max(Math.abs(yScale(d.close) - yScale(d.open)), 1);
-
-        return (
-          <g key={i}>
-            <line x1={cx} y1={yScale(d.high)} x2={cx} y2={yScale(d.low)}
-              stroke={color} strokeWidth={1} opacity={0.8} />
-            <rect
-              x={cx - bw * 0.4} y={bodyTop}
-              width={Math.max(bw * 0.8, 2)} height={bodyH}
-              fill={isUp ? 'transparent' : color} stroke={color} strokeWidth={1.5}
-            />
-          </g>
-        );
-      })}
-    </g>
-  );
-}
+// Chart layout constants — must match ComposedChart margin + YAxis width
+const CHART_MARGIN   = { top: 5, right: 10, bottom: 5, left: 10 };
+const YAXIS_WIDTH    = 65;
+const CHART_HEIGHT   = 380;
 
 // ── Main dashboard ────────────────────────────────────────────────────────────
 
@@ -293,6 +247,16 @@ export default function QuantumDashboard() {
   const [error,       setError]       = useState<string | null>(null);
   const [indicators,  setIndicators]  = useState<IndicatorKey[]>(['bb', 'sma']);
   const [chartMode,   setChartMode]   = useState<'line' | 'candle'>('line');
+  const [chartWidth,  setChartWidth]  = useState(0);
+  const chartBoxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = chartBoxRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => setChartWidth(entries[0].contentRect.width));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const theme = useMemo(() => buildTheme(themeMode), [themeMode]);
   const isDark = themeMode === 'dark';
@@ -627,7 +591,7 @@ export default function QuantumDashboard() {
                       </Box>
 
                       {/* ── Main price + overlay chart ──────────────── */}
-                      <Box sx={{ height: 380 }}>
+                      <Box ref={chartBoxRef} sx={{ height: 380, position: 'relative' }}>
                         <ResponsiveContainer width="100%" height="100%">
                           <ComposedChart data={chartMode === 'line' ? chartData : candleChartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
                             <defs>
@@ -694,11 +658,9 @@ export default function QuantumDashboard() {
                               <Line type="monotone" dataKey="sma200" stroke="#a855f7" strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
                             </>}
 
-                            {/* Historical price — line or candlestick */}
-                            {chartMode === 'line' ? (
+                            {/* Historical price — line mode only; candles rendered via SVG overlay */}
+                            {chartMode === 'line' && (
                               <Area type="monotone" dataKey="price" stroke={trendColor} strokeWidth={2.5} fill="url(#histGrad)" dot={false} connectNulls={false} activeDot={{ r: 4, strokeWidth: 0 }} isAnimationActive={false} />
-                            ) : (
-                              <Customized component={CandlestickLayer} />
                             )}
 
                             {/* Forecast bands */}
@@ -708,6 +670,42 @@ export default function QuantumDashboard() {
                               dot={{ r: 4, fill: '#bc13fe', strokeWidth: 0 }} connectNulls={false} isAnimationActive={false} />
                           </ComposedChart>
                         </ResponsiveContainer>
+
+                        {/* ── Candlestick SVG overlay ──────────────────
+                            Drawn over the Recharts canvas using known
+                            chart margins + chartDomain for positioning. */}
+                        {chartMode === 'candle' && chartWidth > 0 && chartDomain[0] !== 'auto' && (() => {
+                          const [dMin, dMax] = chartDomain as [number, number];
+                          const pRange   = dMax - dMin;
+                          const plotL    = YAXIS_WIDTH + CHART_MARGIN.left;
+                          const plotW    = chartWidth - plotL - CHART_MARGIN.right;
+                          const plotT    = CHART_MARGIN.top;
+                          const plotH    = CHART_HEIGHT - CHART_MARGIN.top - CHART_MARGIN.bottom;
+                          const total    = candleChartData.length;
+                          const slotW    = plotW / total;
+                          const toY = (p: number) => plotT + (1 - (p - dMin) / pRange) * plotH;
+                          const toX = (i: number) => plotL + (i + 0.5) * slotW;
+                          return (
+                            <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: CHART_HEIGHT, pointerEvents: 'none' }}>
+                              {candleChartData.map((d: any, i: number) => {
+                                if (d.close == null || d.open == null) return null;
+                                const isUp  = d.close >= d.open;
+                                const color = isUp ? '#00ffa3' : '#ff0055';
+                                const cx    = toX(i);
+                                const hw    = Math.max(slotW * 0.38, 1);
+                                const yO    = toY(d.open);
+                                const yC    = toY(d.close);
+                                return (
+                                  <g key={i}>
+                                    <line x1={cx} y1={toY(d.high)} x2={cx} y2={toY(d.low)} stroke={color} strokeWidth={1} opacity={0.75} />
+                                    <rect x={cx - hw} y={Math.min(yO, yC)} width={hw * 2} height={Math.max(Math.abs(yC - yO), 1)}
+                                      fill={isUp ? 'transparent' : color} stroke={color} strokeWidth={1.2} />
+                                  </g>
+                                );
+                              })}
+                            </svg>
+                          );
+                        })()}
                       </Box>
 
                       {/* ── MACD sub-chart ──────────────────────────── */}
