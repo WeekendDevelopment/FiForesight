@@ -11,11 +11,20 @@ updates:
       - "/frontend"
     schedule:
       interval: "daily"
+    groups:
+      pnpm-dependencies:
+        dependency-type: "production"
+      pnpm-dev-dependencies:
+        dependency-type: "development"
   - package-ecosystem: "pip"
     directories: 
       - "/backend"
     schedule:
       interval: "daily"
+    groups:
+      pip-dependencies:
+        patterns:
+          - "*"
   - package-ecosystem: "github-actions"
     directories: 
       - "/.github"
