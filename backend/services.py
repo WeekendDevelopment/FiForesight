@@ -125,8 +125,8 @@ class InfluxService:
             for t in tables:
                 for r in t.records:
                     return (r.get_value() or 0) > 0
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"InfluxDB has_recent_data error: {e}")
         return False
 
 
