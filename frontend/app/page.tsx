@@ -14,7 +14,7 @@ import {
 import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   LineChart, Line, ReferenceLine, ComposedChart, Area, Legend,
-  BarChart, Bar, Cell, Customized,
+  BarChart, Bar, Cell,
 } from 'recharts';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -247,16 +247,7 @@ export default function QuantumDashboard() {
   const [error,       setError]       = useState<string | null>(null);
   const [indicators,  setIndicators]  = useState<IndicatorKey[]>(['bb', 'sma']);
   const [chartMode,   setChartMode]   = useState<'line' | 'candle'>('line');
-  const [chartWidth,  setChartWidth]  = useState(0);
   const chartBoxRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = chartBoxRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(entries => setChartWidth(entries[0].contentRect.width));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
 
   const theme = useMemo(() => buildTheme(themeMode), [themeMode]);
   const isDark = themeMode === 'dark';
@@ -674,13 +665,16 @@ export default function QuantumDashboard() {
                         {/* ── Candlestick SVG overlay ──────────────────
                             Drawn over the Recharts canvas using known
                             chart margins + chartDomain for positioning. */}
-                        {chartMode === 'candle' && chartWidth > 0 && chartDomain[0] !== 'auto' && (() => {
+                        {chartMode === 'candle' && chartDomain[0] !== 'auto' && (() => {
+                          // Read exact plot area from Recharts-generated clipPath rect
+                          const clipRect = chartBoxRef.current?.querySelector('clipPath rect');
+                          const plotL = clipRect ? +clipRect.getAttribute('x')! : 0;
+                          const plotT = clipRect ? +clipRect.getAttribute('y')! : 0;
+                          const plotW = clipRect ? +clipRect.getAttribute('width')! : 0;
+                          const plotH = clipRect ? +clipRect.getAttribute('height')! : 0;
+                          if (!plotW || !plotH) return null;
                           const [dMin, dMax] = chartDomain as [number, number];
                           const pRange   = dMax - dMin;
-                          const plotL    = YAXIS_WIDTH + CHART_MARGIN.left;
-                          const plotW    = chartWidth - plotL - CHART_MARGIN.right;
-                          const plotT    = CHART_MARGIN.top;
-                          const plotH    = CHART_HEIGHT - CHART_MARGIN.top - CHART_MARGIN.bottom;
                           const total    = candleChartData.length;
                           const slotW    = plotW / total;
                           const toY = (p: number) => plotT + (1 - (p - dMin) / pRange) * plotH;
