@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  LineChart, Line, ReferenceLine, ComposedChart, Area, Legend,
+  LineChart, Line, ReferenceLine, ComposedChart, Area, Legend, Bar,
 } from 'recharts';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -140,6 +140,36 @@ function ConfidenceBadge({ pct }: { pct: number }) {
   );
 }
 
+// ── Candlestick bar shape ─────────────────────────────────────────────────────
+
+function CandlestickShape(props: any) {
+  const { x, width, payload, yAxis } = props;
+  if (!payload || payload.close == null || !yAxis?.scale) return null;
+
+  const { open, high, low, close } = payload;
+  const scale    = yAxis.scale;
+  const isUp     = close >= open;
+  const color    = isUp ? '#00ffa3' : '#ff0055';
+  const cx       = x + width / 2;
+  const bx       = x + width * 0.1;
+  const bw       = Math.max(width * 0.8, 2);
+  const yHigh    = scale(high);
+  const yLow     = scale(low);
+  const yOpen    = scale(open);
+  const yClose   = scale(close);
+  const bodyTop  = Math.min(yOpen, yClose);
+  const bodyH    = Math.max(Math.abs(yClose - yOpen), 1);
+
+  return (
+    <g>
+      <line x1={cx} y1={yHigh} x2={cx} y2={yLow} stroke={color} strokeWidth={1} opacity={0.8} />
+      <rect x={bx} y={bodyTop} width={bw} height={bodyH}
+        fill={isUp ? 'transparent' : color} stroke={color} strokeWidth={1.5}
+      />
+    </g>
+  );
+}
+
 // ── Main dashboard ────────────────────────────────────────────────────────────
 
 export default function QuantumDashboard() {
@@ -148,6 +178,7 @@ export default function QuantumDashboard() {
   const [prediction, setPrediction] = useState<PredictionData | null>(null);
   const [loading,    setLoading]    = useState(false);
   const [error,      setError]      = useState<string | null>(null);
+  const [chartMode,  setChartMode]  = useState<'line' | 'candle'>('line');
 
   const handlePredict = async () => {
     setLoading(true);
@@ -193,18 +224,46 @@ export default function QuantumDashboard() {
     return [...hist, ...fore];
   }, [prediction]);
 
+  // ── Candlestick data: OHLC history + forecast lines ───────────────────────
+  const candleChartData = useMemo(() => {
+    if (!prediction) return [];
+    const hist = prediction.history.map(h => ({
+      date:      h.date,
+      open:      h.open  ?? h.price,
+      high:      h.high  ?? h.price,
+      low:       h.low   ?? h.price,
+      close:     h.price,
+      predicted: undefined as number | undefined,
+      foreHigh:  undefined as number | undefined,
+      foreLow:   undefined as number | undefined,
+    }));
+    const fore = (prediction.forecastDays || []).map(f => ({
+      date:      f.date,
+      open:      undefined as number | undefined,
+      high:      undefined as number | undefined,
+      low:       undefined as number | undefined,
+      close:     undefined as number | undefined,
+      predicted: f.predicted,
+      foreHigh:  f.high,
+      foreLow:   f.low,
+    }));
+    return [...hist, ...fore];
+  }, [prediction]);
+
   // ── Y-axis domain covering both history and forecast ──────────────────────
   const chartDomain = useMemo((): [number, number] | ['auto', 'auto'] => {
-    if (!chartData.length) return ['auto', 'auto'];
-    const allVals = chartData.flatMap(d => [
-      d.price, d.predicted, d.foreHigh, d.foreLow,
-    ].filter((v): v is number => v !== undefined));
+    const data = chartMode === 'line' ? chartData : candleChartData;
+    if (!data.length) return ['auto', 'auto'];
+    const allVals = data.flatMap(d => [
+      (d as any).price, (d as any).predicted, (d as any).foreHigh, (d as any).foreLow,
+      (d as any).open,  (d as any).high,       (d as any).low,      (d as any).close,
+    ].filter((v): v is number => v !== undefined && v !== null));
     if (!allVals.length) return ['auto', 'auto'];
     const min = Math.min(...allVals);
     const max = Math.max(...allVals);
     const pad = (max - min) * 0.12 || max * 0.02;
     return [Math.floor(min - pad), Math.ceil(max + pad)];
-  }, [chartData]);
+  }, [chartData, candleChartData, chartMode]);
 
   // ── Historical performance stats ───────────────────────────────────────────
   const chartStats = useMemo(() => {
@@ -344,10 +403,34 @@ export default function QuantumDashboard() {
                         </Stack>
                       )}
 
+                      {/* ── Chart mode toggle ──────────────────────────── */}
+                      <Box sx={{ display: 'flex', mb: 2 }}>
+                        {(['line', 'candle'] as const).map((mode, idx) => (
+                          <Box
+                            key={mode}
+                            onClick={() => setChartMode(mode)}
+                            sx={{
+                              px: 1.5, py: 0.4, cursor: 'pointer',
+                              fontSize: '0.65rem', fontWeight: 800, letterSpacing: 1,
+                              border: '1px solid rgba(0,242,255,0.2)',
+                              borderRadius: idx === 0 ? '6px 0 0 6px' : '0 6px 6px 0',
+                              ml: idx === 1 ? '-1px' : 0,
+                              background: chartMode === mode ? 'rgba(0,242,255,0.12)' : 'transparent',
+                              color: chartMode === mode ? '#00f2ff' : 'rgba(255,255,255,0.3)',
+                              transition: 'all 0.15s',
+                              '&:hover': { color: '#00f2ff', background: 'rgba(0,242,255,0.07)' },
+                              userSelect: 'none',
+                            }}
+                          >
+                            {mode === 'line' ? 'LINE' : 'CANDLE'}
+                          </Box>
+                        ))}
+                      </Box>
+
                       {/* ── Combined history + forecast chart ──────────── */}
                       <Box sx={{ height: 420 }}>
                         <ResponsiveContainer width="100%" height="100%">
-                          <ComposedChart data={chartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+                          <ComposedChart data={chartMode === 'line' ? chartData : candleChartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
                             <defs>
                               <linearGradient id="histGrad" x1="0" y1="0" x2="0" y2="1">
                                 <stop offset="5%"  stopColor={trendColor} stopOpacity={0.35} />
@@ -383,6 +466,7 @@ export default function QuantumDashboard() {
                               formatter={(value: any, name: string) => {
                                 const v = Number(value);
                                 if (name === 'price')     return [`$${v.toFixed(2)}`, 'Close'];
+                                if (name === 'close')     return [`$${v.toFixed(2)}`, 'Close'];
                                 if (name === 'predicted') return [`$${v.toFixed(2)}`, 'Forecast'];
                                 if (name === 'foreHigh')  return [`$${v.toFixed(2)}`, 'Forecast High'];
                                 if (name === 'foreLow')   return [`$${v.toFixed(2)}`, 'Forecast Low'];
@@ -395,7 +479,8 @@ export default function QuantumDashboard() {
                               wrapperStyle={{ fontSize: '0.7rem', opacity: 0.6, paddingTop: 8 }}
                               formatter={(value) => {
                                 const map: Record<string, string> = {
-                                  price: 'Historical Close', predicted: '5-Day Forecast',
+                                  price: 'Historical Close', close: 'Historical Close (OHLC)',
+                                  predicted: '5-Day Forecast',
                                   foreHigh: 'Forecast High', foreLow: 'Forecast Low',
                                 };
                                 return map[value] ?? value;
@@ -422,18 +507,26 @@ export default function QuantumDashboard() {
                               />
                             )}
 
-                            {/* Historical price area */}
-                            <Area
-                              type="monotone"
-                              dataKey="price"
-                              stroke={trendColor}
-                              strokeWidth={2.5}
-                              fill="url(#histGrad)"
-                              dot={false}
-                              connectNulls={false}
-                              activeDot={{ r: 4, strokeWidth: 0, fill: trendColor }}
-                              isAnimationActive={false}
-                            />
+                            {/* Historical price — line or candlestick */}
+                            {chartMode === 'line' ? (
+                              <Area
+                                type="monotone"
+                                dataKey="price"
+                                stroke={trendColor}
+                                strokeWidth={2.5}
+                                fill="url(#histGrad)"
+                                dot={false}
+                                connectNulls={false}
+                                activeDot={{ r: 4, strokeWidth: 0, fill: trendColor }}
+                                isAnimationActive={false}
+                              />
+                            ) : (
+                              <Bar
+                                dataKey="close"
+                                shape={<CandlestickShape />}
+                                isAnimationActive={false}
+                              />
+                            )}
 
                             {/* Forecast high band (upper boundary) */}
                             <Area

@@ -16,7 +16,7 @@
 | 5 | MACD panel (line + histogram) | Medium | ✅ Done |
 | 6 | Bollinger Bands overlay on chart | Medium | ✅ Done |
 | 7 | SMA 50 & SMA 200 overlay lines | Medium | ✅ Done |
-| 8 | Candlestick chart mode | Medium | ⬜ Pending |
+| 8 | Candlestick chart mode | Medium | ✅ Done |
 | 9 | Multi-ticker comparison overlay | Medium | ⬜ Pending |
 | 10 | Price alert system (toast/email) | High | ⬜ Pending |
 
