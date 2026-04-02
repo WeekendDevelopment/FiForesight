@@ -1,5 +1,5 @@
 # Build stage for Frontend
-FROM node:20-slim AS frontend-builder
+FROM node:25-slim AS frontend-builder
 WORKDIR /app/frontend
 
 # Install pnpm
@@ -11,7 +11,7 @@ COPY frontend/ ./
 RUN pnpm build
 
 # Final production image
-FROM node:20-slim
+FROM node:25-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
