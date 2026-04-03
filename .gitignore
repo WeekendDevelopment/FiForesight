@@ -9,3 +9,15 @@ node_modules
 backend/.venv
 **/*.lock.hcl
 **/.terraform
+
+# Claude Code local config
+.claude/settings.local.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS
+.DS_Store
+Thumbs.db

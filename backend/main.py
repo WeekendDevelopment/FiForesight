@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from google import genai
 
 from config import Config, SanitizeHttpxFilter
-from models import calculate_rsi, calculate_rsi_series, run_ensemble_forecast, calculate_macd, calculate_bollinger_bands, calculate_sma_series
+from models import calculate_rsi, calculate_rsi_series, run_ensemble_forecast, calculate_macd, calculate_bollinger_bands, calculate_sma_series, calculate_support_resistance
 from services import DataCleaner, InfluxService, SerpService, YFinanceService
 
 # ---------------------------------------------------------------------------
@@ -46,6 +46,10 @@ influx_svc = InfluxService()
 serp_svc   = SerpService()
 yf_svc     = YFinanceService()
 
+
+# ---------------------------------------------------------------------------
+# Response schema
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Response schema
@@ -92,6 +96,36 @@ def _fmt_pct(val) -> str:
     except Exception:
         return "N/A"
 
+
+async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict) -> str:
+    """Return a Gemini analyst note, falling back to the model's own note."""
+    if not ai_client:
+        return forecast["note"]
+    recent    = closes[-20:]
+    price_str = "\n".join(f"  {i+1}. {p:.2f}" for i, p in enumerate(recent))
+    prompt = (
+        f"You are a quantitative analyst. Symbol: {symbol}\n"
+        f"RSI: {rsi:.1f}\n"
+        f"Recent 20-day closes:\n{price_str}\n"
+        f"5-day ensemble forecast: high=${forecast['high']:.2f}, low=${forecast['low']:.2f}\n"
+        f"Write a concise 2-sentence analyst note with the outlook and key risk. "
+        f"Plain text only, no markdown."
+    )
+    try:
+        response = await asyncio.to_thread(
+            ai_client.models.generate_content,
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        return response.text.strip()
+    except Exception as e:
+        logger.warning(f"Gemini note failed: {e}")
+        return forecast["note"]
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
 async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict) -> str:
     """Return a Gemini analyst note, falling back to the model's own note."""
@@ -299,6 +333,9 @@ async def predict(payload: dict = Body(...)):
     rsi_full   = calculate_rsi_series(closes)
     rsi_series = rsi_full[slice_start:]
 
+    # Support & resistance from last 3 months of closes
+    sr_levels  = calculate_support_resistance(closes)
+
     return PredictionResponse(
         symbol       = symbol,
         currentPrice = f"{live_price:.2f}",
@@ -316,7 +353,11 @@ async def predict(payload: dict = Body(...)):
         metrics      = metrics,
         news         = news,
         trending     = trending,
-        indicators   = {"rsi_series": rsi_series},
+        indicators   = {
+            "rsi_series":  rsi_series,
+            "support":     sr_levels["support"],
+            "resistance":  sr_levels["resistance"],
+        },
         lastUpdated  = now.isoformat(),
     )
 
