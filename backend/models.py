@@ -91,6 +91,75 @@ def calculate_rsi(prices: List[float], periods: int = 14) -> float:
     return float(rsi.iloc[-1]) if not np.isnan(rsi.iloc[-1]) else 50.0
 
 
+def calculate_support_resistance(
+    prices: List[float],
+    lookback: int = 65,       # ~3 months of trading days
+    window: int = 5,           # local extremum neighbourhood
+    cluster_tol_pct: float = 1.5,   # merge levels within 1.5% of each other
+    max_levels: int = 3,       # return up to 3 support and 3 resistance lines
+) -> Dict:
+    """
+    Identifies key support and resistance levels from recent price history.
+
+    Strategy:
+      1. Take the last `lookback` closing prices.
+      2. Find all local minima (potential support) and maxima (potential resistance)
+         using a rolling window comparison — a point is a local min/max if it is
+         the lowest/highest value in a 2*window+1 neighbourhood.
+      3. Cluster nearby levels: if two extrema are within `cluster_tol_pct`% of
+         each other, keep only the average (weighted by frequency).
+      4. Return the `max_levels` strongest levels of each type, sorted by proximity
+         to the most recent close.
+
+    Returns a dict with keys "support" and "resistance", each a list of floats.
+    """
+    if len(prices) < window * 2 + 2:
+        return {"support": [], "resistance": []}
+
+    data = prices[-lookback:]
+    arr  = np.array(data)
+
+    supports: List[float] = []
+    resistances: List[float] = []
+
+    for i in range(window, len(arr) - window):
+        neighbourhood = arr[i - window: i + window + 1]
+        if arr[i] == neighbourhood.min():
+            supports.append(float(arr[i]))
+        if arr[i] == neighbourhood.max():
+            resistances.append(float(arr[i]))
+
+    def _cluster(levels: List[float]) -> List[float]:
+        if not levels:
+            return []
+        levels = sorted(levels)
+        clusters: List[List[float]] = [[levels[0]]]
+        for val in levels[1:]:
+            centre = np.mean(clusters[-1])
+            if abs(val - centre) / centre * 100 <= cluster_tol_pct:
+                clusters[-1].append(val)
+            else:
+                clusters.append([val])
+        return [round(float(np.mean(c)), 2) for c in clusters]
+
+    support_levels    = _cluster(supports)
+    resistance_levels = _cluster(resistances)
+
+    last_price = arr[-1]
+
+    # Keep levels below/above current price; sort by closeness to current price
+    support_levels    = sorted(
+        [l for l in support_levels    if l < last_price],
+        key=lambda x: abs(x - last_price),
+    )[:max_levels]
+    resistance_levels = sorted(
+        [l for l in resistance_levels if l > last_price],
+        key=lambda x: abs(x - last_price),
+    )[:max_levels]
+
+    return {"support": support_levels, "resistance": resistance_levels}
+
+
 def calculate_model_stats(prices: List[float]) -> Dict:
     """
     Returns a dict of descriptive statistics used both in the response

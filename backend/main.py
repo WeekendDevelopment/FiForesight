@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from google import genai
 
 from config import Config, SanitizeHttpxFilter
-from models import calculate_rsi, calculate_rsi_series, run_ensemble_forecast, calculate_macd, calculate_bollinger_bands, calculate_sma_series
+from models import calculate_rsi, calculate_rsi_series, run_ensemble_forecast, calculate_macd, calculate_bollinger_bands, calculate_sma_series, calculate_support_resistance
 from services import DataCleaner, InfluxService, SerpService, YFinanceService
 
 # ---------------------------------------------------------------------------
@@ -299,6 +299,9 @@ async def predict(payload: dict = Body(...)):
     rsi_full   = calculate_rsi_series(closes)
     rsi_series = rsi_full[slice_start:]
 
+    # Support & resistance from last 3 months of closes
+    sr_levels  = calculate_support_resistance(closes)
+
     return PredictionResponse(
         symbol       = symbol,
         currentPrice = f"{live_price:.2f}",
@@ -316,7 +319,11 @@ async def predict(payload: dict = Body(...)):
         metrics      = metrics,
         news         = news,
         trending     = trending,
-        indicators   = {"rsi_series": rsi_series},
+        indicators   = {
+            "rsi_series":  rsi_series,
+            "support":     sr_levels["support"],
+            "resistance":  sr_levels["resistance"],
+        },
         lastUpdated  = now.isoformat(),
     )
 

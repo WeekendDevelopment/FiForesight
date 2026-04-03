@@ -76,7 +76,7 @@ interface PredictionData {
   };
   news:      { title: string; link: string; source: string; thumbnail: string; date: string }[];
   trending:  { symbol: string; name?: string; price: string | number; change: string; category?: string }[];
-  indicators?: { rsi_series?: number[] };
+  indicators?: { rsi_series?: number[]; support?: number[]; resistance?: number[] };
   lastUpdated: string;
 }
 
@@ -633,6 +633,20 @@ export default function QuantumDashboard() {
                                 label={{ value: `SMA20 $${prediction.modelStats.sma_20}`, fill: '#f59e0b', fontSize: 9, position: 'insideTopRight' }}
                               />
                             )}
+
+                            {/* Support levels — green dashed horizontal lines */}
+                            {(prediction.indicators?.support ?? []).map((lvl, i) => (
+                              <ReferenceLine key={`sup-${i}`} y={lvl} stroke="#00ffa3" strokeDasharray="6 3" strokeOpacity={0.7} strokeWidth={1.2}
+                                label={{ value: `S $${lvl}`, fill: '#00ffa3', fontSize: 9, position: 'insideBottomRight' }}
+                              />
+                            ))}
+
+                            {/* Resistance levels — red dashed horizontal lines */}
+                            {(prediction.indicators?.resistance ?? []).map((lvl, i) => (
+                              <ReferenceLine key={`res-${i}`} y={lvl} stroke="#ff0055" strokeDasharray="6 3" strokeOpacity={0.7} strokeWidth={1.2}
+                                label={{ value: `R $${lvl}`, fill: '#ff0055', fontSize: 9, position: 'insideTopRight' }}
+                              />
+                            ))}
 
                             {/* Bollinger Bands */}
                             {indicators.includes('bb') && <>
