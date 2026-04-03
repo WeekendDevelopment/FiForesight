@@ -1,4 +1,6 @@
 name: Docker logs
+permissions:
+  contents: read
 on:
   workflow_dispatch:
     inputs:
