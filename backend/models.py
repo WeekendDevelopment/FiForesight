@@ -149,11 +149,11 @@ def calculate_support_resistance(
 
     # Keep levels below/above current price; sort by closeness to current price
     support_levels    = sorted(
-        [l for l in support_levels    if l < last_price],
+        [support_level for support_level in support_levels    if support_level < last_price],
         key=lambda x: abs(x - last_price),
     )[:max_levels]
     resistance_levels = sorted(
-        [l for l in resistance_levels if l > last_price],
+        [resistance_level for resistance_level in resistance_levels if resistance_level > last_price],
         key=lambda x: abs(x - last_price),
     )[:max_levels]
 
