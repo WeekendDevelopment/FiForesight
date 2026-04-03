@@ -1,4 +1,4 @@
-# backend/models.py
+# backend/models.py  # noqa
 import logging
 import pandas as pd
 import numpy as np
@@ -24,6 +24,60 @@ FORECAST_DAYS = 5
 # Technical Indicators
 # ---------------------------------------------------------------------------
 
+def calculate_macd(
+    prices: List[float],
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> Dict:
+    """Returns per-point MACD line, signal line, and histogram lists."""
+    series = pd.Series(prices)
+    ema_fast   = series.ewm(span=fast,   adjust=False).mean()
+    ema_slow   = series.ewm(span=slow,   adjust=False).mean()
+    macd_line  = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    histogram  = macd_line - signal_line
+    return {
+        "macd":   [round(v, 4) if not np.isnan(v) else None for v in macd_line],
+        "signal": [round(v, 4) if not np.isnan(v) else None for v in signal_line],
+        "hist":   [round(v, 4) if not np.isnan(v) else None for v in histogram],
+    }
+
+
+def calculate_bollinger_bands(
+    prices: List[float],
+    window: int = 20,
+    num_std: float = 2.0,
+) -> Dict:
+    """Returns per-point upper, middle, lower Bollinger Band lists."""
+    series = pd.Series(prices)
+    middle = series.rolling(window=window).mean()
+    std    = series.rolling(window=window).std()
+    upper  = middle + num_std * std
+    lower  = middle - num_std * std
+    def _clean(s):
+        return [round(v, 4) if not np.isnan(v) else None for v in s]
+    return {"upper": _clean(upper), "middle": _clean(middle), "lower": _clean(lower)}
+
+
+def calculate_sma_series(prices: List[float], period: int) -> List:
+    """Returns SMA array for given period, None where insufficient data."""
+    series = pd.Series(prices)
+    sma = series.rolling(window=period).mean()
+    return [round(v, 4) if not np.isnan(v) else None for v in sma]
+
+
+def calculate_rsi_series(prices: List[float], periods: int = 14) -> List:
+    """Returns full RSI series (same length as prices), None where insufficient data."""
+    series = pd.Series(prices)
+    delta  = series.diff()
+    gain   = delta.where(delta > 0, 0).ewm(com=periods - 1, min_periods=periods).mean()
+    loss   = (-delta.where(delta < 0, 0)).ewm(com=periods - 1, min_periods=periods).mean()
+    loss   = loss.replace(0, 1e-9)
+    rsi    = 100 - (100 / (1 + gain / loss))
+    return [round(float(v), 2) if not pd.isna(v) else None for v in rsi]
+
+
 def calculate_rsi(prices: List[float], periods: int = 14) -> float:
     if len(prices) < periods + 1:
         return 50.0
@@ -35,6 +89,75 @@ def calculate_rsi(prices: List[float], periods: int = 14) -> float:
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
     return float(rsi.iloc[-1]) if not np.isnan(rsi.iloc[-1]) else 50.0
+
+
+def calculate_support_resistance(
+    prices: List[float],
+    lookback: int = 65,       # ~3 months of trading days
+    window: int = 5,           # local extremum neighbourhood
+    cluster_tol_pct: float = 1.5,   # merge levels within 1.5% of each other
+    max_levels: int = 3,       # return up to 3 support and 3 resistance lines
+) -> Dict:
+    """
+    Identifies key support and resistance levels from recent price history.
+
+    Strategy:
+      1. Take the last `lookback` closing prices.
+      2. Find all local minima (potential support) and maxima (potential resistance)
+         using a rolling window comparison — a point is a local min/max if it is
+         the lowest/highest value in a 2*window+1 neighbourhood.
+      3. Cluster nearby levels: if two extrema are within `cluster_tol_pct`% of
+         each other, keep only the average (weighted by frequency).
+      4. Return the `max_levels` strongest levels of each type, sorted by proximity
+         to the most recent close.
+
+    Returns a dict with keys "support" and "resistance", each a list of floats.
+    """
+    if len(prices) < window * 2 + 2:
+        return {"support": [], "resistance": []}
+
+    data = prices[-lookback:]
+    arr  = np.array(data)
+
+    supports: List[float] = []
+    resistances: List[float] = []
+
+    for i in range(window, len(arr) - window):
+        neighbourhood = arr[i - window: i + window + 1]
+        if arr[i] == neighbourhood.min():
+            supports.append(float(arr[i]))
+        if arr[i] == neighbourhood.max():
+            resistances.append(float(arr[i]))
+
+    def _cluster(levels: List[float]) -> List[float]:
+        if not levels:
+            return []
+        levels = sorted(levels)
+        clusters: List[List[float]] = [[levels[0]]]
+        for val in levels[1:]:
+            centre = np.mean(clusters[-1])
+            if abs(val - centre) / centre * 100 <= cluster_tol_pct:
+                clusters[-1].append(val)
+            else:
+                clusters.append([val])
+        return [round(float(np.mean(c)), 2) for c in clusters]
+
+    support_levels    = _cluster(supports)
+    resistance_levels = _cluster(resistances)
+
+    last_price = arr[-1]
+
+    # Keep levels below/above current price; sort by closeness to current price
+    support_levels    = sorted(
+        [l for l in support_levels    if l < last_price],
+        key=lambda x: abs(x - last_price),
+    )[:max_levels]
+    resistance_levels = sorted(
+        [l for l in resistance_levels if l > last_price],
+        key=lambda x: abs(x - last_price),
+    )[:max_levels]
+
+    return {"support": support_levels, "resistance": resistance_levels}
 
 
 def calculate_model_stats(prices: List[float]) -> Dict:

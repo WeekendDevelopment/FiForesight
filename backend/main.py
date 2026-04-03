@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from google import genai
 
 from config import Config
-from models import calculate_rsi, run_ensemble_forecast
+from models import calculate_rsi, calculate_rsi_series, run_ensemble_forecast, calculate_macd, calculate_bollinger_bands, calculate_sma_series, calculate_support_resistance
 from services import DataCleaner, InfluxService, SerpService, YFinanceService
 
 # ---------------------------------------------------------------------------
@@ -25,7 +25,10 @@ app = FastAPI(title="FiForesight Quantum Engine")
 async def unhandled_exception_handler(request: Request, exc: Exception):
     tb = traceback.format_exc()
     logger.error(f"Unhandled exception on {request.method} {request.url}:\n{tb}")
-    return JSONResponse(status_code=500, content={"detail": str(exc), "traceback": tb})
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An internal server error occurred."},
+    )
 
 # AI client (optional - graceful fallback if key missing)
 ai_client: Optional[genai.Client] = None
@@ -58,6 +61,7 @@ class PredictionResponse(BaseModel):
     metrics:      dict
     news:         List[dict]
     trending:     List[dict]
+    indicators:   dict
     lastUpdated:  str
 
 
@@ -226,6 +230,12 @@ async def predict(payload: dict = Body(...)):
     rsi      = calculate_rsi(closes)
     forecast = run_ensemble_forecast(closes, symbol)
 
+    # 4b. Technical indicators (full series, sliced to chart window later)
+    macd_data = calculate_macd(closes)
+    bb_data   = calculate_bollinger_bands(closes)
+    sma50     = calculate_sma_series(closes, 50)
+    sma200    = calculate_sma_series(closes, 200)
+
     # 5. AI analyst note
     note = await _ai_note(symbol, closes, rsi, forecast)
 
@@ -260,18 +270,34 @@ async def predict(payload: dict = Body(...)):
     # 7. Background price snapshot
     asyncio.create_task(asyncio.to_thread(influx_svc.write_price, symbol, live_price))
 
-    # 8. Chart history (last 90 trading days)
-    history = [
-        {
-            "date":   p["_time"].strftime("%m/%d") if hasattr(p["_time"], "strftime") else str(p["_time"])[:10],
-            "price":  round(float(p["close"]),                 2),
-            "open":   round(float(p.get("open",  p["close"])), 2),
-            "high":   round(float(p.get("high",  p["close"])), 2),
-            "low":    round(float(p.get("low",   p["close"])), 2),
-            "volume": round(float(p.get("volume", 0)),         0),
-        }
-        for p in historical_prices[-90:]
-    ]
+    # 8. Chart history (last 90 trading days) — attach indicator slices
+    total      = len(historical_prices)
+    slice_start = max(0, total - 90)
+    history = []
+    for idx, p in enumerate(historical_prices[slice_start:], start=slice_start):
+        history.append({
+            "date":       p["_time"].strftime("%m/%d") if hasattr(p["_time"], "strftime") else str(p["_time"])[:10],
+            "price":      round(float(p["close"]),                 2),
+            "open":       round(float(p.get("open",  p["close"])), 2),
+            "high":       round(float(p.get("high",  p["close"])), 2),
+            "low":        round(float(p.get("low",   p["close"])), 2),
+            "volume":     round(float(p.get("volume", 0)),         0),
+            "bb_upper":   bb_data["upper"][idx],
+            "bb_middle":  bb_data["middle"][idx],
+            "bb_lower":   bb_data["lower"][idx],
+            "sma50":      sma50[idx],
+            "sma200":     sma200[idx],
+            "macd":       macd_data["macd"][idx],
+            "macd_signal":macd_data["signal"][idx],
+            "macd_hist":  macd_data["hist"][idx],
+        })
+
+    # RSI series (vectorised — last 90 points)
+    rsi_full   = calculate_rsi_series(closes)
+    rsi_series = rsi_full[slice_start:]
+
+    # Support & resistance from last 3 months of closes
+    sr_levels  = calculate_support_resistance(closes)
 
     return PredictionResponse(
         symbol       = symbol,
@@ -290,6 +316,11 @@ async def predict(payload: dict = Body(...)):
         metrics      = metrics,
         news         = news,
         trending     = trending,
+        indicators   = {
+            "rsi_series":  rsi_series,
+            "support":     sr_levels["support"],
+            "resistance":  sr_levels["resistance"],
+        },
         lastUpdated  = now.isoformat(),
     )
 
