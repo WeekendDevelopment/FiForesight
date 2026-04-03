@@ -1,4 +1,4 @@
-# backend/models.py
+# backend/models.py  # noqa
 import logging
 import pandas as pd
 import numpy as np
