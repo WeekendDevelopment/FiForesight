@@ -6,10 +6,11 @@ import {
   Box, Container, Typography, TextField, Button, Card, CardContent,
   Grid, Divider, CircularProgress, Alert, ThemeProvider, createTheme,
   CssBaseline, Paper, Chip, Stack, MenuItem, Select, Avatar, Link,
-  Skeleton, ToggleButton, ToggleButtonGroup, IconButton, Autocomplete,
+  Skeleton, ToggleButton, ToggleButtonGroup, IconButton, Autocomplete, Collapse,
 } from '@mui/material';
 import {
   Search, BrainCircuit, Newspaper, Zap, BarChart2, Sun, Moon,
+  Info, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -245,6 +246,7 @@ export default function QuantumDashboard() {
   const [error,       setError]       = useState<string | null>(null);
   const [indicators,  setIndicators]  = useState<IndicatorKey[]>(['bb', 'sma']);
   const [chartMode,   setChartMode]   = useState<'line' | 'candle'>('line');
+  const [legendOpen,  setLegendOpen]  = useState(false);
   const chartBoxRef = useRef<HTMLDivElement>(null);
 
   const theme = useMemo(() => buildTheme(themeMode), [themeMode]);
@@ -401,6 +403,110 @@ export default function QuantumDashboard() {
 
   const trendColor   = chartStats?.color ?? (isDark ? '#00f2ff' : '#0077ff');
   const primaryColor = isDark ? '#00f2ff' : '#0077ff';
+
+  /** Live signal texts derived from the most-recent data point */
+  const indicatorSignals = useMemo(() => {
+    if (!prediction) return {} as Record<string, { text: string; color: string } | null>;
+    const last    = prediction.history[prediction.history.length - 1];
+    const price   = last?.price ?? 0;
+    const rsiVal  = parseFloat(prediction.rsi);
+    const supports    = prediction.indicators?.support    ?? [];
+    const resistances = prediction.indicators?.resistance ?? [];
+    const sma20       = prediction.modelStats?.sma_20;
+    const vsPct       = prediction.modelStats?.price_vs_sma20_pct;
+
+    const green = isDark ? '#00ffa3' : '#16a34a';
+    const red   = isDark ? '#ff0055' : '#dc2626';
+    const amber = '#f59e0b';
+    const blue  = isDark ? '#00f2ff' : '#0077ff';
+
+    const bbUpper  = last?.bb_upper  ?? null;
+    const bbLower  = last?.bb_lower  ?? null;
+    const bbMiddle = last?.bb_middle ?? null;
+
+    const sma50  = last?.sma50  ?? null;
+    const sma200 = last?.sma200 ?? null;
+
+    // Find MACD cross on last 2 points
+    const h = prediction.history;
+    const macdPrev  = h.length >= 2 ? (h[h.length - 2]?.macd   ?? null) : null;
+    const sigPrev   = h.length >= 2 ? (h[h.length - 2]?.macd_signal ?? null) : null;
+    const macdNow   = last?.macd        ?? null;
+    const sigNow    = last?.macd_signal ?? null;
+    const histNow   = last?.macd_hist   ?? null;
+
+    // Volume vs 20-period avg
+    const vols = prediction.history.slice(-21, -1).map(p => p.volume ?? 0);
+    const avgVol  = vols.length ? vols.reduce((a, b) => a + b, 0) / vols.length : 0;
+    const lastVol = last?.volume ?? 0;
+
+    return {
+      bb: (() => {
+        if (!bbUpper || !bbLower) return null;
+        if (price >= bbUpper * 0.99) return { text: 'Price touching upper band → overbought risk', color: red };
+        if (price <= bbLower * 1.01) return { text: 'Price touching lower band → oversold opportunity', color: green };
+        if (bbMiddle && price > bbMiddle) return { text: 'Price above midline → mild bullish bias', color: green };
+        return { text: 'Price below midline → mild bearish bias', color: amber };
+      })(),
+      sma: (() => {
+        if (!sma50 || !sma200) return null;
+        const cross = sma50 > sma200;
+        const priceAbove50  = price > sma50;
+        const priceAbove200 = price > sma200;
+        if (cross && priceAbove50) return { text: `Golden cross active (SMA50 > SMA200). Price above both → strong uptrend`, color: green };
+        if (!cross && !priceAbove200) return { text: `Death cross active (SMA50 < SMA200). Price below both → strong downtrend`, color: red };
+        if (priceAbove50 && !cross) return { text: `Price above SMA50 but SMA50 < SMA200 → short-term recovery in downtrend`, color: amber };
+        return { text: `Price below SMA50 but above SMA200 → near-term weakness in uptrend`, color: amber };
+      })(),
+      macd: (() => {
+        if (macdNow == null || sigNow == null) return null;
+        const justCrossedUp   = macdPrev != null && sigPrev != null && macdPrev < sigPrev && macdNow >= sigNow;
+        const justCrossedDown = macdPrev != null && sigPrev != null && macdPrev > sigPrev && macdNow <= sigNow;
+        if (justCrossedUp)   return { text: 'Bullish crossover — MACD just crossed above signal line', color: green };
+        if (justCrossedDown) return { text: 'Bearish crossover — MACD just crossed below signal line', color: red };
+        if (macdNow > sigNow && (histNow ?? 0) > 0) return { text: 'MACD above signal & histogram growing → bullish momentum', color: green };
+        if (macdNow < sigNow && (histNow ?? 0) < 0) return { text: 'MACD below signal & histogram shrinking → bearish momentum', color: red };
+        return { text: 'Consolidating — no strong directional signal', color: amber };
+      })(),
+      rsi: (() => {
+        if (isNaN(rsiVal)) return null;
+        if (rsiVal >= 80) return { text: `RSI ${rsiVal.toFixed(1)} — severely overbought, reversal likely`, color: red };
+        if (rsiVal >= 70) return { text: `RSI ${rsiVal.toFixed(1)} — overbought zone, caution on longs`, color: red };
+        if (rsiVal <= 20) return { text: `RSI ${rsiVal.toFixed(1)} — severely oversold, potential bounce`, color: green };
+        if (rsiVal <= 30) return { text: `RSI ${rsiVal.toFixed(1)} — oversold zone, watch for reversal up`, color: green };
+        if (rsiVal >= 50) return { text: `RSI ${rsiVal.toFixed(1)} — above midline, bullish bias`, color: green };
+        return { text: `RSI ${rsiVal.toFixed(1)} — below midline, bearish bias`, color: amber };
+      })(),
+      volume: (() => {
+        if (!avgVol || !lastVol) return null;
+        const ratio = lastVol / avgVol;
+        const priceTrend = chartStats?.isUp;
+        if (ratio >= 1.5 && priceTrend)  return { text: `Vol ${ratio.toFixed(1)}× above avg on up-day → strong bullish conviction`, color: green };
+        if (ratio >= 1.5 && !priceTrend) return { text: `Vol ${ratio.toFixed(1)}× above avg on down-day → strong bearish distribution`, color: red };
+        if (ratio < 0.6) return { text: `Vol ${ratio.toFixed(1)}× below avg → low conviction move, may reverse`, color: amber };
+        return { text: `Volume near average — normal trading conditions`, color: blue };
+      })(),
+      sma20: (() => {
+        if (!sma20 || vsPct == null) return null;
+        if (vsPct > 5)  return { text: `Price ${vsPct.toFixed(1)}% above SMA20 → extended, watch for pullback`, color: amber };
+        if (vsPct > 0)  return { text: `Price ${vsPct.toFixed(1)}% above SMA20 → near-term uptrend`, color: green };
+        if (vsPct < -5) return { text: `Price ${Math.abs(vsPct).toFixed(1)}% below SMA20 → extended weakness`, color: red };
+        return { text: `Price ${Math.abs(vsPct).toFixed(1)}% below SMA20 → near-term downtrend`, color: red };
+      })(),
+      support: (() => {
+        if (!supports.length) return null;
+        const nearest = supports.reduce((a, b) => Math.abs(a - price) < Math.abs(b - price) ? a : b);
+        const distPct = ((price - nearest) / nearest * 100).toFixed(1);
+        return { text: `Nearest support $${nearest} — price is ${distPct}% above. Bounce zone if tested.`, color: green };
+      })(),
+      resistance: (() => {
+        if (!resistances.length) return null;
+        const nearest = resistances.reduce((a, b) => Math.abs(a - price) < Math.abs(b - price) ? a : b);
+        const distPct = ((nearest - price) / price * 100).toFixed(1);
+        return { text: `Nearest resistance $${nearest} — ${distPct}% above current price. Sell pressure zone.`, color: red };
+      })(),
+    };
+  }, [prediction, isDark, chartStats]);
 
   const bgGradient = isDark
     ? 'radial-gradient(circle at 50% -20%, #1a237e 0%, #050a10 60%)'
@@ -577,6 +683,120 @@ export default function QuantumDashboard() {
                             {mode === 'line' ? 'LINE' : 'CANDLE'}
                           </Box>
                         ))}
+                      </Box>
+
+                      {/* ── Indicators Guide (collapsible) ──────────── */}
+                      <Box sx={{ mb: 1 }}>
+                        <Button
+                          size="small"
+                          variant="text"
+                          onClick={() => setLegendOpen(o => !o)}
+                          startIcon={<Info size={12} />}
+                          endIcon={legendOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                          sx={{
+                            fontSize: '0.6rem', letterSpacing: 1.5, textTransform: 'uppercase',
+                            py: 0.3, px: 1, opacity: 0.45, transition: 'opacity 0.2s',
+                            '&:hover': { opacity: 1 },
+                          }}
+                        >
+                          Indicators Guide
+                        </Button>
+                        <Collapse in={legendOpen}>
+                          <Box sx={{
+                            mt: 1, p: 2, borderRadius: 2,
+                            background: isDark ? 'rgba(255,255,255,0.015)' : 'rgba(0,0,0,0.025)',
+                            border: `1px solid ${primaryColor}1a`,
+                          }}>
+                            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 1.5 }}>
+                              {([
+                                {
+                                  key: 'bb', always: false,
+                                  label: 'Bollinger Bands',
+                                  color: primaryColor,
+                                  description: 'Volatility envelope: upper/lower = ±2 std devs from the 20-day MA. Bands widen during high volatility, narrow during consolidation.',
+                                },
+                                {
+                                  key: 'sma', always: false,
+                                  label: 'SMA 50 / SMA 200',
+                                  color: '#f97316',
+                                  color2: '#a855f7',
+                                  description: 'Trend-following averages. SMA50 (orange) tracks medium-term, SMA200 (purple) tracks long-term. Golden cross (50 > 200) = bullish; death cross (50 < 200) = bearish.',
+                                },
+                                {
+                                  key: 'macd', always: false,
+                                  label: 'MACD (12, 26, 9)',
+                                  color: isDark ? '#00f2ff' : '#0077ff',
+                                  description: 'Momentum oscillator. Line crossing above signal = bullish; below = bearish. Histogram bars show momentum strength — growing bars = accelerating trend.',
+                                },
+                                {
+                                  key: 'rsi', always: false,
+                                  label: 'RSI (14)',
+                                  color: '#bc13fe',
+                                  description: 'Relative Strength Index: 0–100 oscillator. Above 70 = overbought (potential reversal down). Below 30 = oversold (potential reversal up). 50 is the neutral midline.',
+                                },
+                                {
+                                  key: 'volume', always: false,
+                                  label: 'Volume',
+                                  color: primaryColor,
+                                  description: 'Number of shares traded. High volume on an up-move = strong buying conviction. High volume on a down-move = heavy selling distribution. Low volume = weak signal.',
+                                },
+                                {
+                                  key: 'sma20', always: true,
+                                  label: 'SMA 20 (ref)',
+                                  color: '#f59e0b',
+                                  description: 'Short-term 20-day moving average shown as a horizontal reference line at today\'s value. Price above = near-term uptrend; below = near-term weakness.',
+                                },
+                                {
+                                  key: 'support', always: true,
+                                  label: 'Support Levels (S)',
+                                  color: isDark ? '#00ffa3' : '#16a34a',
+                                  description: 'Price floors identified from the last 3 months using local price minima. Historically where buyers stepped in — expect potential bounce or consolidation when revisited.',
+                                },
+                                {
+                                  key: 'resistance', always: true,
+                                  label: 'Resistance Levels (R)',
+                                  color: isDark ? '#ff0055' : '#dc2626',
+                                  description: 'Price ceilings identified from the last 3 months using local price maxima. Historically where sellers emerged — expect potential rejection or slowdown on approach.',
+                                },
+                              ] as { key: string; always: boolean; label: string; color: string; color2?: string; description: string }[])
+                                .filter(item => item.always || indicators.includes(item.key as IndicatorKey))
+                                .map(item => {
+                                  const sig = indicatorSignals[item.key];
+                                  return (
+                                    <Box key={item.key} sx={{
+                                      p: 1.5, borderRadius: 1.5,
+                                      background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)',
+                                      border: `1px solid ${item.color}22`,
+                                      display: 'flex', flexDirection: 'column', gap: 0.5,
+                                    }}>
+                                      {/* Header row */}
+                                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                                        <Box sx={{ width: 10, height: 10, borderRadius: '50%', background: item.color, flexShrink: 0 }} />
+                                        {item.color2 && <Box sx={{ width: 10, height: 10, borderRadius: '50%', background: item.color2, flexShrink: 0 }} />}
+                                        <Typography sx={{ fontSize: '0.7rem', fontWeight: 800, letterSpacing: 0.5 }}>{item.label}</Typography>
+                                      </Box>
+                                      {/* Description */}
+                                      <Typography sx={{ fontSize: '0.6rem', opacity: 0.55, lineHeight: 1.5 }}>
+                                        {item.description}
+                                      </Typography>
+                                      {/* Live signal */}
+                                      {sig && (
+                                        <Box sx={{
+                                          mt: 0.5, px: 1, py: 0.4, borderRadius: 1,
+                                          background: `${sig.color}14`,
+                                          border: `1px solid ${sig.color}33`,
+                                        }}>
+                                          <Typography sx={{ fontSize: '0.58rem', color: sig.color, fontWeight: 700, lineHeight: 1.4 }}>
+                                            ▶ {sig.text}
+                                          </Typography>
+                                        </Box>
+                                      )}
+                                    </Box>
+                                  );
+                                })}
+                            </Box>
+                          </Box>
+                        </Collapse>
                       </Box>
 
                       {/* ── Main price + overlay chart ──────────────── */}

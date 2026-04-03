@@ -172,6 +172,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Deploy to Oracle
+        if: github.actor != 'dependabot[bot]'
         uses: ./.github/actions/deploy-oracle
         env:
           VM_IP_ADDRESS: ${{ needs.terraform-preview.outputs.vm_host }}
@@ -190,6 +191,7 @@ jobs:
           SERP_API_KEY: ${{ secrets.SERP_API_KEY }}
 
       - name: Create Comment
+        if: github.actor != 'dependabot[bot]'
         run: |
           gh pr comment $PR_NUM --body "Deployed to preview env 🚀. Preview URL: http://fiforesight-preview.duckdns.org"
         env:
