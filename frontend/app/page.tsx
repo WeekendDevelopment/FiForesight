@@ -81,6 +81,8 @@ interface PredictionData {
   lastUpdated: string;
 }
 
+type ChartEntry = Record<string, string | number | undefined>;
+
 // ── Theme factory ─────────────────────────────────────────────────────────────
 
 function buildTheme(mode: 'dark' | 'light') {
@@ -221,7 +223,7 @@ function SidebarSkeleton() {
         <Skeleton variant="text" width="50%" height={20} />
         <Grid container spacing={2} sx={{ mt: 1 }}>
           {[1,2,3,4,5,6,7,8].map(i => (
-            <Grid item xs={6} key={i}>
+            <Grid size={6} key={i}>
               <Skeleton variant="text" width="80%" height={14} />
               <Skeleton variant="text" width="60%" height={22} />
             </Grid>
@@ -591,7 +593,7 @@ export default function QuantumDashboard() {
           <Grid container spacing={3}>
 
             {/* ── Left column ──────────────────────────────────────────── */}
-            <Grid item xs={12} lg={8}>
+            <Grid size={{ xs: 12, lg: 8 }}>
               {loading ? (
                 <Stack spacing={3}>
                   <ChartSkeleton />
@@ -802,7 +804,7 @@ export default function QuantumDashboard() {
                       {/* ── Main price + overlay chart ──────────────── */}
                       <Box ref={chartBoxRef} sx={{ height: 380, position: 'relative' }}>
                         <ResponsiveContainer width="100%" height="100%">
-                          <ComposedChart data={chartMode === 'line' ? chartData : candleChartData} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
+                          <ComposedChart data={(chartMode === 'line' ? chartData : candleChartData) as ChartEntry[]} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
                             <defs>
                               <linearGradient id="histGrad" x1="0" y1="0" x2="0" y2="1">
                                 <stop offset="5%"  stopColor={trendColor} stopOpacity={0.35} />
@@ -1044,7 +1046,7 @@ export default function QuantumDashboard() {
                       </Typography>
                       <Grid container spacing={2}>
                         {prediction.news.map((item, i) => (
-                          <Grid item xs={12} key={i}>
+                          <Grid size={12} key={i}>
                             <Card sx={{ background: 'transparent' }}>
                               <CardContent sx={{ display: 'flex', gap: 2, p: '16px !important' }}>
                                 {item.thumbnail && <Avatar src={item.thumbnail} variant="rounded" sx={{ width: 60, height: 60 }} />}
@@ -1071,7 +1073,7 @@ export default function QuantumDashboard() {
             </Grid>
 
             {/* ── Right column ──────────────────────────────────────── */}
-            <Grid item xs={12} lg={4}>
+            <Grid size={{ xs: 12, lg: 4 }}>
               {loading ? <SidebarSkeleton /> : (
                 <Stack spacing={3}>
                   {prediction && (
@@ -1130,7 +1132,7 @@ export default function QuantumDashboard() {
                               },
                               { label: 'DIVIDEND', val: prediction.metrics.yield },
                             ].map(item => (
-                              <Grid item xs={6} key={item.label}>
+                              <Grid size={6} key={item.label}>
                                 <Typography variant="caption" sx={{ opacity: 0.4 }}>{item.label}</Typography>
                                 <Typography variant="body2" sx={{ fontWeight: 700, color: item.color ?? 'inherit' }}>
                                   {item.val}
