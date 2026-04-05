@@ -54,11 +54,17 @@ class InfluxService:
         df must have a DatetimeIndex (UTC) and columns:
         Open, High, Low, Close, Volume
         """
+        from datetime import timedelta
+        # InfluxDB Cloud has a 30-day retention policy — skip older rows to avoid 400 errors
+        cutoff = datetime.now(timezone.utc) - timedelta(days=29)
+
         points = []
         for ts, row in df.iterrows():
             # Ensure timezone-aware
             if ts.tzinfo is None:
                 ts = ts.tz_localize("UTC")
+            if ts < cutoff:
+                continue  # outside retention window — don't attempt to write
             p = (
                 Point("market_data")
                 .tag("symbol", symbol)
@@ -100,11 +106,11 @@ class InfluxService:
             for row in rows:
                 out.append({
                     "_time":  row.get("_time"),
-                    "open":   float(row.get("open",  row.get("close", 0))),
-                    "high":   float(row.get("high",  row.get("close", 0))),
-                    "low":    float(row.get("low",   row.get("close", 0))),
-                    "close":  float(row.get("close", 0)),
-                    "volume": float(row.get("volume", 0)),
+                    "open":   float(row.get("open",  row.get("close", 0)) or 0),
+                    "high":   float(row.get("high",  row.get("close", 0)) or 0),
+                    "low":    float(row.get("low",   row.get("close", 0)) or 0),
+                    "close":  float(row.get("close", 0) or 0),
+                    "volume": float(row.get("volume", 0) or 0),
                 })
             return out
         except Exception as e:
