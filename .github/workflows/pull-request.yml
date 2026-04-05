@@ -67,6 +67,11 @@ jobs:
         shell: bash
         run: pnpm install --lockfile
 
+      - name: Run Linting
+        working-directory: frontend
+        shell: bash
+        run: pnpm run lint
+
       - name: Run Build
         working-directory: frontend
         shell: bash
