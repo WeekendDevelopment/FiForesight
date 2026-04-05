@@ -6,6 +6,11 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Dict
 
 # Quantitative Models
+# Suppress Prophet's "Importing plotly failed" warning — we don't use Prophet's
+# built-in plot() / plot_components() methods; all charting is done by Recharts.
+logging.getLogger("prophet").setLevel(logging.ERROR)
+logging.getLogger("prophet.plot").setLevel(logging.ERROR)
+
 MODELS_AVAILABLE = False
 try:
     from statsmodels.tsa.statespace.sarimax import SARIMAX
@@ -197,8 +202,15 @@ def calculate_model_stats(prices: List[float]) -> Dict:
 # ---------------------------------------------------------------------------
 
 def _prophet_forecast(prices: List[float], steps: int) -> np.ndarray:
+    # pd.date_range(freq='B') returns periods-1 items when `end` falls on a weekend/holiday
+    # because the non-business end date is adjusted inward before counting back.
+    # Snap to the previous business day to guarantee len(ds) == len(prices).
+    end = pd.Timestamp.now().normalize()
+    if end.day_of_week >= 5:  # Saturday=5, Sunday=6
+        end = end - pd.tseries.offsets.BDay(1)
+
     df = pd.DataFrame({
-        "ds": pd.date_range(end=datetime.now(timezone.utc), periods=len(prices), freq="B"),
+        "ds": pd.date_range(end=end, periods=len(prices), freq="B"),
         "y":  prices,
     })
     m = Prophet(
@@ -217,8 +229,10 @@ def _sarima_forecast(prices: List[float], steps: int) -> np.ndarray:
     model = SARIMAX(prices, order=(1, 1, 1), enforce_stationarity=False, enforce_invertibility=False)
     fit = model.fit(disp=False)
     fc = fit.get_forecast(steps=steps)
-    mean = fc.predicted_mean.values
-    ci   = fc.conf_int(alpha=0.20).values   # 80% CI → columns [lower, upper]
+    mean_raw = fc.predicted_mean
+    mean = mean_raw.values if hasattr(mean_raw, "values") else np.asarray(mean_raw)
+    ci_raw = fc.conf_int(alpha=0.20)
+    ci = ci_raw.values if hasattr(ci_raw, "values") else np.asarray(ci_raw)
     return np.column_stack([mean, ci[:, 0], ci[:, 1]])       # shape (steps, 3)
 
 

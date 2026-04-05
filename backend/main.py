@@ -123,35 +123,6 @@ async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict)
         return forecast["note"]
 
 
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-
-async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict) -> str:
-    """Return a Gemini analyst note, falling back to the model's own note."""
-    if not ai_client:
-        return forecast["note"]
-    recent    = closes[-20:]
-    price_str = "\n".join(f"  {i+1}. {p:.2f}" for i, p in enumerate(recent))
-    prompt = (
-        f"You are a quantitative analyst. Symbol: {symbol}\n"
-        f"RSI: {rsi:.1f}\n"
-        f"Recent 20-day closes:\n{price_str}\n"
-        f"5-day ensemble forecast: high=${forecast['high']:.2f}, low=${forecast['low']:.2f}\n"
-        f"Write a concise 2-sentence analyst note with the outlook and key risk. "
-        f"Plain text only, no markdown."
-    )
-    try:
-        response = await asyncio.to_thread(
-            ai_client.models.generate_content,
-            model="gemini-2.5-flash",
-            contents=prompt,
-        )
-        return response.text.strip()
-    except Exception as e:
-        logger.warning(f"Gemini note failed: {e}")
-        return forecast["note"]
-
 
 # ---------------------------------------------------------------------------
 # Endpoints
@@ -222,8 +193,9 @@ async def predict(payload: dict = Body(...)):
 
     historical_prices: list = await asyncio.to_thread(influx_svc.query_history, symbol)
 
-    # Fallback: use yfinance directly if InfluxDB is unavailable
-    if not historical_prices:
+    # Fallback: use yfinance directly if InfluxDB is unavailable or has insufficient history
+    # for ML models (InfluxDB Cloud 30-day retention only stores ~21 trading days)
+    if not historical_prices or len(historical_prices) < 60:
         df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "2y")
         if not df.empty:
             try:
