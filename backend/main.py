@@ -13,7 +13,7 @@ from google import genai
 
 from config import Config, SanitizeHttpxFilter
 from models import calculate_rsi, calculate_rsi_series, run_ensemble_forecast, calculate_macd, calculate_bollinger_bands, calculate_sma_series, calculate_support_resistance
-from services import DataCleaner, InfluxService, SerpService, YFinanceService
+from services import DataCleaner, GroqService, InfluxService, ANALYST_PERSONAS, NOTE_PROMPT_SUFFIX, SerpService, YFinanceService
 
 # ---------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -45,6 +45,7 @@ if Config.GOOGLE_GENAI_API_KEY:
 influx_svc = InfluxService()
 serp_svc   = SerpService()
 yf_svc     = YFinanceService()
+groq_svc  = GroqService()
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +71,7 @@ class PredictionResponse(BaseModel):
     trending:     List[dict]
     indicators:   dict
     lastUpdated:  str
+    juryAnalysts: List[dict]
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +124,172 @@ async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict)
         logger.warning(f"Gemini note failed: {e}")
         return forecast["note"]
 
+
+
+async def _run_analyst_jury(
+    symbol: str,
+    closes: List[float],
+    rsi: float,
+    forecast: dict,
+    stats: dict,
+    info: dict,
+    macd_data: dict,
+    bb_data: dict,
+    sma50: List,
+    sma200: List,
+    historical_prices: list,
+    sr_levels: dict,
+    *,
+    news_task=None,
+) -> List[dict]:
+    """
+    Run all 3 analyst personas concurrently.
+    - LLAMA-70B  → Groq llama-3.3-70b-versatile  (growth lens)
+    - LLAMA-8B   → Groq llama-3.1-8b-instant      (risk lens)
+    - GEMINI-FLASH→ Gemini 2.5 Flash               (quant lens, uses existing ai_client)
+    """
+    # Helper: last non-None value from a series
+    def _last(series):
+        for v in reversed(series):
+            if v is not None:
+                return v
+        return None
+
+    price     = closes[-1]
+    recent    = closes[-10:]
+    price_str = ", ".join(f"{p:.2f}" for p in recent)
+
+    # Current indicator snapshots
+    cur_macd   = _last(macd_data["macd"])
+    cur_signal = _last(macd_data["signal"])
+    cur_hist   = _last(macd_data["hist"])
+    cur_upper  = _last(bb_data["upper"])
+    cur_middle = _last(bb_data["middle"])
+    cur_lower  = _last(bb_data["lower"])
+    cur_sma50  = _last(sma50)
+    cur_sma200 = _last(sma200)
+
+    # Derived labels
+    macd_label = ("Bullish" if cur_macd > cur_signal else "Bearish") if cur_macd is not None and cur_signal is not None else "N/A"
+    bb_pos_str = (f"{(price - cur_lower) / (cur_upper - cur_lower) * 100:.1f}% of band"
+                  if cur_upper and cur_lower and cur_upper != cur_lower else "N/A")
+    sma50_pct  = (f"{(price - cur_sma50)  / cur_sma50  * 100:+.2f}%" if cur_sma50  else "N/A")
+    sma200_pct = (f"{(price - cur_sma200) / cur_sma200 * 100:+.2f}%" if cur_sma200 else "N/A")
+
+    # Volume trend
+    vols    = [float(p.get("volume", 0)) for p in historical_prices if p.get("volume", 0) > 0]
+    vol10   = sum(vols[-10:]) / len(vols[-10:]) if len(vols) >= 10 else None
+    vol30   = sum(vols[-30:]) / len(vols[-30:]) if len(vols) >= 30 else None
+    vol_line = (f"10d avg {vol10/1e6:.2f}M vs 30d avg {vol30/1e6:.2f}M "
+                f"({(vol10-vol30)/vol30*100:+.1f}%)" if vol10 and vol30 else "N/A")
+
+    # Support / resistance (top 2 each)
+    sup_str = " / ".join(f"${v:.2f}" for v in sr_levels.get("support",    [])[:2]) or "N/A"
+    res_str = " / ".join(f"${v:.2f}" for v in sr_levels.get("resistance", [])[:2]) or "N/A"
+
+    # Fundamentals
+    pe_str  = str(info.get("pe_ratio", "N/A"))
+    cap_str = _fmt_market_cap(info.get("market_cap"))
+    rng_str = info.get("range_52w", "N/A")
+    sec_str = info.get("sector", "N/A")
+    div_str = (_fmt_pct(info.get("dividend_yield"))
+               if info.get("dividend_yield") not in (None, "N/A") else "N/A")
+
+    # News headlines — opportunistic: include if serp_task already finished
+    news_block = ""
+    if news_task is not None and news_task.done() and not news_task.cancelled():
+        try:
+            headlines = news_task.result().get("news_results", [])[:4]
+            if headlines:
+                lines = []
+                for h in headlines:
+                    src = h.get("source", {}).get("name", "") if isinstance(h.get("source"), dict) else str(h.get("source", ""))
+                    lines.append(f"  - {h.get('title', '')} [{src}]")
+                news_block = "Recent news:\n" + "\n".join(lines) + "\n"
+        except Exception:
+            pass
+
+    # MACD / BB / SMA lines (None-guarded)
+    macd_line = (f"MACD: {cur_macd:.4f} | Signal: {cur_signal:.4f} | Hist: {cur_hist:.4f} [{macd_label}]"
+                 if cur_macd is not None and cur_signal is not None and cur_hist is not None else "MACD: N/A")
+    bb_line   = (f"BB: Upper={cur_upper:.2f} Mid={cur_middle:.2f} Lower={cur_lower:.2f} | Price: {bb_pos_str}"
+                 if cur_upper is not None else "BB: N/A")
+    sma_line  = (f"SMA50: {cur_sma50:.2f} ({sma50_pct}) | SMA200: {cur_sma200:.2f} ({sma200_pct})"
+                 if cur_sma50 or cur_sma200 else "SMA50/200: N/A")
+
+    ctx = (
+        f"Symbol: {symbol} | Price: ${price:.2f} | RSI: {rsi:.1f} | Sector: {sec_str}\n"
+        f"Fundamentals: PE={pe_str} | Cap={cap_str} | Div={div_str} | 52w={rng_str}\n"
+        f"10-day closes: {price_str}\n"
+        f"Forecast 5d → High: ${forecast['high']:.2f}, Low: ${forecast['low']:.2f} "
+        f"[Confidence: {forecast.get('conf', 'low')}]\n"
+        f"Volatility: {stats.get('ann_volatility_pct', 0):.1f}% ann | "
+        f"Slope: {stats.get('trend_slope', 0):.4f}/day | "
+        f"vs SMA20: {stats.get('price_vs_sma20_pct', 0):+.2f}%\n"
+        f"{macd_line}\n"
+        f"{bb_line}\n"
+        f"{sma_line}\n"
+        f"Volume: {vol_line}\n"
+        f"Support: {sup_str} | Resistance: {res_str}\n"
+        f"{news_block}"
+    )
+
+    async def _gemini_verdict(persona: dict) -> dict:
+        """Run the Gemini-Flash analyst using the existing ai_client."""
+        fallback = {
+            "id": persona["id"], "avatar": persona["avatar"],
+            "title": persona["title"], "model_label": persona["model_label"],
+            "color": persona["color"], "rating": "Hold",
+            "note": "Gemini analysis unavailable.", "confidence": 25, "model": "error",
+        }
+        if not ai_client:
+            return fallback
+        prompt = f"System: {persona['system']}\n\nUser: {ctx}{NOTE_PROMPT_SUFFIX}"
+        try:
+            resp = await asyncio.to_thread(
+                ai_client.models.generate_content,
+                model="gemini-2.5-flash",
+                contents=prompt,
+            )
+            raw    = resp.text.strip()
+            parsed = GroqService._parse_analyst_response(raw)
+            return {
+                "id":          persona["id"],
+                "avatar":      persona["avatar"],
+                "title":       persona["title"],
+                "model_label": persona["model_label"],
+                "color":       persona["color"],
+                "rating":      parsed.get("rating",     "Hold"),
+                "note":        parsed.get("note",       ""),
+                "confidence":  parsed.get("confidence", 50),
+                "model":       "gemini-2.5-flash",
+            }
+        except Exception as e:
+            logger.warning(f"Gemini jury analyst failed: {e}")
+            return fallback
+
+    # Build task list — Groq personas use groq_svc, Gemini persona uses ai_client
+    tasks = []
+    for persona in ANALYST_PERSONAS:
+        if persona["provider"] == "groq":
+            tasks.append(groq_svc.get_analyst_verdict(persona, ctx))
+        else:
+            tasks.append(_gemini_verdict(persona))
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    verdicts = []
+    for r, persona in zip(results, ANALYST_PERSONAS):
+        if isinstance(r, Exception):
+            logger.warning(f"Analyst {persona['id']} failed: {r}")
+            verdicts.append({
+                "id": persona["id"], "avatar": persona["avatar"],
+                "title": persona["title"], "model_label": persona["model_label"],
+                "color": persona["color"], "rating": "Hold",
+                "note": "Analysis unavailable.", "confidence": 30, "model": "error",
+            })
+        else:
+            verdicts.append(r)
+    return verdicts
 
 
 # ---------------------------------------------------------------------------
@@ -245,14 +413,30 @@ async def predict(payload: dict = Body(...)):
     sma50     = calculate_sma_series(closes, 50)
     sma200    = calculate_sma_series(closes, 200)
 
-    # 5. AI analyst note
-    note = await _ai_note(symbol, closes, rsi, forecast)
+    # Fire news fetch concurrently — started now, awaited after jury
+    serp_task = asyncio.create_task(serp_svc.fetch_data(symbol))
+
+    # Support/resistance moved up so jury can reference key levels
+    sr_levels = calculate_support_resistance(closes)
+
+    # 5. AI analyst note + jury
+    note, jury = await asyncio.gather(
+        _ai_note(symbol, closes, rsi, forecast),
+        _run_analyst_jury(
+            symbol, closes, rsi, forecast,
+            forecast.get("stats", {}),
+            info, macd_data, bb_data, sma50, sma200,
+            historical_prices, sr_levels,
+            news_task=serp_task,
+        ),
+    )
 
     # 6. News + trending via SerpAPI
     news: list     = []
     trending: list = []
+    serp_data = {"news_results": [], "markets": {}}
     try:
-        serp_data = await serp_svc.fetch_data(symbol)
+        serp_data = await serp_task
         news = [
             {
                 "title":     n.get("title",  ""),
@@ -305,9 +489,6 @@ async def predict(payload: dict = Body(...)):
     rsi_full   = calculate_rsi_series(closes)
     rsi_series = rsi_full[slice_start:]
 
-    # Support & resistance from last 3 months of closes
-    sr_levels  = calculate_support_resistance(closes)
-
     return PredictionResponse(
         symbol       = symbol,
         currentPrice = f"{live_price:.2f}",
@@ -331,6 +512,7 @@ async def predict(payload: dict = Body(...)):
             "resistance":  sr_levels["resistance"],
         },
         lastUpdated  = now.isoformat(),
+        juryAnalysts = jury,
     )
 
 

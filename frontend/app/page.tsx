@@ -10,7 +10,7 @@ import {
 } from '@mui/material';
 import {
   Search, BrainCircuit, Newspaper, Zap, BarChart2, Sun, Moon,
-  Info, ChevronDown, ChevronUp,
+  Info, ChevronDown, ChevronUp, Scale,
 } from 'lucide-react';
 import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -52,6 +52,18 @@ interface HistoryPoint {
   macd_hist?:   number | null;
 }
 
+interface AnalystJuror {
+  id:          string;
+  avatar:      string;
+  title:       string;
+  model_label: string;
+  color:       string;
+  rating:      string;
+  note:        string;
+  confidence:  number;
+  model:       string;
+}
+
 interface PredictionData {
   symbol:       string;
   currentPrice: string;
@@ -78,6 +90,7 @@ interface PredictionData {
   news:      { title: string; link: string; source: string; thumbnail: string; date: string }[];
   trending:  { symbol: string; name?: string; price: string | number; change: string; category?: string }[];
   indicators?: { rsi_series?: number[]; support?: number[]; resistance?: number[] };
+  juryAnalysts?: AnalystJuror[];
   lastUpdated: string;
 }
 
@@ -180,6 +193,110 @@ function ConfidenceBadge({ pct }: { pct: number }) {
       <Box sx={{ width: 6, height: 6, borderRadius: '50%', background: color }} />
       <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, color }}>{pct}%</Typography>
     </Box>
+  );
+}
+
+// ── Rating colour map ─────────────────────────────────────────────────────────
+
+const RATING_COLORS: Record<string, { bg: string; text: string }> = {
+  'Strong Buy':  { bg: '#00ffa322', text: '#00ffa3' },
+  'Buy':         { bg: '#00f2ff22', text: '#00f2ff' },
+  'Hold':        { bg: '#f59e0b22', text: '#f59e0b' },
+  'Sell':        { bg: '#f9731622', text: '#f97316' },
+  'Strong Sell': { bg: '#ff005522', text: '#ff0055' },
+};
+
+// ── Analyst Jury Panel ────────────────────────────────────────────────────────
+
+function AnalystJuryPanel({ analysts }: { analysts: AnalystJuror[] }) {
+  const ratingColor = (r: string) => RATING_COLORS[r] ?? { bg: '#64748b22', text: '#94a3b8' };
+
+  return (
+    <Stack spacing={2}>
+      <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
+        <Scale size={20} /> Analyst Jury
+      </Typography>
+      <Grid container spacing={2}>
+        {analysts.map((analyst) => {
+          const rc = ratingColor(analyst.rating);
+          return (
+            <Grid size={{ xs: 12, sm: 4 }} key={analyst.id}>
+              <Card sx={{ height: '100%' }}>
+                <CardContent sx={{ p: '20px !important', display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+
+                  {/* Header — avatar + code name + lens */}
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    <Box sx={{
+                      width: 42, height: 42, borderRadius: '10px', flexShrink: 0,
+                      background: `${analyst.color}18`,
+                      border: `2px solid ${analyst.color}55`,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      <Typography sx={{
+                        fontSize: '0.6rem', fontWeight: 900, color: analyst.color,
+                        letterSpacing: '0.04em', lineHeight: 1, fontFamily: 'monospace',
+                      }}>
+                        {analyst.avatar}
+                      </Typography>
+                    </Box>
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography sx={{
+                        fontSize: '0.85rem', fontWeight: 900, lineHeight: 1.2,
+                        fontFamily: 'monospace', letterSpacing: '-0.02em', color: analyst.color,
+                      }}>
+                        {analyst.id}
+                      </Typography>
+                      <Typography sx={{ fontSize: '0.6rem', opacity: 0.5, lineHeight: 1.3 }}>
+                        {analyst.title}
+                      </Typography>
+                      <Typography sx={{ fontSize: '0.55rem', opacity: 0.3, lineHeight: 1.2, fontFamily: 'monospace' }}>
+                        {analyst.model_label}
+                      </Typography>
+                    </Box>
+                  </Box>
+
+                  {/* Rating chip */}
+                  <Box sx={{
+                    display: 'inline-flex', px: 1.4, py: 0.5, borderRadius: 1.5,
+                    background: rc.bg, border: `1px solid ${rc.text}55`,
+                    alignSelf: 'flex-start',
+                  }}>
+                    <Typography sx={{ fontSize: '0.7rem', fontWeight: 900, color: rc.text, letterSpacing: '0.08em' }}>
+                      {analyst.rating.toUpperCase()}
+                    </Typography>
+                  </Box>
+
+                  {/* Advisory note — full size, readable */}
+                  <Typography variant="body2" sx={{
+                    opacity: 0.82, lineHeight: 1.65, flex: 1,
+                    fontSize: '0.82rem',
+                  }}>
+                    {analyst.note}
+                  </Typography>
+
+                  {/* Confidence bar */}
+                  <Box>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+                      <Typography sx={{ fontSize: '0.58rem', opacity: 0.4, letterSpacing: '0.08em' }}>CONVICTION</Typography>
+                      <Typography sx={{ fontSize: '0.62rem', fontWeight: 800, color: analyst.color }}>{analyst.confidence}%</Typography>
+                    </Box>
+                    <Box sx={{ height: 4, borderRadius: 2, background: 'rgba(128,128,128,0.15)', overflow: 'hidden' }}>
+                      <Box sx={{
+                        height: '100%', borderRadius: 2,
+                        width: `${analyst.confidence}%`,
+                        background: `linear-gradient(90deg, ${analyst.color}66, ${analyst.color})`,
+                        transition: 'width 0.7s ease',
+                      }} />
+                    </Box>
+                  </Box>
+
+                </CardContent>
+              </Card>
+            </Grid>
+          );
+        })}
+      </Grid>
+    </Stack>
   );
 }
 
@@ -1036,6 +1153,11 @@ export default function QuantumDashboard() {
                         </Box>
                       </CardContent>
                     </Card>
+                  )}
+
+                  {/* ── Analyst Jury ──────────────────────────────────────── */}
+                  {prediction.juryAnalysts && prediction.juryAnalysts.length > 0 && (
+                    <AnalystJuryPanel analysts={prediction.juryAnalysts} />
                   )}
 
                   {/* ── News ─────────────────────────────────────────────── */}
