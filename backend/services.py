@@ -373,3 +373,163 @@ class SerpService:
         except Exception as e:
             logger.error(f"SerpAPI fetch_data error: {e}")
             return {"news_results": [], "markets": {}}
+
+
+# ---------------------------------------------------------------------------
+# Groq Service  —  multi-analyst jury via free-tier Groq API
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Analyst Jury  —  3 personas, each pinned to a different model
+#
+#   LLAMA-70B   → Groq llama-3.3-70b-versatile   (1,000 RPD free)  — Growth lens
+#   LLAMA-8B    → Groq llama-3.1-8b-instant       (14,400 RPD free) — Risk lens
+#   GEMINI-FLASH→ Google Gemini 2.5 Flash          (1,000 RPD free)  — Quant lens
+#                 (Gemini call handled in main.py using the existing ai_client)
+# ---------------------------------------------------------------------------
+
+ANALYST_PERSONAS = [
+    {
+        "id":       "LLAMA-70B",
+        "avatar":   "70B",
+        "title":    "Growth Lens",
+        "model_label": "Groq · llama-3.3-70b",
+        "provider": "groq",
+        "groq_model": "llama-3.3-70b-versatile",
+        "color":    "#00f2ff",
+        "system": (
+            "You are LLAMA-70B, a growth-focused equity analyst running on Llama 3.3 70B. "
+            "Your lens is momentum, catalysts, and upside potential. "
+            "Analyse the provided market data and deliver a substantive advisory opinion: "
+            "comment on price momentum relative to SMA, RSI strength, what the forecast range implies, "
+            "any notable volatility context, and your overall growth outlook. "
+            "Reference MACD momentum, SMA50/200 positioning, volume trend, forecast confidence, and any fundamental tailwinds. "
+            "Be specific, actionable, and advisory — not generic. Conclude with a clear rating."
+        ),
+    },
+    {
+        "id":       "LLAMA-8B",
+        "avatar":   "8B",
+        "title":    "Risk Lens",
+        "model_label": "Groq · llama-3.1-8b",
+        "provider": "groq",
+        "groq_model": "llama-3.1-8b-instant",
+        "color":    "#bc13fe",
+        "system": (
+            "You are LLAMA-8B, a risk and macro analyst running on Llama 3.1 8B. "
+            "Your lens is downside scenarios, warning signals, and risk-adjusted positioning. "
+            "Analyse the provided market data and deliver a substantive advisory opinion: "
+            "flag any RSI extremes, negative trend slope, elevated volatility, or concerning forecast skew. "
+            "Discuss what could go wrong and how severe the downside looks. "
+            "Examine BB band squeeze/expansion, proximity to support/resistance, whether volume confirms or contradicts the move, and any fundamental red flags. "
+            "Be specific, actionable, and advisory — not generic. Conclude with a clear rating."
+        ),
+    },
+    {
+        "id":       "GEMINI-FLASH",
+        "avatar":   "GF",
+        "title":    "Quant Lens",
+        "model_label": "Google · Gemini 2.5 Flash",
+        "provider": "gemini",
+        "color":    "#f59e0b",
+        "system": (
+            "You are GEMINI-FLASH, a quantitative strategist running on Google Gemini 2.5 Flash. "
+            "You operate purely on statistical signals — no fundamental or macro bias. "
+            "Analyse the provided market data and deliver a substantive advisory opinion: "
+            "interpret RSI level and regime, trend slope direction and magnitude, "
+            "price position relative to SMA20, forecast confidence, and annualised volatility. "
+            "Cover MACD histogram crossover state, Bollinger Band width, SMA50/200 crossover proximity, and volume confirmation of the trend. Cite the forecast confidence label explicitly. "
+            "Map each signal to a clear implication. Be precise, data-first, and advisory. "
+            "Conclude with a clear rating."
+        ),
+    },
+]
+
+NOTE_PROMPT_SUFFIX = (
+    "\n\nRespond ONLY with valid JSON in exactly this format (no extra text):\n"
+    '{"rating": "<Strong Buy|Buy|Hold|Sell|Strong Sell>", '
+    '"note": "<3-4 advisory sentences, up to 420 chars, with specific signals and implications>", '
+    '"confidence": <integer 10-95>}'
+)
+
+
+class GroqService:
+    """
+    Calls Groq's free-tier API (OpenAI-compatible).
+    Each persona is pinned to a specific Groq model; no automatic fallback
+    between models so each analyst genuinely reflects its own model's view.
+    Gemini persona is handled by the caller (main.py) using the existing ai_client.
+    """
+    BASE_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+    async def _call_groq(self, model: str, system: str, user: str) -> str:
+        """Raw Groq API call. Raises on non-2xx or missing key."""
+        if not Config.GROQ_API_KEY:
+            raise ValueError("GROQ_API_KEY not configured")
+        headers = {
+            "Authorization": f"Bearer {Config.GROQ_API_KEY}",
+            "Content-Type":  "application/json",
+        }
+        body = {
+            "model":       model,
+            "messages":    [{"role": "system", "content": system},
+                            {"role": "user",   "content": user}],
+            "max_tokens":  320,
+            "temperature": 0.65,
+        }
+        async with httpx.AsyncClient(timeout=22.0) as client:
+            resp = await client.post(self.BASE_URL, json=body, headers=headers)
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"].strip()
+
+    @staticmethod
+    def _parse_analyst_response(raw: str) -> dict:
+        """
+        Extract structured fields from model output.
+        Expected JSON: {"rating": "Buy", "note": "...", "confidence": 72}
+        Falls back to regex extraction on malformed output.
+        """
+        import json, re
+        json_match = re.search(r'\{[^{}]*"rating"[^{}]*\}', raw, re.DOTALL)
+        if json_match:
+            try:
+                return json.loads(json_match.group())
+            except Exception:
+                pass
+        rating = "Hold"
+        for candidate in ["Strong Buy", "Strong Sell", "Buy", "Sell", "Hold"]:
+            if candidate.lower() in raw.lower():
+                rating = candidate
+                break
+        conf_match = re.search(r'(\d{1,3})\s*%', raw)
+        confidence = int(conf_match.group(1)) if conf_match else 60
+        note = re.sub(r'\{.*?\}', '', raw, flags=re.DOTALL).strip()[:420]
+        return {"rating": rating, "note": note, "confidence": min(max(confidence, 10), 95)}
+
+    async def get_analyst_verdict(self, persona: dict, market_ctx: str) -> dict:
+        """
+        Run one Groq-backed analyst persona and return structured verdict.
+        Uses the model pinned to this persona (no cross-model fallback).
+        """
+        user_prompt = market_ctx + NOTE_PROMPT_SUFFIX
+        model_used  = persona["groq_model"]
+        raw = ""
+        try:
+            raw = await self._call_groq(model_used, persona["system"], user_prompt)
+        except Exception as e:
+            logger.error(f"GroqService [{persona['id']}] failed: {e}")
+            raw = '{"rating": "Hold", "note": "Model unavailable — no verdict at this time.", "confidence": 25}'
+            model_used = "error"
+
+        parsed = self._parse_analyst_response(raw)
+        return {
+            "id":          persona["id"],
+            "avatar":      persona["avatar"],
+            "title":       persona["title"],
+            "model_label": persona["model_label"],
+            "color":       persona["color"],
+            "rating":      parsed.get("rating",     "Hold"),
+            "note":        parsed.get("note",       ""),
+            "confidence":  parsed.get("confidence", 50),
+            "model":       model_used,
+        }
