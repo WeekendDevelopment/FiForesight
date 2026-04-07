@@ -10,7 +10,7 @@ export const metadata: Metadata = {
   description: "AI-Based Financial Forecasting",
 };
 
-const nrScript = process.env.APP_ENV === 'live'
+const nrScript = process.env.NEXT_PUBLIC_APP_ENV === 'live'
   ? '/newrelic.live.js'
   : '/newrelic.preview.js'
 

@@ -76,6 +76,8 @@ jobs:
         working-directory: frontend
         shell: bash
         run: pnpm run build
+        env:
+          NEXT_PUBLIC_APP_ENV: preview
   build-backend:
     runs-on: ubuntu-latest
     steps:
@@ -132,6 +134,8 @@ jobs:
           context: .
           push: true
           load: true
+          build-args: |
+            NEXT_PUBLIC_APP_ENV=preview
           tags: |
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
 

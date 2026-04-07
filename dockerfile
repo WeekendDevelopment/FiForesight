@@ -5,6 +5,10 @@ WORKDIR /app/frontend
 # Install pnpm
 RUN npm install -g pnpm
 
+# Accept NEXT_PUBLIC_APP_ENV as a build argument
+ARG NEXT_PUBLIC_APP_ENV
+ENV NEXT_PUBLIC_APP_ENV=$NEXT_PUBLIC_APP_ENV
+
 COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 RUN pnpm install
 COPY frontend/ ./
