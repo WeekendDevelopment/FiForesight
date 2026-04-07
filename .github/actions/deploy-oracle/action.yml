@@ -8,6 +8,22 @@ runs:
       run: |
         curl https://www.duckdns.org/update?domains=${{ env.DOMAIN }}&token=${{ env.DUCK_DNS_TOKEN }}&ip=${{ env.VM_IP_ADDRESS }}&verbose=true
 
+    - name: Install New Relic Infrastructure Agent
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ env.VM_IP_ADDRESS }}
+        username: ubuntu
+        key: ${{ env.VM_SSH_PRIVATE_KEY }}
+        script: |
+          # Skip if already installed
+          if systemctl is-active --quiet newrelic-infra; then
+            echo "New Relic already running, skipping install"
+            exit 0
+          fi
+          
+          curl -Ls https://download.newrelic.com/install/newrelic-cli/scripts/install.sh | bash
+          sudo NEW_RELIC_API_KEY=${{ env.LINUX_NEW_RELIC_LICENSE_KEY }} NEW_RELIC_ACCOUNT_ID=7918507 NEW_RELIC_REGION=EU /usr/local/bin/newrelic install -y --tag environment:${{ env.APP_ENV }}
+
     - name: SSH and Deploy
       uses: appleboy/ssh-action@v1.0.3
       with:
@@ -41,7 +57,19 @@ runs:
             -e SERP_API_KEY=${{ env.SERP_API_KEY }} \
             -e X_AI_API_KEY=${{ env.X_AI_API_KEY }} \
             -e GROQ_API_KEY=${{ env.GROQ_API_KEY }} \
+            -e APP_ENV=${{ env.APP_ENV }} \
+            -e NEW_RELIC_LICENSE_KEY=${{ env.NEW_RELIC_LICENSE_KEY }} \
+            -e NEW_RELIC_APP_NAME=${{ env.NEW_RELIC_APP_NAME }} \
             $IMAGE_LOWER:$IMAGE_TAG
 
           # Clean up old images
           docker image prune -af
+
+    - name: New Relic Application Deployment Marker
+      uses: newrelic/deployment-marker-action@v2.3.0
+      with:
+        apiKey: ${{ env.GH_NEW_RELIC_API_KEY }}
+        guid: ${{ env.NEW_RELIC_DEPLOYMENT_ENTITY_GUID }}
+        version: ${{ env.IMAGE_TAG }}
+        user: "${{ github.actor }}"
+        region: EU

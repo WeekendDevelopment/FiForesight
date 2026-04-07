@@ -69,3 +69,9 @@ runs:
       with:
         secret-name: GROQ_API_KEY
         secret-value: "${{ env.GROQ_API_KEY }}"
+
+    - name: Create NEW_RELIC_LICENSE_KEY secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: NEW_RELIC_LICENSE_KEY
+        secret-value: "${{ env.NEW_RELIC_LICENSE_KEY }}"
