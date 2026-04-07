@@ -57,3 +57,15 @@ runs:
       with:
         secret-name: SERP_API_KEY
         secret-value: "${{ env.SERP_API_KEY }}"
+
+    - name: Create X_AI_API_KEY secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: X_AI_API_KEY
+        secret-value: "${{ env.X_AI_API_KEY }}"
+
+    - name: Create GROQ_API_KEY secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: GROQ_API_KEY
+        secret-value: "${{ env.GROQ_API_KEY }}"

@@ -187,6 +187,8 @@ jobs:
           INFLUXDB_TOKEN: ${{ secrets.INFLUXDB_TOKEN }}
           INFLUXDB_URL: ${{ secrets.INFLUXDB_URL }}
           SERP_API_KEY: ${{ secrets.SERP_API_KEY }}
+          X_AI_API_KEY: ${{ secrets.X_AI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
 
   deploy-oracle:
     needs:
@@ -220,3 +222,5 @@ jobs:
           INFLUXDB_TOKEN: ${{ secrets.INFLUXDB_TOKEN }}
           INFLUXDB_URL: ${{ secrets.INFLUXDB_URL }}
           SERP_API_KEY: ${{ secrets.SERP_API_KEY }}
+          X_AI_API_KEY: ${{ secrets.X_AI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}

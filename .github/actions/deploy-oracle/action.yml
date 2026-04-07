@@ -39,6 +39,8 @@ runs:
             -e INFLUXDB_TOKEN=${{ env.INFLUXDB_TOKEN }} \
             -e INFLUXDB_URL=${{ env.INFLUXDB_URL }} \
             -e SERP_API_KEY=${{ env.SERP_API_KEY }} \
+            -e X_AI_API_KEY=${{ env.X_AI_API_KEY }} \
+            -e GROQ_API_KEY=${{ env.GROQ_API_KEY }} \
             $IMAGE_LOWER:$IMAGE_TAG
 
           # Clean up old images
