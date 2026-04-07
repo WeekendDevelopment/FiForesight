@@ -103,6 +103,8 @@ jobs:
         working-directory: frontend
         shell: bash
         run: pnpm run build
+        env:
+          NEXT_PUBLIC_APP_ENV: live
   build-backend:
     needs: create-release
     runs-on: ubuntu-latest
@@ -155,6 +157,8 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            NEXT_PUBLIC_APP_ENV=live
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ needs.create-release.outputs.tag }}
