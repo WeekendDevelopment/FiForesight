@@ -19,6 +19,8 @@ runs:
         INFLUXDB_URL: ${{ env.INFLUXDB_URL }}
         GHCR_PAT_TOKEN: ${{ env.GHCR_PAT_TOKEN }}
         SERP_API_KEY: ${{ env.SERP_API_KEY }}
+        X_AI_API_KEY: ${{ env.X_AI_API_KEY }}
+        GROQ_API_KEY: ${{ env.GROQ_API_KEY }}
 
     - name: Build and deploy the application to Koyeb
       uses: koyeb/action-git-deploy@v1
