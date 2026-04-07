@@ -189,6 +189,7 @@ jobs:
           SERP_API_KEY: ${{ secrets.SERP_API_KEY }}
           X_AI_API_KEY: ${{ secrets.X_AI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
 
   deploy-oracle:
     needs:
@@ -224,3 +225,9 @@ jobs:
           SERP_API_KEY: ${{ secrets.SERP_API_KEY }}
           X_AI_API_KEY: ${{ secrets.X_AI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          APP_ENV: "live"
+          NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
+          LINUX_NEW_RELIC_LICENSE_KEY: ${{ secrets.LINUX_NEW_RELIC_LICENSE_KEY }}
+          GH_NEW_RELIC_API_KEY: ${{ secrets.GH_NEW_RELIC_API_KEY }}
+          NEW_RELIC_DEPLOYMENT_ENTITY_GUID: ${{ secrets.NEW_RELIC_DEPLOYMENT_ENTITY_GUID }}
+          NEW_RELIC_APP_NAME: "fi-foresight"

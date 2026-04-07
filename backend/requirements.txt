@@ -10,3 +10,4 @@ statsmodels
 prophet
 scikit-learn
 yfinance
+newrelic
