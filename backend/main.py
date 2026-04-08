@@ -230,7 +230,7 @@ async def _run_analyst_jury(
                     lines.append(f"  - {h.get('title', '')} [{src}]")
                 news_block = "Recent news:\n" + "\n".join(lines) + "\n"
         except Exception:
-            pass
+            logging.debug("Failed to build opportunistic news block", exc_info=True)
 
     # Formatted indicator lines
     macd_line = (
