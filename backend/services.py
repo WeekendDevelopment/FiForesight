@@ -555,7 +555,6 @@ class AnalystJuryService:
     @staticmethod
     def _parse_analyst_response(raw: str) -> dict:
         import json
-        import re
 
         # Strip reasoning-model thinking blocks (Qwen3 emits <think>...</think>)
         # Handle both complete blocks and truncated ones (model ran out of tokens mid-think)
