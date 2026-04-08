@@ -588,6 +588,7 @@ class AnalystJuryService:
                 if "rating" in parsed:
                     return parsed
         except (ValueError, json.JSONDecodeError):
+            # Expected for malformed/truncated model output; continue to secondary parse path.
             pass
 
         # Secondary: attempt the entire cleaned string
