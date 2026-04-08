@@ -3,17 +3,24 @@ import asyncio
 import logging
 import traceback
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Body, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from google import genai
 
 from config import Config, SanitizeHttpxFilter
-from models import calculate_rsi, calculate_rsi_series, run_ensemble_forecast, calculate_macd, calculate_bollinger_bands, calculate_sma_series, calculate_support_resistance
-from services import DataCleaner, InfluxService, SerpService, YFinanceService
+from models import (
+    calculate_rsi, calculate_rsi_series, run_ensemble_forecast,
+    calculate_macd, calculate_bollinger_bands, calculate_sma_series,
+    calculate_support_resistance,
+)
+from services import (
+    DataCleaner, AnalystJuryService, InfluxService,
+    ANALYST_PERSONAS,
+    SerpService, YFinanceService,
+)
 
 # ---------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -24,6 +31,7 @@ logging.getLogger("httpx").addFilter(SanitizeHttpxFilter())
 
 app = FastAPI(title="FiForesight Quantum Engine")
 
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     tb = traceback.format_exc()
@@ -33,23 +41,15 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         content={"detail": "An internal server error occurred."},
     )
 
-# AI client (optional - graceful fallback if key missing)
-ai_client: Optional[genai.Client] = None
-if Config.GOOGLE_GENAI_API_KEY:
-    try:
-        ai_client = genai.Client(api_key=Config.GOOGLE_GENAI_API_KEY)
-    except Exception as _e:
-        logger.warning(f"Gemini client init failed: {_e}")
 
+# ---------------------------------------------------------------------------
 # Services
-influx_svc = InfluxService()
-serp_svc   = SerpService()
-yf_svc     = YFinanceService()
-
-
 # ---------------------------------------------------------------------------
-# Response schema
-# ---------------------------------------------------------------------------
+influx_svc       = InfluxService()
+serp_svc         = SerpService()
+yf_svc           = YFinanceService()
+analyst_jury_svc = AnalystJuryService()
+
 
 # ---------------------------------------------------------------------------
 # Response schema
@@ -70,6 +70,7 @@ class PredictionResponse(BaseModel):
     trending:     List[dict]
     indicators:   dict
     lastUpdated:  str
+    juryAnalysts: List[dict]
 
 
 # ---------------------------------------------------------------------------
@@ -98,30 +99,200 @@ def _fmt_pct(val) -> str:
 
 
 async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict) -> str:
-    """Return a Gemini analyst note, falling back to the model's own note."""
-    if not ai_client:
-        return forecast["note"]
+    """
+    Header analyst note via Groq llama-3.3-70b (14,400 RPD free, no quota issues).
+    Replaces Gemini which has a 20 RPD free-tier limit — too scarce for per-request use.
+    Falls back to the ensemble model's own note if Groq is unavailable.
+    """
     recent    = closes[-20:]
-    price_str = "\n".join(f"  {i+1}. {p:.2f}" for i, p in enumerate(recent))
+    price_str = ", ".join(f"{p:.2f}" for p in recent)
+    system = (
+        "You are a concise quantitative financial analyst. "
+        "Respond in 2 plain-text sentences only — no markdown, no bullet points, no JSON."
+    )
     prompt = (
-        f"You are a quantitative analyst. Symbol: {symbol}\n"
-        f"RSI: {rsi:.1f}\n"
-        f"Recent 20-day closes:\n{price_str}\n"
-        f"5-day ensemble forecast: high=${forecast['high']:.2f}, low=${forecast['low']:.2f}\n"
-        f"Write a concise 2-sentence analyst note with the outlook and key risk. "
-        f"Plain text only, no markdown."
+        f"Symbol: {symbol} | RSI: {rsi:.1f}\n"
+        f"Recent 20-day closes: {price_str}\n"
+        f"5-day ensemble forecast: high=${forecast['high']:.2f}, low=${forecast['low']:.2f} "
+        f"[Confidence: {forecast.get('conf', 'low')}]\n"
+        f"Write a concise 2-sentence analyst note covering the price outlook and the key risk."
     )
     try:
-        response = await asyncio.to_thread(
-            ai_client.models.generate_content,
-            model="gemini-2.5-flash",
-            contents=prompt,
+        raw = await analyst_jury_svc._call_groq(
+            "llama-3.3-70b-versatile", system, prompt
         )
-        return response.text.strip()
+        return raw.strip()
     except Exception as e:
-        logger.warning(f"Gemini note failed: {e}")
+        logger.warning(f"Groq analyst note failed: {e}")
         return forecast["note"]
 
+
+async def _run_analyst_jury(
+    symbol: str,
+    closes: List[float],
+    rsi: float,
+    forecast: dict,
+    stats: dict,
+    info: dict,
+    macd_data: dict,
+    bb_data: dict,
+    sma50: List,
+    sma200: List,
+    historical_prices: list,
+    sr_levels: dict,
+    *,
+    news_task=None,
+) -> List[dict]:
+    """
+    Run all 3 analyst personas concurrently via AnalystJuryService.
+      - KIMI-K2    → Groq moonshotai/kimi-k2-instruct  (macro & risk lens, Moonshot AI)
+      - LLAMA-70B  → Groq llama-3.3-70b-versatile    (growth lens, Meta)
+      - QWEN3-32B  → Groq qwen/qwen3-32b             (quant lens, Alibaba)
+
+    All provider routing and response parsing are handled inside
+    AnalystJuryService — no per-provider branching needed here.
+    """
+
+    # ------------------------------------------------------------------
+    # Build shared market context string
+    # ------------------------------------------------------------------
+
+    def _last(series):
+        """Last non-None value from a series."""
+        for v in reversed(series):
+            if v is not None:
+                return v
+        return None
+
+    price     = closes[-1]
+    recent    = closes[-10:]
+    price_str = ", ".join(f"{p:.2f}" for p in recent)
+
+    # Indicator snapshots
+    cur_macd   = _last(macd_data["macd"])
+    cur_signal = _last(macd_data["signal"])
+    cur_hist   = _last(macd_data["hist"])
+    cur_upper  = _last(bb_data["upper"])
+    cur_middle = _last(bb_data["middle"])
+    cur_lower  = _last(bb_data["lower"])
+    cur_sma50  = _last(sma50)
+    cur_sma200 = _last(sma200)
+
+    # Derived labels
+    macd_label = (
+        ("Bullish" if cur_macd > cur_signal else "Bearish")
+        if cur_macd is not None and cur_signal is not None else "N/A"
+    )
+    bb_pos_str = (
+        f"{(price - cur_lower) / (cur_upper - cur_lower) * 100:.1f}% of band"
+        if cur_upper and cur_lower and cur_upper != cur_lower else "N/A"
+    )
+    sma50_pct  = f"{(price - cur_sma50)  / cur_sma50  * 100:+.2f}%"  if cur_sma50  is not None else "N/A"
+    sma200_pct = f"{(price - cur_sma200) / cur_sma200 * 100:+.2f}%"  if cur_sma200 is not None else "N/A"
+
+    # Volume trend
+    vols   = [float(p.get("volume", 0)) for p in historical_prices if p.get("volume", 0) > 0]
+    vol10  = sum(vols[-10:]) / len(vols[-10:]) if len(vols) >= 10 else None
+    vol30  = sum(vols[-30:]) / len(vols[-30:]) if len(vols) >= 30 else None
+    vol_line = (
+        f"10d avg {vol10/1e6:.2f}M vs 30d avg {vol30/1e6:.2f}M "
+        f"({(vol10-vol30)/vol30*100:+.1f}%)"
+        if vol10 and vol30 else "N/A"
+    )
+
+    # Support / resistance (top 2 each)
+    sup_str = " / ".join(f"${v:.2f}" for v in sr_levels.get("support",    [])[:2]) or "N/A"
+    res_str = " / ".join(f"${v:.2f}" for v in sr_levels.get("resistance", [])[:2]) or "N/A"
+
+    # Fundamentals
+    pe_str  = str(info.get("pe_ratio", "N/A"))
+    cap_str = _fmt_market_cap(info.get("market_cap"))
+    rng_str = info.get("range_52w", "N/A")
+    sec_str = info.get("sector",    "N/A")
+    div_str = (
+        _fmt_pct(info.get("dividend_yield"))
+        if info.get("dividend_yield") not in (None, "N/A") else "N/A"
+    )
+
+    # News headlines — opportunistic: only if serp_task already finished
+    news_block = ""
+    if news_task is not None and news_task.done() and not news_task.cancelled():
+        try:
+            headlines = news_task.result().get("news_results", [])[:4]
+            if headlines:
+                lines = []
+                for h in headlines:
+                    src = (
+                        h.get("source", {}).get("name", "")
+                        if isinstance(h.get("source"), dict)
+                        else str(h.get("source", ""))
+                    )
+                    lines.append(f"  - {h.get('title', '')} [{src}]")
+                news_block = "Recent news:\n" + "\n".join(lines) + "\n"
+        except Exception:
+            logging.debug("Failed to build opportunistic news block", exc_info=True)
+
+    # Formatted indicator lines
+    macd_line = (
+        f"MACD: {cur_macd:.4f} | Signal: {cur_signal:.4f} | Hist: {cur_hist:.4f} [{macd_label}]"
+        if cur_macd is not None and cur_signal is not None and cur_hist is not None
+        else "MACD: N/A"
+    )
+    bb_line = (
+        f"BB: Upper={cur_upper:.2f} Mid={cur_middle:.2f} Lower={cur_lower:.2f} | Price: {bb_pos_str}"
+        if cur_upper is not None else "BB: N/A"
+    )
+    # Each arm is only formatted if its value actually exists
+    sma50_str  = f"SMA50: {cur_sma50:.2f} ({sma50_pct})"    if cur_sma50  is not None else "SMA50: N/A"
+    sma200_str = f"SMA200: {cur_sma200:.2f} ({sma200_pct})" if cur_sma200 is not None else "SMA200: N/A"
+    sma_line   = f"{sma50_str} | {sma200_str}"
+
+
+    ctx = (
+        f"Symbol: {symbol} | Price: ${price:.2f} | RSI: {rsi:.1f} | Sector: {sec_str}\n"
+        f"Fundamentals: PE={pe_str} | Cap={cap_str} | Div={div_str} | 52w={rng_str}\n"
+        f"10-day closes: {price_str}\n"
+        f"Forecast 5d → High: ${forecast['high']:.2f}, Low: ${forecast['low']:.2f} "
+        f"[Confidence: {forecast.get('conf', 'low')}]\n"
+        f"Volatility: {stats.get('ann_volatility_pct', 0):.1f}% ann | "
+        f"Slope: {stats.get('trend_slope', 0):.4f}/day | "
+        f"vs SMA20: {stats.get('price_vs_sma20_pct', 0):+.2f}%\n"
+        f"{macd_line}\n"
+        f"{bb_line}\n"
+        f"{sma_line}\n"
+        f"Volume: {vol_line}\n"
+        f"Support: {sup_str} | Resistance: {res_str}\n"
+        f"{news_block}"
+    )
+
+    # ------------------------------------------------------------------
+    # Dispatch all personas concurrently — AnalystJuryService routes
+    # to Groq (LLAMA-70B, QWEN-32B) or xAI (XAI-GROK) internally
+    # ------------------------------------------------------------------
+    results = await asyncio.gather(
+        *[analyst_jury_svc.get_analyst_verdict(persona, ctx) for persona in ANALYST_PERSONAS],
+        return_exceptions=True,
+    )
+
+    verdicts = []
+    for r, persona in zip(results, ANALYST_PERSONAS):
+        if isinstance(r, Exception):
+            logger.warning(f"Analyst {persona['id']} failed: {r}")
+            verdicts.append({
+                "id":          persona["id"],
+                "avatar":      persona["avatar"],
+                "title":       persona["title"],
+                "model_label": persona["model_label"],
+                "color":       persona["color"],
+                "rating":      "Hold",
+                "note":        "Analysis unavailable.",
+                "confidence":  30,
+                "model":       "error",
+            })
+        else:
+            verdicts.append(r)
+
+    return verdicts
 
 
 # ---------------------------------------------------------------------------
@@ -140,11 +311,11 @@ async def debug():
     from services import YFINANCE_AVAILABLE
 
     results: dict = {
-        "yfinance_installed": YFINANCE_AVAILABLE,
-        "ml_models_available": MODELS_AVAILABLE,
-        "serp_api_key_set": bool(Config.SERP_API_KEY),
-        "gemini_key_set": bool(Config.GOOGLE_GENAI_API_KEY),
-        "influxdb_token_set": bool(Config.INFLUXDB_TOKEN),
+        "yfinance_installed":   YFINANCE_AVAILABLE,
+        "ml_models_available":  MODELS_AVAILABLE,
+        "serp_api_key_set":     bool(Config.SERP_API_KEY),
+        "groq_key_set":         bool(Config.GROQ_API_KEY),
+        "influxdb_token_set":   bool(Config.INFLUXDB_TOKEN),
     }
 
     # Test InfluxDB connectivity
@@ -153,22 +324,23 @@ async def debug():
         results["influxdb_reachable"] = True
     except Exception as e:
         results["influxdb_reachable"] = False
-        results["influxdb_error"] = str(e)
+        results["influxdb_error"]     = str(e)
 
     # Test yfinance (quick 5-day fetch)
     if YFINANCE_AVAILABLE:
         try:
             import yfinance as _yf
             df = await asyncio.to_thread(
-                lambda: _yf.download("AAPL", period="5d", interval="1d",
-                                     progress=False, auto_adjust=True,
-                                     timeout=10)
+                lambda: _yf.download(
+                    "AAPL", period="5d", interval="1d",
+                    progress=False, auto_adjust=True, timeout=10,
+                )
             )
             results["yfinance_reachable"] = not df.empty
-            results["yfinance_rows"] = int(len(df))
+            results["yfinance_rows"]      = int(len(df))
         except Exception as e:
             results["yfinance_reachable"] = False
-            results["yfinance_error"] = str(e)
+            results["yfinance_error"]     = str(e)
 
     return results
 
@@ -179,7 +351,6 @@ async def predict(payload: dict = Body(...)):
     now    = datetime.now(timezone.utc)
 
     # 1. Fetch OHLCV history
-    # Populate InfluxDB from yfinance if we don't have fresh data
     if not influx_svc.has_recent_data(symbol):
         df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "2y")
         if not df.empty:
@@ -187,14 +358,13 @@ async def predict(payload: dict = Body(...)):
                 df = DataCleaner.clean(df)
             except Exception as e:
                 logger.warning(f"DataCleaner.clean failed for {symbol}: {e}")
-                df = df.__class__()  # empty DataFrame
+                df = df.__class__()
             if not df.empty:
                 await asyncio.to_thread(influx_svc.write_ohlcv_batch, symbol, df)
 
     historical_prices: list = await asyncio.to_thread(influx_svc.query_history, symbol)
 
-    # Fallback: use yfinance directly if InfluxDB is unavailable or has insufficient history
-    # for ML models (InfluxDB Cloud 30-day retention only stores ~21 trading days)
+    # Fallback: yfinance directly if InfluxDB has insufficient history
     if not historical_prices or len(historical_prices) < 60:
         df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "2y")
         if not df.empty:
@@ -216,8 +386,8 @@ async def predict(payload: dict = Body(...)):
     if live_price > 0:
         historical_prices.append({
             "_time": now, "close": live_price,
-            "open": live_price, "high": live_price,
-            "low":  live_price, "volume": 0.0,
+            "open":  live_price, "high": live_price,
+            "low":   live_price, "volume": 0.0,
         })
     else:
         live_price = float(historical_prices[-1]["close"])
@@ -230,8 +400,8 @@ async def predict(payload: dict = Body(...)):
         "yield":      _fmt_pct(info.get("dividend_yield")) if info.get("dividend_yield") not in (None, "N/A") else "N/A",
         "prev_close": str(info.get("prev_close", "N/A")),
         "range_52w":  info.get("range_52w", "N/A"),
-        "sector":     info.get("sector",   "N/A"),
-        "currency":   info.get("currency", "USD"),
+        "sector":     info.get("sector",    "N/A"),
+        "currency":   info.get("currency",  "USD"),
     }
 
     # 4. Analytics & ensemble forecast
@@ -245,19 +415,38 @@ async def predict(payload: dict = Body(...)):
     sma50     = calculate_sma_series(closes, 50)
     sma200    = calculate_sma_series(closes, 200)
 
-    # 5. AI analyst note
-    note = await _ai_note(symbol, closes, rsi, forecast)
+    # Fire news fetch concurrently — started now, awaited after jury
+    serp_task = asyncio.create_task(serp_svc.fetch_data(symbol))
+
+    # Support/resistance — computed before jury so levels can be cited
+    sr_levels = calculate_support_resistance(closes)
+
+    # 5. AI analyst note + jury (concurrent)
+    note, jury = await asyncio.gather(
+        _ai_note(symbol, closes, rsi, forecast),
+        _run_analyst_jury(
+            symbol, closes, rsi, forecast,
+            forecast.get("stats", {}),
+            info, macd_data, bb_data, sma50, sma200,
+            historical_prices, sr_levels,
+            news_task=serp_task,
+        ),
+    )
 
     # 6. News + trending via SerpAPI
     news: list     = []
     trending: list = []
     try:
-        serp_data = await serp_svc.fetch_data(symbol)
+        serp_data = await serp_task
         news = [
             {
                 "title":     n.get("title",  ""),
                 "link":      n.get("link",   ""),
-                "source":    n.get("source", {}).get("name", "") if isinstance(n.get("source"), dict) else str(n.get("source", "")),
+                "source":    (
+                    n.get("source", {}).get("name", "")
+                    if isinstance(n.get("source"), dict)
+                    else str(n.get("source", ""))
+                ),
                 "thumbnail": n.get("thumbnail", ""),
                 "date":      n.get("date",   ""),
             }
@@ -279,34 +468,31 @@ async def predict(payload: dict = Body(...)):
     # 7. Background price snapshot
     asyncio.create_task(asyncio.to_thread(influx_svc.write_price, symbol, live_price))
 
-    # 8. Chart history (last 90 trading days) — attach indicator slices
-    total      = len(historical_prices)
+    # 8. Chart history (last 90 trading days) with indicator slices
+    total       = len(historical_prices)
     slice_start = max(0, total - 90)
     history = []
     for idx, p in enumerate(historical_prices[slice_start:], start=slice_start):
         history.append({
-            "date":       p["_time"].strftime("%m/%d") if hasattr(p["_time"], "strftime") else str(p["_time"])[:10],
-            "price":      round(float(p["close"]),                 2),
-            "open":       round(float(p.get("open",  p["close"])), 2),
-            "high":       round(float(p.get("high",  p["close"])), 2),
-            "low":        round(float(p.get("low",   p["close"])), 2),
-            "volume":     round(float(p.get("volume", 0)),         0),
-            "bb_upper":   bb_data["upper"][idx],
-            "bb_middle":  bb_data["middle"][idx],
-            "bb_lower":   bb_data["lower"][idx],
-            "sma50":      sma50[idx],
-            "sma200":     sma200[idx],
-            "macd":       macd_data["macd"][idx],
-            "macd_signal":macd_data["signal"][idx],
-            "macd_hist":  macd_data["hist"][idx],
+            "date":        p["_time"].strftime("%m/%d") if hasattr(p["_time"], "strftime") else str(p["_time"])[:10],
+            "price":       round(float(p["close"]),                 2),
+            "open":        round(float(p.get("open",  p["close"])), 2),
+            "high":        round(float(p.get("high",  p["close"])), 2),
+            "low":         round(float(p.get("low",   p["close"])), 2),
+            "volume":      round(float(p.get("volume", 0)),         0),
+            "bb_upper":    bb_data["upper"][idx],
+            "bb_middle":   bb_data["middle"][idx],
+            "bb_lower":    bb_data["lower"][idx],
+            "sma50":       sma50[idx],
+            "sma200":      sma200[idx],
+            "macd":        macd_data["macd"][idx],
+            "macd_signal": macd_data["signal"][idx],
+            "macd_hist":   macd_data["hist"][idx],
         })
 
-    # RSI series (vectorised — last 90 points)
+    # RSI series — last 90 points aligned to chart window
     rsi_full   = calculate_rsi_series(closes)
     rsi_series = rsi_full[slice_start:]
-
-    # Support & resistance from last 3 months of closes
-    sr_levels  = calculate_support_resistance(closes)
 
     return PredictionResponse(
         symbol       = symbol,
@@ -326,11 +512,12 @@ async def predict(payload: dict = Body(...)):
         news         = news,
         trending     = trending,
         indicators   = {
-            "rsi_series":  rsi_series,
-            "support":     sr_levels["support"],
-            "resistance":  sr_levels["resistance"],
+            "rsi_series": rsi_series,
+            "support":    sr_levels["support"],
+            "resistance": sr_levels["resistance"],
         },
         lastUpdated  = now.isoformat(),
+        juryAnalysts = jury,
     )
 
 

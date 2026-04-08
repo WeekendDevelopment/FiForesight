@@ -19,13 +19,15 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  return (
+    return (
     <html lang="en">
-      <Script
-          id="newrelic"
-          strategy="beforeInteractive"
-          src={nrScript}
-      />
+      <head>
+        <Script
+            id="newrelic"
+            strategy="beforeInteractive"
+            src={nrScript}
+        />
+      </head>
       <body className={inter.className}>{children}</body>
     </html>
   );

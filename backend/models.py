@@ -90,10 +90,14 @@ def calculate_rsi(prices: List[float], periods: int = 14) -> float:
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=periods).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=periods).mean()
-    loss = loss.replace(0, 1e-9)
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return float(rsi.iloc[-1]) if not np.isnan(rsi.iloc[-1]) else 50.0
+    g, ls = gain.iloc[-1], loss.iloc[-1]
+    if np.isnan(g) or np.isnan(ls):
+        return 50.0
+    if g == 0 and ls == 0:
+        return 50.0   # flat price — neutral, not 0
+    if ls == 0:
+        return 100.0  # only gains, no losses
+    return float(100 - (100 / (1 + g / ls)))
 
 
 def calculate_support_resistance(
