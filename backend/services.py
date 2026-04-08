@@ -596,8 +596,8 @@ class AnalystJuryService:
             parsed = json.loads(cleaned)
             if "rating" in parsed:
                 return parsed
-        except Exception:
-            pass
+        except (json.JSONDecodeError, TypeError):
+            logger.debug("Secondary JSON parse failed; falling back to plain-text field extraction.")
 
         # Last resort: extract each field from plain text
         rating = "Hold"
