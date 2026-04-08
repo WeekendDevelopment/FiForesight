@@ -18,7 +18,7 @@ from models import (
 )
 from services import (
     DataCleaner, AnalystJuryService, InfluxService,
-    ANALYST_PERSONAS, NOTE_PROMPT_SUFFIX,
+    ANALYST_PERSONAS,
     SerpService, YFinanceService,
 )
 
