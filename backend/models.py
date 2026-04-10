@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict
+import newrelic.agent
 
 # Quantitative Models
 # Suppress Prophet's "Importing plotly failed" warning — we don't use Prophet's
@@ -28,7 +29,7 @@ FORECAST_DAYS = 5
 # ---------------------------------------------------------------------------
 # Technical Indicators
 # ---------------------------------------------------------------------------
-
+@newrelic.agent.function_trace()
 def calculate_macd(
     prices: List[float],
     fast: int = 12,
@@ -48,7 +49,7 @@ def calculate_macd(
         "hist":   [round(v, 4) if not np.isnan(v) else None for v in histogram],
     }
 
-
+@newrelic.agent.function_trace()
 def calculate_bollinger_bands(
     prices: List[float],
     window: int = 20,
@@ -64,14 +65,14 @@ def calculate_bollinger_bands(
         return [round(v, 4) if not np.isnan(v) else None for v in s]
     return {"upper": _clean(upper), "middle": _clean(middle), "lower": _clean(lower)}
 
-
+@newrelic.agent.function_trace()
 def calculate_sma_series(prices: List[float], period: int) -> List:
     """Returns SMA array for given period, None where insufficient data."""
     series = pd.Series(prices)
     sma = series.rolling(window=period).mean()
     return [round(v, 4) if not np.isnan(v) else None for v in sma]
 
-
+@newrelic.agent.function_trace()
 def calculate_rsi_series(prices: List[float], periods: int = 14) -> List:
     """Returns full RSI series (same length as prices), None where insufficient data."""
     series = pd.Series(prices)
@@ -82,7 +83,7 @@ def calculate_rsi_series(prices: List[float], periods: int = 14) -> List:
     rsi    = 100 - (100 / (1 + gain / loss))
     return [round(float(v), 2) if not pd.isna(v) else None for v in rsi]
 
-
+@newrelic.agent.function_trace()
 def calculate_rsi(prices: List[float], periods: int = 14) -> float:
     if len(prices) < periods + 1:
         return 50.0
@@ -99,7 +100,7 @@ def calculate_rsi(prices: List[float], periods: int = 14) -> float:
         return 100.0  # only gains, no losses
     return float(100 - (100 / (1 + g / ls)))
 
-
+@newrelic.agent.function_trace()
 def calculate_support_resistance(
     prices: List[float],
     lookback: int = 65,       # ~3 months of trading days
@@ -168,7 +169,7 @@ def calculate_support_resistance(
 
     return {"support": support_levels, "resistance": resistance_levels}
 
-
+@newrelic.agent.function_trace()
 def calculate_model_stats(prices: List[float]) -> Dict:
     """
     Returns a dict of descriptive statistics used both in the response
@@ -204,7 +205,7 @@ def calculate_model_stats(prices: List[float]) -> Dict:
 # ---------------------------------------------------------------------------
 # Per-model forecast helpers
 # ---------------------------------------------------------------------------
-
+@newrelic.agent.function_trace()
 def _prophet_forecast(prices: List[float], steps: int) -> np.ndarray:
     # pd.date_range(freq='B') returns periods-1 items when `end` falls on a weekend/holiday
     # because the non-business end date is adjusted inward before counting back.
@@ -228,7 +229,7 @@ def _prophet_forecast(prices: List[float], steps: int) -> np.ndarray:
     fc = m.predict(future).tail(steps)
     return fc[["yhat", "yhat_lower", "yhat_upper"]].values   # shape (steps, 3)
 
-
+@newrelic.agent.function_trace()
 def _sarima_forecast(prices: List[float], steps: int) -> np.ndarray:
     model = SARIMAX(prices, order=(1, 1, 1), enforce_stationarity=False, enforce_invertibility=False)
     fit = model.fit(disp=False)
@@ -239,7 +240,7 @@ def _sarima_forecast(prices: List[float], steps: int) -> np.ndarray:
     ci = ci_raw.values if hasattr(ci_raw, "values") else np.asarray(ci_raw)
     return np.column_stack([mean, ci[:, 0], ci[:, 1]])       # shape (steps, 3)
 
-
+@newrelic.agent.function_trace()
 def _rf_forecast(prices: List[float], steps: int) -> np.ndarray:
     """
     Random Forest: use a sliding window of the last 10 closes as features.
@@ -280,7 +281,7 @@ def _rf_forecast(prices: List[float], steps: int) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Main ensemble entry point
 # ---------------------------------------------------------------------------
-
+@newrelic.agent.function_trace()
 def run_ensemble_forecast(prices: List[float], symbol: str) -> Dict:
     """
     Returns:

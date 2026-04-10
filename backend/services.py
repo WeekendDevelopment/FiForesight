@@ -4,6 +4,7 @@ import logging
 import httpx
 import pandas as pd
 from datetime import datetime, timezone
+import newrelic.agent
 
 try:
     import yfinance as yf
@@ -162,6 +163,7 @@ class YFinanceService:
         """Convert SerpAPI-style 'NVDA:NASDAQ' → 'NVDA' for yfinance."""
         return symbol.split(":")[0].upper()
 
+    @newrelic.agent.function_trace()
     def fetch_history(self, symbol: str, period: str = "2y") -> pd.DataFrame:
         """
         Fetch daily OHLCV for `period` (e.g. '2y', '1y', '6mo').
@@ -210,6 +212,7 @@ class YFinanceService:
             logger.error(f"yfinance fetch_history error ({ticker}): {e}")
             return pd.DataFrame()
 
+    @newrelic.agent.function_trace()
     def fetch_info(self, symbol: str) -> dict:
         """
         Returns a dict of fundamentals:
@@ -247,6 +250,7 @@ class YFinanceService:
             logger.error(f"yfinance fetch_info error ({ticker}): {e}")
             return {}
 
+    @newrelic.agent.function_trace()
     def get_live_price(self, symbol: str) -> float:
         """Fast path to get the latest price from yfinance."""
         if not YFINANCE_AVAILABLE:
@@ -497,7 +501,7 @@ class AnalystJuryService:
     # ------------------------------------------------------------------
     # Internal: generic OpenAI-compatible POST  (Groq, xAI share this)
     # ------------------------------------------------------------------
-
+    @newrelic.agent.function_trace()
     async def _call_openai_compatible(
         self,
         base_url: str,
@@ -536,7 +540,7 @@ class AnalystJuryService:
     # ------------------------------------------------------------------
     # Internal: provider-specific wrappers
     # ------------------------------------------------------------------
-
+    @newrelic.agent.function_trace()
     async def _call_groq(self, model: str, system: str, user: str, max_tokens: int = 320) -> str:
         return await self._call_openai_compatible(
             base_url=self.GROQ_BASE_URL,
@@ -624,7 +628,7 @@ class AnalystJuryService:
     # ------------------------------------------------------------------
     # Public: dispatch one persona and return a structured verdict
     # ------------------------------------------------------------------
-
+    @newrelic.agent.function_trace()
     async def get_analyst_verdict(self, persona: dict, market_ctx: str) -> dict:
         """
         Dispatches a single analyst persona to its assigned provider and model.
