@@ -9,14 +9,15 @@ AI-driven quantitative financial forecasting SaaS. Ticker lookup → ensemble ML
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | Next.js 14, React 18, TypeScript, MUI 5.15, Recharts 2.12, Tailwind CSS, Axios |
+| Frontend | Next.js 16, React 19, TypeScript 6, MUI 7, Recharts 3, Tailwind CSS 4, Axios, Lucide React |
 | Backend | Python 3.12, FastAPI, Uvicorn |
 | ML/Forecasting | Prophet, SARIMAX (statsmodels), RandomForestRegressor (scikit-learn) |
 | Market Data | yfinance, SerpAPI (news/trending) |
-| AI | Google GenAI SDK — Gemini 2.5 Flash |
+| AI / LLM Jury | Groq API — Kimi K2, Llama 3.3 70B, Qwen3 32B (3-analyst jury system) |
 | Time-Series DB | InfluxDB |
+| Observability | New Relic APM (backend + frontend) |
 | Package Manager | pnpm (monorepo) |
-| Infra | Docker, Terraform, GitHub Actions |
+| Infra | Docker, Terraform, GitHub Actions, Koyeb, Oracle Cloud VM |
 
 ---
 
@@ -24,24 +25,40 @@ AI-driven quantitative financial forecasting SaaS. Ticker lookup → ensemble ML
 
 ```
 FiForesight/
-├── backend/          # FastAPI engine
-│   ├── config.py     # Env var loading
-│   ├── main.py       # Routes (/predict, /health, etc.)
-│   ├── models.py     # Pydantic schemas
-│   └── services.py   # yfinance, InfluxDB, Gemini, SerpAPI calls
+├── backend/
+│   ├── config.py          # Env var loading (InfluxDB, Groq, SerpAPI)
+│   ├── main.py            # Routes (/predict, /health, /debug)
+│   ├── models.py          # Pydantic schemas
+│   ├── services.py        # yfinance, InfluxDB, SerpAPI calls
+│   └── newrelic.ini       # New Relic APM config
 ├── frontend/
-│   ├── app/          # Next.js App Router
-│   │   ├── api/predict/route.ts  # Proxy to FastAPI :8000/predict
-│   │   ├── layout.tsx
-│   │   └── page.tsx  # Main dashboard
-│   ├── components/   # React components (charts, panels, etc.)
+│   ├── app/
+│   │   ├── api/
+│   │   │   ├── predict/route.ts   # POST proxy → FastAPI /predict
+│   │   │   └── compare/route.ts   # GET proxy → FastAPI /compare (stub)
+│   │   ├── layout.tsx             # Root layout + New Relic script injection
+│   │   └── page.tsx               # Main dashboard (~78KB monolith)
+│   ├── public/
+│   │   ├── newrelic.live.js       # New Relic browser agent (prod)
+│   │   └── newrelic.preview.js    # New Relic browser agent (preview)
 │   └── ...config files
 ├── .claude/
-│   └── FiForesight_Roadmap.md  # Source of truth for planned work
-├── terraform/        # Prod infra
-├── terraform-preview/# Staging infra
-├── dockerfile        # Multi-stage Docker build
-└── start_backend.js  # Cross-platform dev launcher
+│   └── FiForesight_Roadmap.md     # Source of truth for planned work
+├── .github/
+│   ├── workflows/
+│   │   ├── pull-request.yml       # PR: lint, build, docker, preview deploy
+│   │   ├── merge.yml              # Main: version, release, prod deploy
+│   │   └── docker-logs.yml        # Manual: fetch container logs
+│   ├── actions/                   # Custom composite actions
+│   │   ├── deploy-koyeb/          # Deploy to Koyeb
+│   │   ├── deploy-oracle/         # Deploy to Oracle Cloud VM
+│   │   ├── setup-secrets/         # Secret management
+│   │   └── terraform/             # Terraform plan/apply
+│   └── scripts/                   # Version generation scripts
+├── terraform/                     # Prod infra (Oracle, Koyeb)
+├── terraform-preview/             # Staging infra
+├── dockerfile                     # Multi-stage Docker build
+└── start_backend.js               # Cross-platform dev launcher
 ```
 
 ---
@@ -67,17 +84,18 @@ pnpm run build   # Next.js production build
 ## Environment Variables (backend `.env`)
 
 ```env
-FINNHUB_API_KEY=         # Required — market data
-GOOGLE_GENAI_API_KEY=    # Required — Gemini analyst notes
 INFLUXDB_URL=http://localhost:8086
 INFLUXDB_TOKEN=
 INFLUXDB_ORG=WeekendDevelopment
 INFLUXDB_BUCKET=FiForesightBucket
+GROQ_API_KEY=            # Required — LLM analyst jury (Kimi K2, Llama 70B, Qwen3 32B)
 SERP_API_KEY=            # Optional — news/trending
 PORT=8000
 ```
 
-Frontend: `BACKEND_URL=http://localhost:8000` (optional, has default in `route.ts`)
+Frontend env:
+- `BACKEND_URL=http://localhost:8000` (optional, has default in `route.ts`)
+- `NEXT_PUBLIC_APP_ENV=preview|live` (controls New Relic script loading)
 
 ---
 
@@ -89,11 +107,17 @@ User enters ticker
     → FastAPI /predict
       → Check InfluxDB (cached 2Y OHLCV)
         → Fallback: yfinance fetch + store
+      → Technical indicators: RSI, MACD, BB, SMA50/200, Support/Resistance
       → Ensemble forecast: Prophet + SARIMAX + RandomForest → high/low/confidence
-      → Gemini: analyst note (RSI, closes, forecast)
+      → LLM Analyst Jury (3 concurrent Groq calls via asyncio.gather):
+        → Kimi K2 (Macro & Risk Lens)
+        → Llama 3.3 70B (Growth Lens)
+        → Qwen3 32B (Quant Lens)
+        → Each returns: verdict, confidence, reasoning, target prices
       → SerpAPI: news headlines + trending symbols
-      → Response: 90-day history, fundamentals, indicators, news
+      → Response: history, fundamentals, indicators, forecasts, jury verdicts, news
   → Recharts renders: candlestick/line, RSI panel, MACD panel, BB/SMA overlays
+  → AnalystJuryPanel renders 3 analyst cards with ratings
 ```
 
 ---
@@ -109,18 +133,16 @@ User enters ticker
 
 ## Roadmap Status
 
-See `.claude/FiForesight_Roadmap.md` for full task list. Summary:
+See `.claude/FiForesight_Roadmap.md` for full task list. Jira project: **FIFO** on Atlassian.
 
-**Track 1 — UX/Indicators**: 7/10 done.
-- Pending: Candlestick chart mode, Multi-ticker comparison, Price alert system
-
-**Track 2 — Data Expansion**: 0/8 done.
-- News sentiment, Earnings markers, Options chain, Macro dashboard, Volume panel, Sector comparison, Social sentiment, International markets
-
-**Track 3 — Intelligence**: 0/9 done.
-- Support/resistance (DBSCAN), Pattern detection, Backtesting, Anomaly detection, LLM chat panel, Portfolio P&L, Risk metrics (Sharpe/Sortino/Beta), Custom alerts
-
-**Sequencing**: Track 1 → Track 2 → Track 3 (in order, Track 3 tasks build on each other)
+**7 Epics** (2 stories Done, 18 To Do):
+- **FIFO-5 ML & Forecasting** — Advanced indicators done (FIFO-7), ensemble improvements + forecast tracking pending
+- **FIFO-6 News & Sentiment** — SerpAPI integration, sentiment pipeline, AI analyst notes all pending
+- **FIFO-32 Infrastructure & DevOps** — HTTPS hardening, CI/CD improvements, monitoring pending
+- **FIFO-33 Testing & Quality** — 0% coverage today, target 70%+ (pytest, Vitest, Playwright)
+- **FIFO-34 Frontend Architecture** — Component decomposition of 78KB page.tsx, a11y, performance
+- **FIFO-35 User Auth** — Supabase auth, watchlists, alerts pending
+- **FIFO-101 LLM Analyst Jury** — 3-model jury system done (FIFO-102), self-hosted LLM + fine-tuning pending
 
 ---
 
@@ -142,6 +164,11 @@ See `.claude/FiForesight_Roadmap.md` for full task list. Summary:
 
 - No `.env.example` exists — document env vars in README manually.
 - InfluxDB is the primary data store; yfinance is fallback only. If InfluxDB is down, data still works but won't persist.
-- Gemini calls are non-blocking — analyst note falls back to empty string on failure.
+- LLM jury calls are concurrent via `asyncio.gather()` — each analyst falls back gracefully on failure with robust JSON parsing + plain-text extraction fallback.
 - `strict: false` in tsconfig — TypeScript is not fully strict.
 - pnpm workspace root has no source — all code is in `frontend/` or `backend/`.
+- `page.tsx` is ~78KB monolith — decomposition is tracked in Jira (FIFO-58).
+- `FINNHUB_API_KEY` and `GOOGLE_GENAI_API_KEY` have been removed — replaced by `GROQ_API_KEY` for the jury system.
+- `frontend/app/api/compare/route.ts` exists but backend `/compare` endpoint is not yet implemented.
+- New Relic APM is active: `newrelic.ini` for backend, conditional script injection in `layout.tsx` based on `NEXT_PUBLIC_APP_ENV`.
+- Deploys: PRs auto-deploy to preview (`fiforesight-preview.duckdns.org`), merges to main deploy to prod (`fiforesight.duckdns.org` + Koyeb).
