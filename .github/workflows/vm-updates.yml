@@ -1,0 +1,67 @@
+name: VM System Updates
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Every day at midnight
+  workflow_dispatch:
+
+jobs:
+  update-vm:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - live
+          - preview
+    permissions:
+      contents: read
+    environment:
+      name: ${{ matrix.environment }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.14.8
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform Init
+        working-directory: ${{ (matrix.environment == 'preview' && 'terraform-preview') || 'terraform' }}
+        shell: bash
+        run: terraform init
+
+      - name: Get Terraform Outputs
+        id: tf_outputs
+        working-directory: ${{ (matrix.environment == 'preview' && 'terraform-preview') || 'terraform' }}
+        run: |
+          PUBLIC_IP=$(terraform output -raw public_ip)
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+
+      - name: Run system updates
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ steps.tf_outputs.outputs.public_ip }}
+          username: ubuntu
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          script: |
+            sudo apt update -y
+            sudo unattended-upgrade -v
+            sudo apt autoremove -y
+
+      - name: Reboot if required
+        uses: appleboy/ssh-action@v1.0.3
+        continue-on-error: true   # SSH dies mid-reboot, that's fine
+        with:
+          host: ${{ steps.tf_outputs.outputs.public_ip }}
+          username: ubuntu
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          script: |
+            if [ -f /var/run/reboot-required ]; then
+              echo "Rebooting..."
+              sudo reboot
+            else
+              echo "No reboot needed."
+            fi

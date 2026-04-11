@@ -3,7 +3,10 @@ import logging
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, timezone
+
 from typing import List, Dict, Optional
+
+import newrelic.agent
 
 # Suppress Prophet's "Importing plotly failed" warning — we don't use Prophet's
 # built-in plot() / plot_components() methods; all charting is done by Recharts.
@@ -34,7 +37,7 @@ FORECAST_DAYS = 5
 # ---------------------------------------------------------------------------
 # Technical Indicators  (close-based — correct by definition for RSI/MACD/BB/SMA)
 # ---------------------------------------------------------------------------
-
+@newrelic.agent.function_trace()
 def calculate_macd(
     prices: List[float],
     fast: int = 12,
@@ -71,7 +74,7 @@ def calculate_macd(
     )
     return result
 
-
+@newrelic.agent.function_trace()
 def calculate_bollinger_bands(
     prices: List[float],
     window: int = 20,
@@ -100,7 +103,7 @@ def calculate_bollinger_bands(
     )
     return result
 
-
+@newrelic.agent.function_trace()
 def calculate_sma_series(prices: List[float], period: int) -> List:
     """Returns SMA array for given period, None where insufficient data."""
     logger.info(
@@ -113,7 +116,7 @@ def calculate_sma_series(prices: List[float], period: int) -> List:
     logger.info(f"[SMA{period}] ✓ complete — latest SMA{period}={last_val}")
     return result
 
-
+@newrelic.agent.function_trace()
 def calculate_rsi_series(prices: List[float], periods: int = 14) -> List:
     """
     Returns full RSI series (same length as prices), None where insufficient data.
@@ -133,7 +136,7 @@ def calculate_rsi_series(prices: List[float], periods: int = 14) -> List:
     logger.info(f"[RSI] ✓ rsi_series complete — latest RSI={last_rsi}")
     return result
 
-
+@newrelic.agent.function_trace()
 def calculate_rsi(prices: List[float], periods: int = 14) -> float:
     """
     Scalar RSI using EWM (Wilder smoothing) — identical method to calculate_rsi_series
@@ -170,7 +173,7 @@ def calculate_rsi(prices: List[float], periods: int = 14) -> float:
     logger.info(f"[RSI] ✓ RSI={rsi_val:.2f} (ewm_gain={g:.4f}, ewm_loss={ls:.4f})")
     return rsi_val
 
-
+@newrelic.agent.function_trace()
 def calculate_support_resistance(
     closes: List[float],
     highs: Optional[List[float]] = None,
@@ -260,7 +263,7 @@ def calculate_support_resistance(
     )
     return {"support": support_levels, "resistance": resistance_levels}
 
-
+@newrelic.agent.function_trace()
 def calculate_model_stats(prices: List[float]) -> Dict:
     """
     Returns a dict of descriptive statistics used both in the response
