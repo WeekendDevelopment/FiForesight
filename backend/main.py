@@ -5,6 +5,7 @@ import traceback
 from datetime import datetime, timezone
 from typing import List
 
+import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, Body, Request
 from fastapi.responses import JSONResponse
@@ -117,13 +118,28 @@ async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict)
         f"[Confidence: {forecast.get('conf', 'low')}]\n"
         f"Write a concise 2-sentence analyst note covering the price outlook and the key risk."
     )
+    logger.info(
+        f"[AI-NOTE] Requesting header note — "
+        f"model=llama-3.3-70b-versatile, symbol={symbol}, RSI={rsi:.1f}, "
+        f"forecast_high=${forecast['high']:.2f}, forecast_low=${forecast['low']:.2f}, "
+        f"conf={forecast.get('conf', 'low')} | "
+        f"data_sent: last 20 closes of {len(closes)} total"
+    )
     try:
         raw = await analyst_jury_svc._call_groq(
             "llama-3.3-70b-versatile", system, prompt
         )
-        return raw.strip()
+        note = raw.strip()
+        logger.info(
+            f"[AI-NOTE] ✓ Header note received — {len(note)} chars | "
+            f"ensemble note fallback SKIPPED"
+        )
+        return note
     except Exception as e:
-        logger.warning(f"Groq analyst note failed: {e}")
+        logger.warning(
+            f"[AI-NOTE] ✗ Groq header note failed: {e} — "
+            f"FALLBACK: using ensemble note ({len(forecast['note'])} chars)"
+        )
         return forecast["note"]
 
 
@@ -350,38 +366,63 @@ async def predict(payload: dict = Body(...)):
     symbol = payload.get("data", "SPY").upper()
     now    = datetime.now(timezone.utc)
 
-    # 1. Fetch OHLCV history
-    if not influx_svc.has_recent_data(symbol):
-        df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "2y")
-        if not df.empty:
-            try:
-                df = DataCleaner.clean(df)
-            except Exception as e:
-                logger.warning(f"DataCleaner.clean failed for {symbol}: {e}")
-                df = df.__class__()
-            if not df.empty:
-                await asyncio.to_thread(influx_svc.write_ohlcv_batch, symbol, df)
+    logger.info(f"[REQUEST] ════════════════════════════════════════════")
+    logger.info(f"[REQUEST] /predict → symbol={symbol} | {now.isoformat()}")
+    logger.info(f"[REQUEST] ════════════════════════════════════════════")
 
-    historical_prices: list = await asyncio.to_thread(influx_svc.query_history, symbol)
+    # ── Step 1. Fetch OHLCV history ───────────────────────────────────────────
+    # FIX (Issue 4): yfinance is always the primary historical source.
+    # InfluxDB Cloud has a 29-day retention window — it cannot hold 2y of data.
+    # query_history(365d) was returning only ~21 rows, always triggering the
+    # yfinance fallback anyway (double-fetch every request). Now:
+    #   • yfinance 2y fetch runs once unconditionally (models need 500+ rows)
+    #   • has_recent_data() guards the InfluxDB write — skip if already fresh
+    #     (avoids redundant batch writes on repeated requests within 20h)
+    #   • InfluxDB write_ohlcv_batch writes the last 29d for downstream analytics
+    #   • InfluxDB write_price (Step 7) still tracks intraday live-price history
+    logger.info(f"[STEP-1] Fetching 2y OHLCV history from yfinance for {symbol} ...")
+    df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "2y")
 
-    # Fallback: yfinance directly if InfluxDB has insufficient history
-    if not historical_prices or len(historical_prices) < 60:
-        df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "2y")
-        if not df.empty:
-            try:
-                df = DataCleaner.clean(df)
-            except Exception as e:
-                logger.warning(f"DataCleaner.clean fallback failed for {symbol}: {e}")
-                df = df.__class__()
-            if not df.empty:
-                historical_prices = DataCleaner.to_history_list(df)
-
-    if not historical_prices:
+    if df.empty:
+        logger.error(f"[STEP-1] yfinance returned empty df for {symbol} — returning 404")
         raise HTTPException(status_code=404, detail=f"No data found for {symbol}.")
+
+    try:
+        df = DataCleaner.clean(df)
+    except Exception as e:
+        logger.warning(f"[STEP-1] DataCleaner.clean failed for {symbol}: {e} — using raw df")
+
+    if df.empty:
+        logger.error(f"[STEP-1] DataCleaner returned empty df for {symbol} — returning 404")
+        raise HTTPException(status_code=404, detail=f"No usable data for {symbol} after cleaning.")
+
+    historical_prices: list = DataCleaner.to_history_list(df)
+    logger.info(
+        f"[STEP-1] ✓ yfinance fetch complete — {len(historical_prices)} rows | "
+        f"range: {str(historical_prices[0]['_time'])[:10]} → "
+        f"{str(historical_prices[-1]['_time'])[:10]} | "
+        f"close: ${historical_prices[0]['close']:.2f} → ${historical_prices[-1]['close']:.2f}"
+    )
+
+    # Cache recent rows to InfluxDB (last 29d) for downstream analytics
+    logger.info(f"[STEP-1] [INFLUXDB] Checking cache freshness for {symbol} ...")
+    has_fresh = influx_svc.has_recent_data(symbol)
+    if not has_fresh:
+        logger.info(
+            f"[STEP-1] [INFLUXDB] Cache MISS — "
+            f"writing last 29d rows to InfluxDB for analytics ..."
+        )
+        await asyncio.to_thread(influx_svc.write_ohlcv_batch, symbol, df)
+    else:
+        logger.info(
+            f"[STEP-1] [INFLUXDB] Cache HIT — "
+            f"InfluxDB write SKIPPED (fresh data already present)"
+        )
 
     historical_prices.sort(key=lambda x: x["_time"])
 
-    # 2. Live price
+    # ── Step 2. Live price ────────────────────────────────────────────────────
+    logger.info(f"[STEP-2] Fetching live price for {symbol} ...")
     live_price = await asyncio.to_thread(yf_svc.get_live_price, symbol)
     if live_price > 0:
         historical_prices.append({
@@ -389,10 +430,19 @@ async def predict(payload: dict = Body(...)):
             "open":  live_price, "high": live_price,
             "low":   live_price, "volume": 0.0,
         })
+        logger.info(
+            f"[STEP-2] ✓ Live price ${live_price:.2f} injected as latest bar "
+            f"(total bars now: {len(historical_prices)})"
+        )
     else:
         live_price = float(historical_prices[-1]["close"])
+        logger.info(
+            f"[STEP-2] Live price unavailable — "
+            f"using last historical close: ${live_price:.2f}"
+        )
 
-    # 3. Fundamentals
+    # ── Step 3. Fundamentals ─────────────────────────────────────────────────
+    logger.info(f"[STEP-3] Fetching fundamentals for {symbol} ...")
     info = await asyncio.to_thread(yf_svc.fetch_info, symbol)
     metrics = {
         "market_cap": _fmt_market_cap(info.get("market_cap")),
@@ -403,25 +453,79 @@ async def predict(payload: dict = Body(...)):
         "sector":     info.get("sector",    "N/A"),
         "currency":   info.get("currency",  "USD"),
     }
+    logger.info(
+        f"[STEP-3] ✓ Fundamentals — sector={metrics['sector']}, "
+        f"market_cap={metrics['market_cap']}, pe={metrics['pe_ratio']}, "
+        f"yield={metrics['yield']}, 52w={metrics['range_52w']}"
+    )
 
-    # 4. Analytics & ensemble forecast
-    closes   = [float(p["close"]) for p in historical_prices]
-    rsi      = calculate_rsi(closes)
-    forecast = run_ensemble_forecast(closes, symbol)
+    # ── Step 4. Analytics & ensemble forecast ────────────────────────────────
+    # FIX (Issue 3): extract full OHLCV arrays — all are now passed to models
+    # so Prophet/SARIMAX/RF can use volume and intraday range as additional context.
+    closes  = [float(p["close"])              for p in historical_prices]
+    opens   = [float(p.get("open",  p["close"])) for p in historical_prices]
+    highs   = [float(p.get("high",  p["close"])) for p in historical_prices]
+    lows    = [float(p.get("low",   p["close"])) for p in historical_prices]
 
-    # 4b. Technical indicators (full series, sliced to chart window later)
+    # Replace zero-volume rows (e.g. live-price injection) with rolling mean
+    # so the synthetic bar doesn't skew normalisation inside the models.
+    volumes_raw  = [float(p.get("volume", 0)) for p in historical_prices]
+    nonzero_vols = [v for v in volumes_raw if v > 0]
+    vol_fill     = float(np.mean(nonzero_vols)) if nonzero_vols else 1.0
+    volumes      = [v if v > 0 else vol_fill for v in volumes_raw]
+
+    zero_vol_count = sum(1 for v in volumes_raw if v == 0)
+    logger.info(
+        f"[STEP-4] OHLCV arrays built — {len(closes)} rows | "
+        f"zero-volume rows filled with mean ({zero_vol_count} filled, mean_vol={vol_fill:.0f}) | "
+        f"last OHLCV: O=${opens[-1]:.2f} H=${highs[-1]:.2f} "
+        f"L=${lows[-1]:.2f} C=${closes[-1]:.2f} V={volumes[-1]:.0f}"
+    )
+
+    rsi = calculate_rsi(closes)
+    logger.info(f"[STEP-4] RSI scalar computed: {rsi:.2f}")
+
+    logger.info(
+        f"[STEP-4] Running ensemble forecast (Prophet + SARIMAX + RF) "
+        f"with full OHLCV context ..."
+    )
+    forecast = run_ensemble_forecast(
+        closes, symbol,
+        opens=opens, highs=highs, lows=lows, volumes=volumes,
+    )
+
+    # ── Step 4b. Technical indicators (close-based — correct by definition) ──
+    logger.info(
+        f"[STEP-4b] Computing technical indicators — "
+        f"MACD(12,26,9), BB(window=20, std=2), SMA50, SMA200 ..."
+    )
     macd_data = calculate_macd(closes)
     bb_data   = calculate_bollinger_bands(closes)
     sma50     = calculate_sma_series(closes, 50)
     sma200    = calculate_sma_series(closes, 200)
+    logger.info(f"[STEP-4b] ✓ All indicator series computed ({len(closes)} points each)")
 
-    # Fire news fetch concurrently — started now, awaited after jury
+    # ── Step 4c. Fire news fetch concurrently ────────────────────────────────
+    logger.info(f"[STEP-4c] Launching SerpAPI news task concurrently (non-blocking) ...")
     serp_task = asyncio.create_task(serp_svc.fetch_data(symbol))
 
-    # Support/resistance — computed before jury so levels can be cited
-    sr_levels = calculate_support_resistance(closes)
+    # ── Support/resistance — now uses intraday highs/lows ────────────────────
+    logger.info(
+        f"[STEP-4d] Computing support/resistance levels "
+        f"(using intraday High/Low extrema) ..."
+    )
+    sr_levels = calculate_support_resistance(closes, highs=highs, lows=lows)
 
-    # 5. AI analyst note + jury (concurrent)
+    # ── Step 5. AI analyst note + jury (concurrent) ──────────────────────────
+    logger.info(
+        f"[STEP-5] Dispatching AI header note (Groq llama-3.3-70b) + "
+        f"analyst jury ({len(ANALYST_PERSONAS)} personas) concurrently ..."
+    )
+    logger.info(
+        f"[STEP-5] Data sent to AI layer — symbol={symbol}, RSI={rsi:.2f}, "
+        f"forecast_high=${forecast['high']:.2f}, forecast_low=${forecast['low']:.2f}, "
+        f"conf={forecast['conf']}, ann_vol={forecast.get('stats', {}).get('ann_volatility_pct', 'N/A')}%"
+    )
     note, jury = await asyncio.gather(
         _ai_note(symbol, closes, rsi, forecast),
         _run_analyst_jury(
@@ -432,8 +536,18 @@ async def predict(payload: dict = Body(...)):
             news_task=serp_task,
         ),
     )
+    logger.info(
+        f"[STEP-5] ✓ AI layer complete — "
+        f"note={len(note)} chars | jury={len(jury)} verdicts"
+    )
+    for v in jury:
+        logger.info(
+            f"[STEP-5] [JURY/{v['id']}] rating={v['rating']}, "
+            f"confidence={v['confidence']}%, model={v['model']}"
+        )
 
-    # 6. News + trending via SerpAPI
+    # ── Step 6. News + trending via SerpAPI ──────────────────────────────────
+    logger.info(f"[STEP-6] Awaiting SerpAPI news task result ...")
     news: list     = []
     trending: list = []
     try:
@@ -462,15 +576,28 @@ async def predict(payload: dict = Body(...)):
                         "change":   str(t.get("price_change_percentage", "0%")),
                         "category": category,
                     })
+        logger.info(
+            f"[STEP-6] ✓ SerpAPI — news={len(news)} articles, "
+            f"trending={len(trending)} tickers"
+        )
     except Exception as e:
-        logger.warning(f"SerpAPI fetch failed: {e}")
+        logger.warning(f"[STEP-6] SerpAPI fetch failed: {e}")
 
-    # 7. Background price snapshot
+    # ── Step 7. Background price snapshot ────────────────────────────────────
+    logger.info(
+        f"[STEP-7] Scheduling background InfluxDB price snapshot — "
+        f"{symbol} @ ${live_price:.2f}"
+    )
     asyncio.create_task(asyncio.to_thread(influx_svc.write_price, symbol, live_price))
 
-    # 8. Chart history (last 90 trading days) with indicator slices
+    # ── Step 8. Build chart history (last 90 trading days) ───────────────────
     total       = len(historical_prices)
     slice_start = max(0, total - 90)
+    logger.info(
+        f"[STEP-8] Building chart history — total_bars={total}, "
+        f"chart_window=90, slice_start={slice_start} "
+        f"(showing bars {slice_start}–{total - 1})"
+    )
     history = []
     for idx, p in enumerate(historical_prices[slice_start:], start=slice_start):
         history.append({
@@ -493,6 +620,20 @@ async def predict(payload: dict = Body(...)):
     # RSI series — last 90 points aligned to chart window
     rsi_full   = calculate_rsi_series(closes)
     rsi_series = rsi_full[slice_start:]
+    logger.info(
+        f"[STEP-8] ✓ Chart history built — {len(history)} bars | "
+        f"RSI series: {len(rsi_series)} points"
+    )
+
+    # ── Response summary ──────────────────────────────────────────────────────
+    logger.info(
+        f"[RESPONSE] {symbol} — price=${live_price:.2f}, RSI={rsi:.2f} | "
+        f"forecast: high=${forecast['high']:.2f}, low=${forecast['low']:.2f}, "
+        f"conf={forecast['conf']} | "
+        f"history={len(history)} bars | news={len(news)} | trending={len(trending)} | "
+        f"jury={len(jury)} analysts"
+    )
+    logger.info(f"[REQUEST] ════════════════ /predict ← {symbol} complete ════════════════")
 
     return PredictionResponse(
         symbol       = symbol,
