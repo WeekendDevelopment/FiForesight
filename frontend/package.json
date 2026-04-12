@@ -21,16 +21,16 @@
     "recharts": "^3.8.1"
   },
   "devDependencies": {
-    "@next/eslint-plugin-next": "^16.2.2",
+    "@next/eslint-plugin-next": "^16.2.3",
     "@tailwindcss/postcss": "^4.2.2",
-    "@types/node": "^25.5.2",
+    "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.4.19",
-    "eslint": "^9.39.4",
-    "eslint-config-next": "16.2.2",
+    "eslint": "^10.2.0",
+    "eslint-config-next": "16.2.3",
     "eslint-plugin-react": "^7.37.5",
-    "postcss": "^8.4.38",
+    "postcss": "^8.5.9",
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.2"
   }
