@@ -659,8 +659,8 @@ def run_ensemble_forecast(
     hl_ranges: Optional[List[float]] = None
     if ohlcv_available:
         hl_ranges = [
-            (h - l) / c if c > 0 else 0.0
-            for h, l, c in zip(highs, lows, closes)
+            (h - lo) / c if c > 0 else 0.0
+            for h, lo, c in zip(highs, lows, closes)
         ]
         logger.info(
             f"[ENSEMBLE] HL range (intraday vol proxy = (H-L)/C) — "

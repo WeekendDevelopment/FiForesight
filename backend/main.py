@@ -366,9 +366,9 @@ async def predict(payload: dict = Body(...)):
     symbol = payload.get("data", "SPY").upper()
     now    = datetime.now(timezone.utc)
 
-    logger.info(f"[REQUEST] ════════════════════════════════════════════")
+    logger.info("[REQUEST] ════════════════════════════════════════════")
     logger.info(f"[REQUEST] /predict → symbol={symbol} | {now.isoformat()}")
-    logger.info(f"[REQUEST] ════════════════════════════════════════════")
+    logger.info("[REQUEST] ════════════════════════════════════════════")
 
     # ── Step 1. Fetch OHLCV history ───────────────────────────────────────────
     # FIX (Issue 4): yfinance is always the primary historical source.
@@ -409,14 +409,14 @@ async def predict(payload: dict = Body(...)):
     has_fresh = influx_svc.has_recent_data(symbol)
     if not has_fresh:
         logger.info(
-            f"[STEP-1] [INFLUXDB] Cache MISS — "
-            f"writing last 29d rows to InfluxDB for analytics ..."
+            "[STEP-1] [INFLUXDB] Cache MISS — "
+            "writing last 29d rows to InfluxDB for analytics ..."
         )
         await asyncio.to_thread(influx_svc.write_ohlcv_batch, symbol, df)
     else:
         logger.info(
-            f"[STEP-1] [INFLUXDB] Cache HIT — "
-            f"InfluxDB write SKIPPED (fresh data already present)"
+            "[STEP-1] [INFLUXDB] Cache HIT — "
+            "InfluxDB write SKIPPED (fresh data already present)"
         )
 
     historical_prices.sort(key=lambda x: x["_time"])
@@ -486,8 +486,9 @@ async def predict(payload: dict = Body(...)):
     logger.info(f"[STEP-4] RSI scalar computed: {rsi:.2f}")
 
     logger.info(
-        f"[STEP-4] Running ensemble forecast (Prophet + SARIMAX + RF) "
-        f"with full OHLCV context ..."
+        "[STEP-4] Running ensemble forecast (Prophet + SARIMAX + RF) "
+        "with full OHLCV context ..."
+        + (f" | RL blending active ({rl_sample_count} samples)" if rl_sample_count > 0 else "")
     )
     forecast = run_ensemble_forecast(
         closes, symbol,
@@ -496,8 +497,8 @@ async def predict(payload: dict = Body(...)):
 
     # ── Step 4b. Technical indicators (close-based — correct by definition) ──
     logger.info(
-        f"[STEP-4b] Computing technical indicators — "
-        f"MACD(12,26,9), BB(window=20, std=2), SMA50, SMA200 ..."
+        "[STEP-4b] Computing technical indicators — "
+        "MACD(12,26,9), BB(window=20, std=2), SMA50, SMA200 ..."
     )
     macd_data = calculate_macd(closes)
     bb_data   = calculate_bollinger_bands(closes)
@@ -506,13 +507,13 @@ async def predict(payload: dict = Body(...)):
     logger.info(f"[STEP-4b] ✓ All indicator series computed ({len(closes)} points each)")
 
     # ── Step 4c. Fire news fetch concurrently ────────────────────────────────
-    logger.info(f"[STEP-4c] Launching SerpAPI news task concurrently (non-blocking) ...")
+    logger.info("[STEP-4c] Launching SerpAPI news task concurrently (non-blocking) ...")
     serp_task = asyncio.create_task(serp_svc.fetch_data(symbol))
 
     # ── Support/resistance — now uses intraday highs/lows ────────────────────
     logger.info(
-        f"[STEP-4d] Computing support/resistance levels "
-        f"(using intraday High/Low extrema) ..."
+        "[STEP-4d] Computing support/resistance levels "
+        "(using intraday High/Low extrema) ..."
     )
     sr_levels = calculate_support_resistance(closes, highs=highs, lows=lows)
 
@@ -547,7 +548,7 @@ async def predict(payload: dict = Body(...)):
         )
 
     # ── Step 6. News + trending via SerpAPI ──────────────────────────────────
-    logger.info(f"[STEP-6] Awaiting SerpAPI news task result ...")
+    logger.info("[STEP-6] Awaiting SerpAPI news task result ...")
     news: list     = []
     trending: list = []
     try:
