@@ -193,7 +193,12 @@ def calculate_support_resistance(
 
     Falls back to close-based detection if highs/lows are not supplied.
     """
-    using_ohlcv = highs is not None and lows is not None and len(highs) == len(closes)
+    using_ohlcv = (
+        highs is not None
+        and lows is not None
+        and len(highs) == len(closes)
+        and len(lows) == len(closes)
+    )
     logger.info(
         f"[S/R] calculate_support_resistance — input: {len(closes)} closes | "
         f"ohlcv_mode={'YES — using High for resistance, Low for support' if using_ohlcv else 'NO — close-based fallback'} | "
@@ -209,8 +214,8 @@ def calculate_support_resistance(
         return {"support": [], "resistance": []}
 
     # Use intraday lows for support, highs for resistance when available
-    support_src    = np.array((lows    or closes)[-lookback:])
-    resistance_src = np.array((highs   or closes)[-lookback:])
+    support_src    = np.array((lows  if using_ohlcv else closes)[-lookback:])
+    resistance_src = np.array((highs if using_ohlcv else closes)[-lookback:])
     close_arr      = np.array(closes[-lookback:])
 
     supports:    List[float] = []
@@ -608,6 +613,8 @@ def run_ensemble_forecast(
     highs: Optional[List[float]] = None,
     lows: Optional[List[float]] = None,
     volumes: Optional[List[float]] = None,
+    historical_weights: Optional[List[float]] = None,
+    sample_count: int = 0,
 ) -> Dict:
     """
     Ensemble of Prophet + SARIMAX + RandomForest forecasting closing price.
@@ -700,6 +707,8 @@ def run_ensemble_forecast(
             "forecast_days": days, "high": overall_high, "low": overall_low,
             "note": "Insufficient history for full model run — using volatility estimate.",
             "conf": "low", "stats": stats,
+            "weights":       {"prophet": 0.0, "sarima": 0.0, "rf": 0.0},
+            "per_model_d1":  {"prophet": None, "sarima": None, "rf": None},
         }
 
     logger.info(
@@ -760,13 +769,15 @@ def run_ensemble_forecast(
             })
         return {
             "forecast_days": days,
-            "high":  max(d["high"] for d in days),
-            "low":   min(d["low"]  for d in days),
-            "note":  f"Model errors: {'; '.join(errors)}. Using fallback estimate.",
-            "conf":  "low", "stats": stats,
+            "high":          max(d["high"] for d in days),
+            "low":           min(d["low"]  for d in days),
+            "note":          f"Model errors: {'; '.join(errors)}. Using fallback estimate.",
+            "conf":          "low", "stats": stats,
+            "weights":       {"prophet": 0.0, "sarima": 0.0, "rf": 0.0},
+            "per_model_d1":  {"prophet": None, "sarima": None, "rf": None},
         }
 
-    # ── Dynamic weights: inverse day-1 error ─────────────────────────────────
+    # ── Dynamic weights: inverse day-1 error (realtime) ──────────────────────
     raw_weights = []
     for fc in [p_fc, s_fc, r_fc]:
         if fc is None:
@@ -775,13 +786,40 @@ def run_ensemble_forecast(
             err = abs(fc[0, 0] - last_price)
             raw_weights.append(1.0 / (err + 1e-6))
 
-    total = sum(raw_weights)
-    w     = [rw / total for rw in raw_weights]
+    rt_total    = sum(raw_weights)
+    realtime_w  = [rw / rt_total if rt_total > 0 else 0.0 for rw in raw_weights]
 
-    logger.info(
-        f"[ENSEMBLE] Inverse-error weighting — "
-        f"method: w = 1/(|day1_pred - last_price| + 1e-6), then normalised"
-    )
+    # ── Blend with historical accuracy weights (RL feedback) ─────────────────
+    # α ramps 0→0.7 over the first 10 resolved samples.
+    # historical_weights are derived from inverse per-model MAE stored in InfluxDB.
+    if (
+        historical_weights is not None
+        and len(historical_weights) == 3
+        and sample_count > 0
+    ):
+        alpha   = min(0.7, sample_count / 10.0 * 0.7)
+        blended = [
+            alpha * hw + (1.0 - alpha) * rw
+            for hw, rw in zip(historical_weights, realtime_w)
+        ]
+        # Zero out any model that failed (keep realtime zero respected)
+        blended = [b if rt > 0 else 0.0 for b, rt in zip(blended, realtime_w)]
+        b_total = sum(blended)
+        w       = [b / b_total if b_total > 0 else 0.0 for b in blended]
+        logger.info(
+            f"[ENSEMBLE] RL weight blending — α={alpha:.2f} ({sample_count} samples) | "
+            f"historical: {[f'{v:.3f}' for v in historical_weights]} | "
+            f"realtime:   {[f'{v:.3f}' for v in realtime_w]} | "
+            f"blended:    {[f'{v:.3f}' for v in w]}"
+        )
+    else:
+        w = realtime_w
+        logger.info(
+            "[ENSEMBLE] Realtime inverse-error weighting — "
+            "w = 1/(|day1_pred - last_price| + 1e-6), normalised"
+            + (" | RL blending SKIPPED (no historical samples yet)" if not historical_weights else "")
+        )
+
     for label, fc, wi, rw in zip(
         ["Prophet", "SARIMA ", "RF     "], [p_fc, s_fc, r_fc], w, raw_weights
     ):
@@ -895,4 +933,10 @@ def run_ensemble_forecast(
         "note":          note,
         "conf":          conf_label,
         "stats":         stats,
+        "weights":       {"prophet": w[0], "sarima": w[1], "rf": w[2]},
+        "per_model_d1":  {
+            "prophet": float(p_fc[0, 0]) if p_fc is not None else None,
+            "sarima":  float(s_fc[0, 0]) if s_fc is not None else None,
+            "rf":      float(r_fc[0, 0]) if r_fc is not None else None,
+        },
     }

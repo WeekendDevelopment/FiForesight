@@ -2,7 +2,7 @@
 import asyncio
 import logging
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List
 
 import numpy as np
@@ -18,7 +18,7 @@ from models import (
     calculate_support_resistance,
 )
 from services import (
-    DataCleaner, AnalystJuryService, InfluxService,
+    DataCleaner, AnalystJuryService, ForecastStore, InfluxService,
     ANALYST_PERSONAS,
     SerpService, YFinanceService,
 )
@@ -47,6 +47,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 # Services
 # ---------------------------------------------------------------------------
 influx_svc       = InfluxService()
+forecast_store   = ForecastStore(influx_svc)
 serp_svc         = SerpService()
 yf_svc           = YFinanceService()
 analyst_jury_svc = AnalystJuryService()
@@ -158,6 +159,7 @@ async def _run_analyst_jury(
     sr_levels: dict,
     *,
     news_task=None,
+    track_record: str = "",
 ) -> List[dict]:
     """
     Run all 3 analyst personas concurrently via AnalystJuryService.
@@ -279,6 +281,7 @@ async def _run_analyst_jury(
         f"Volume: {vol_line}\n"
         f"Support: {sup_str} | Resistance: {res_str}\n"
         f"{news_block}"
+        + (f"{track_record}\n" if track_record else "")
     )
 
     # ------------------------------------------------------------------
@@ -309,6 +312,166 @@ async def _run_analyst_jury(
             verdicts.append(r)
 
     return verdicts
+
+
+# ---------------------------------------------------------------------------
+# RL feedback: resolve past forecasts against actual closes
+# ---------------------------------------------------------------------------
+
+async def resolve_past_forecasts(symbol: str) -> None:
+    """
+    Background task — matches forecast records against actual market closes,
+    then writes/updates model_accuracy in InfluxDB.
+
+    Runs once per /predict request (non-blocking, fire-and-forget).
+    """
+    try:
+        logger.info(f"[RL] resolve_past_forecasts — starting for {symbol}")
+
+        records = await asyncio.to_thread(
+            forecast_store.query_forecast_records, symbol, 10
+        )
+        if not records:
+            logger.info(f"[RL] No forecast records to resolve for {symbol}")
+            return
+
+        existing_outcomes = await asyncio.to_thread(
+            forecast_store.query_price_outcomes, symbol, 15
+        )
+
+        # Fetch 30d yfinance history → build date → actual_close map
+        df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "30d")
+        actual_map: dict = {}
+        if not df.empty:
+            for ts, row in df.iterrows():
+                actual_map[ts.date()] = float(
+                    row.get("Close", row.get("close", 0)) or 0
+                )
+
+        # Merge already-stored outcomes (takes precedence)
+        actual_map.update(existing_outcomes)
+
+        now_date = datetime.now(timezone.utc).date()
+        new_outcomes: list = []
+        errors_per_model: dict = {"prophet": [], "sarima": [], "rf": []}
+        band_hits: list = []  # 1=actual inside [low,high], 0=missed
+
+        for rec in records:
+            pred_time = rec.get("_time")
+            if pred_time is None:
+                continue
+            pred_date = pred_time.date()
+
+            # Find first market day strictly after the prediction date
+            target = pred_date + timedelta(days=1)
+            while target.weekday() >= 5:       # skip weekend
+                target += timedelta(days=1)
+
+            # Skip if target hasn't passed yet
+            if target >= now_date:
+                continue
+
+            # If not in actual_map, try up to 3 forward days (holidays)
+            if target not in actual_map:
+                for offset in range(1, 4):
+                    candidate = target + timedelta(days=offset)
+                    if candidate in actual_map:
+                        target = candidate
+                        break
+                else:
+                    continue  # still can't resolve
+
+            actual_close = actual_map[target]
+            if actual_close <= 0:
+                continue
+
+            # Write outcome if not already stored
+            if target not in existing_outcomes:
+                outcome_dt = datetime(
+                    target.year, target.month, target.day,
+                    tzinfo=timezone.utc
+                )
+                new_outcomes.append((outcome_dt, actual_close))
+
+            # Per-model day-1 errors
+            for model_name, field_key in [
+                ("prophet", "p_d1"),
+                ("sarima",  "s_d1"),
+                ("rf",      "r_d1"),
+            ]:
+                pred_val = float(rec.get(field_key, 0) or 0)
+                if pred_val > 0:
+                    errors_per_model[model_name].append(
+                        abs(pred_val - actual_close)
+                    )
+                    logger.info(
+                        f"[RL] {symbol}/{model_name}: pred={pred_val:.2f}, "
+                        f"actual={actual_close:.2f}, "
+                        f"err={abs(pred_val - actual_close):.4f} ({target})"
+                    )
+
+            # Band accuracy — did actual price land inside [low, high]?
+            e_d1_high = float(rec.get("e_d1_high", 0) or 0)
+            e_d1_low  = float(rec.get("e_d1_low",  0) or 0)
+            if e_d1_high > 0 and e_d1_low > 0 and actual_close > 0:
+                hit = 1 if e_d1_low <= actual_close <= e_d1_high else 0
+                band_hits.append(hit)
+                logger.info(
+                    f"[RL] {symbol} band check: actual=${actual_close:.2f} "
+                    f"vs [{e_d1_low:.2f}-{e_d1_high:.2f}] → {'HIT' if hit else 'MISS'}"
+                )
+
+        # Persist new outcomes
+        for outcome_dt, actual_close in new_outcomes:
+            await asyncio.to_thread(
+                forecast_store.write_price_outcome, symbol, outcome_dt, actual_close
+            )
+
+        # Update model accuracy (exponential decay MAE)
+        # Decay=0.85 means recent errors count ~6× more than 10-day-old errors.
+        # A model that improves sees its MAE drop faster than with a flat average.
+        existing_acc = await asyncio.to_thread(
+            forecast_store.query_model_accuracy, symbol
+        )
+        ema_decay = 0.85
+        for model_name, errs in errors_per_model.items():
+            if not errs:
+                continue
+            prev = existing_acc.get(model_name, {"mae": 0.0, "samples": 0})
+            prev_n   = prev.get("samples", 0)
+            prev_mae = prev.get("mae", 0.0)
+            cur_mae  = prev_mae
+            cur_n    = prev_n
+            for err in errs:
+                if cur_n == 0:
+                    cur_mae = err
+                else:
+                    cur_mae = ema_decay * cur_mae + (1.0 - ema_decay) * err
+                cur_n += 1
+            await asyncio.to_thread(
+                forecast_store.write_model_accuracy, symbol, model_name, cur_mae, cur_n
+            )
+            logger.info(
+                f"[RL] {symbol}/{model_name} MAE updated — "
+                f"prev={prev_mae:.3f} (n={prev_n}) -> {cur_mae:.3f} (n={cur_n}) "
+                f"[decay={ema_decay}]"
+            )
+
+        band_pct = (
+            f"{sum(band_hits)/len(band_hits)*100:.0f}% ({sum(band_hits)}/{len(band_hits)})"
+            if band_hits else "no data yet"
+        )
+        logger.info(
+            f"[RL] ✓ resolve_past_forecasts complete — {symbol}: "
+            f"{len(new_outcomes)} new outcomes | "
+            + ", ".join(f"{m}={len(e)} err(s)" for m, e in errors_per_model.items())
+            + f" | band hit rate: {band_pct}"
+        )
+
+    except Exception as e:
+        logger.warning(
+            f"[RL] resolve_past_forecasts failed for {symbol}: {e}", exc_info=True
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +645,49 @@ async def predict(payload: dict = Body(...)):
         f"L=${lows[-1]:.2f} C=${closes[-1]:.2f} V={volumes[-1]:.0f}"
     )
 
+    # ── RL: load historical model accuracy for weight calibration ────────────
+    logger.info(f"[RL] Querying historical model accuracy for {symbol} ...")
+    model_acc = await asyncio.to_thread(forecast_store.query_model_accuracy, symbol)
+
+    historical_weights = None
+    rl_sample_count    = 0
+    track_record       = ""
+
+    if model_acc:
+        p_acc = model_acc.get("prophet", {})
+        s_acc = model_acc.get("sarima",  {})
+        r_acc = model_acc.get("rf",      {})
+        min_samples = min(
+            p_acc.get("samples", 0),
+            s_acc.get("samples", 0),
+            r_acc.get("samples", 0),
+        )
+        rl_sample_count = min_samples
+        if rl_sample_count > 0:
+            eps      = 1e-6
+            inv_maes = [
+                1.0 / (p_acc.get("mae", 999.0) + eps),
+                1.0 / (s_acc.get("mae", 999.0) + eps),
+                1.0 / (r_acc.get("mae", 999.0) + eps),
+            ]
+            total_inv          = sum(inv_maes)
+            historical_weights = [v / total_inv for v in inv_maes] if total_inv > 0 else None
+            logger.info(
+                f"[RL] Historical weights (inv-MAE) — "
+                f"prophet={historical_weights[0]:.3f}, "
+                f"sarima={historical_weights[1]:.3f}, "
+                f"rf={historical_weights[2]:.3f} | samples={rl_sample_count}"
+            )
+        # Build track record string for analyst jury context
+        parts = []
+        for label, acc in [("Prophet", p_acc), ("SARIMA", s_acc), ("RF", r_acc)]:
+            n = acc.get("samples", 0)
+            if n > 0:
+                parts.append(f"{label} d1_MAE=${acc['mae']:.2f} (n={n})")
+        if parts:
+            track_record = "Model track record: " + " | ".join(parts)
+            logger.info(f"[RL] Track record for jury: {track_record}")
+
     rsi = calculate_rsi(closes)
     logger.info(f"[STEP-4] RSI scalar computed: {rsi:.2f}")
 
@@ -493,7 +699,32 @@ async def predict(payload: dict = Body(...)):
     forecast = run_ensemble_forecast(
         closes, symbol,
         opens=opens, highs=highs, lows=lows, volumes=volumes,
+        historical_weights=historical_weights,
+        sample_count=rl_sample_count,
     )
+
+    # ── RL: record this forecast + resolve old ones (background) ─────────────
+    fweights    = forecast.get("weights",      {"prophet": 0.0, "sarima": 0.0, "rf": 0.0})
+    per_model   = forecast.get("per_model_d1", {"prophet": None, "sarima": None, "rf": None})
+    forecast_days = forecast.get("forecast_days", [])
+    ensemble_d1_preds = [d["predicted"] for d in forecast_days]
+    d1_high = forecast_days[0]["high"] if forecast_days else None
+    d1_low  = forecast_days[0]["low"]  if forecast_days else None
+    asyncio.create_task(asyncio.to_thread(
+        forecast_store.write_forecast_record,
+        symbol,
+        float(closes[-1]),
+        per_model.get("prophet"),
+        per_model.get("sarima"),
+        per_model.get("rf"),
+        fweights.get("prophet", 0.0),
+        fweights.get("sarima",  0.0),
+        fweights.get("rf",      0.0),
+        ensemble_d1_preds,
+        d1_high,
+        d1_low,
+    ))
+    asyncio.create_task(resolve_past_forecasts(symbol))
 
     # ── Step 4b. Technical indicators (close-based — correct by definition) ──
     logger.info(
@@ -535,6 +766,7 @@ async def predict(payload: dict = Body(...)):
             info, macd_data, bb_data, sma50, sma200,
             historical_prices, sr_levels,
             news_task=serp_task,
+            track_record=track_record,
         ),
     )
     logger.info(

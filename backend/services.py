@@ -3,7 +3,8 @@ import re
 import logging
 import httpx
 import pandas as pd
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from typing import Dict, List, Optional
 import newrelic.agent
 
 try:
@@ -72,7 +73,6 @@ class InfluxService:
         df must have a DatetimeIndex (UTC) and columns: Open, High, Low, Close, Volume.
         InfluxDB Cloud has a 30-day retention policy — rows older than 29 days are skipped.
         """
-        from datetime import timedelta
         cutoff = datetime.now(timezone.utc) - timedelta(days=29)
 
         logger.info(
@@ -214,6 +214,200 @@ class InfluxService:
             f"(query returned empty) → yfinance fetch required"
         )
         return False
+
+
+# ---------------------------------------------------------------------------
+# ForecastStore  —  RL feedback loop: record forecasts, resolve outcomes,
+#                   maintain per-model accuracy for calibrated weight blending
+# ---------------------------------------------------------------------------
+
+class ForecastStore:
+    """
+    Three InfluxDB measurements:
+      forecast_record  — per-model day-1 preds + ensemble preds + weights
+      price_outcome    — actual market closes (written at resolution time)
+      model_accuracy   — running day-1 MAE per model (prophet / sarima / rf)
+
+    On every /predict request:
+      1. write_forecast_record  — records what was predicted
+      2. resolve_past_forecasts (background) — matches old forecasts against
+         actual closes, updates model_accuracy
+      3. query_model_accuracy  — returns historical MAE used to blend weights
+    """
+
+    def __init__(self, influx_service: "InfluxService"):
+        self._svc = influx_service
+
+    # ── Writes ────────────────────────────────────────────────────────────────
+
+    def write_forecast_record(
+        self,
+        symbol: str,
+        last_price: float,
+        prophet_d1: Optional[float],
+        sarima_d1: Optional[float],
+        rf_d1: Optional[float],
+        w_prophet: float,
+        w_sarima: float,
+        w_rf: float,
+        ensemble_preds: List[float],  # 5-element list (one per forecast day)
+        d1_high: Optional[float] = None,
+        d1_low: Optional[float] = None,
+    ) -> None:
+        p_str = f"{prophet_d1:.2f}" if prophet_d1 is not None else "N/A"
+        s_str = f"{sarima_d1:.2f}"  if sarima_d1  is not None else "N/A"
+        r_str = f"{rf_d1:.2f}"      if rf_d1       is not None else "N/A"
+        try:
+            logger.info(
+                f"[RL] write_forecast_record — {symbol} @ last_price=${last_price:.2f} | "
+                f"p_d1={p_str}, s_d1={s_str}, r_d1={r_str} | "
+                f"w=[{w_prophet:.3f},{w_sarima:.3f},{w_rf:.3f}]"
+            )
+            p = (
+                Point("forecast_record")
+                .tag("symbol", symbol)
+                .field("last_price", float(last_price))
+                .field("p_d1", float(prophet_d1) if prophet_d1 is not None else 0.0)
+                .field("s_d1", float(sarima_d1)  if sarima_d1  is not None else 0.0)
+                .field("r_d1", float(rf_d1)       if rf_d1       is not None else 0.0)
+                .field("w_p",  float(w_prophet))
+                .field("w_s",  float(w_sarima))
+                .field("w_r",  float(w_rf))
+            )
+            for i, pred in enumerate(ensemble_preds[:5], 1):
+                p = p.field(f"e_d{i}", float(pred))
+            if d1_high is not None:
+                p = p.field("e_d1_high", float(d1_high))
+            if d1_low is not None:
+                p = p.field("e_d1_low", float(d1_low))
+            p = p.time(datetime.now(timezone.utc), WritePrecision.NS)
+            self._svc.write_api.write(
+                bucket=Config.INFLUXDB_BUCKET, org=Config.INFLUXDB_ORG, record=p
+            )
+            logger.info(f"[RL] ✓ forecast_record written for {symbol}")
+        except Exception as e:
+            logger.error(f"[RL] ✗ write_forecast_record error for {symbol}: {e}")
+
+    def write_price_outcome(
+        self, symbol: str, outcome_dt: datetime, actual_close: float
+    ) -> None:
+        try:
+            p = (
+                Point("price_outcome")
+                .tag("symbol", symbol)
+                .field("actual_close", float(actual_close))
+                .time(outcome_dt, WritePrecision.NS)
+            )
+            self._svc.write_api.write(
+                bucket=Config.INFLUXDB_BUCKET, org=Config.INFLUXDB_ORG, record=p
+            )
+            logger.info(
+                f"[RL] ✓ price_outcome written — {symbol} {outcome_dt.date()} = ${actual_close:.2f}"
+            )
+        except Exception as e:
+            logger.error(f"[RL] ✗ write_price_outcome error for {symbol}: {e}")
+
+    def write_model_accuracy(
+        self, symbol: str, model: str, mae: float, sample_count: int
+    ) -> None:
+        try:
+            p = (
+                Point("model_accuracy")
+                .tag("symbol", symbol)
+                .tag("model", model)
+                .field("mae_d1", float(mae))
+                .field("sample_count", int(sample_count))
+                .time(datetime.now(timezone.utc), WritePrecision.NS)
+            )
+            self._svc.write_api.write(
+                bucket=Config.INFLUXDB_BUCKET, org=Config.INFLUXDB_ORG, record=p
+            )
+            logger.info(
+                f"[RL] ✓ model_accuracy updated — {symbol}/{model}: MAE=${mae:.3f}, n={sample_count}"
+            )
+        except Exception as e:
+            logger.error(f"[RL] ✗ write_model_accuracy error for {symbol}/{model}: {e}")
+
+    # ── Queries ───────────────────────────────────────────────────────────────
+
+    def query_forecast_records(self, symbol: str, days: int = 10) -> List[dict]:
+        """Returns forecast record rows from the last N days."""
+        query = f"""
+        from(bucket: "{Config.INFLUXDB_BUCKET}")
+          |> range(start: -{days}d)
+          |> filter(fn: (r) => r["_measurement"] == "forecast_record" and r["symbol"] == "{symbol}")
+          |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+          |> sort(columns: ["_time"], desc: false)
+        """
+        try:
+            tables = self._svc.query_api.query(query)
+            rows = [r.values for t in tables for r in t.records]
+            logger.info(
+                f"[RL] query_forecast_records — {symbol}: {len(rows)} records in last {days}d"
+            )
+            return rows
+        except Exception as e:
+            logger.error(f"[RL] ✗ query_forecast_records error for {symbol}: {e}")
+            return []
+
+    def query_price_outcomes(self, symbol: str, days: int = 15) -> Dict[object, float]:
+        """Returns {date: actual_close} from price_outcome measurement."""
+        query = f"""
+        from(bucket: "{Config.INFLUXDB_BUCKET}")
+          |> range(start: -{days}d)
+          |> filter(fn: (r) => r["_measurement"] == "price_outcome" and r["symbol"] == "{symbol}")
+          |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+        """
+        try:
+            tables = self._svc.query_api.query(query)
+            result: Dict[object, float] = {}
+            for t in tables:
+                for r in t.records:
+                    t_val = r.values.get("_time")
+                    close = r.values.get("actual_close", 0.0)
+                    if t_val is not None:
+                        result[t_val.date()] = float(close)
+            logger.info(
+                f"[RL] query_price_outcomes — {symbol}: {len(result)} outcomes in last {days}d"
+            )
+            return result
+        except Exception as e:
+            logger.error(f"[RL] ✗ query_price_outcomes error for {symbol}: {e}")
+            return {}
+
+    def query_model_accuracy(self, symbol: str, lookback_days: int = 90) -> Dict[str, dict]:
+        """
+        Returns most-recent per-model accuracy record.
+        { "prophet": {"mae": float, "samples": int}, "sarima": {...}, "rf": {...} }
+        """
+        result: Dict[str, dict] = {}
+        for model in ("prophet", "sarima", "rf"):
+            query = f"""
+            from(bucket: "{Config.INFLUXDB_BUCKET}")
+              |> range(start: -{lookback_days}d)
+              |> filter(fn: (r) =>
+                  r["_measurement"] == "model_accuracy"
+                  and r["symbol"] == "{symbol}"
+                  and r["model"] == "{model}")
+              |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+              |> sort(columns: ["_time"], desc: true)
+              |> limit(n: 1)
+            """
+            try:
+                tables = self._svc.query_api.query(query)
+                for t in tables:
+                    for r in t.records:
+                        vals = r.values
+                        result[model] = {
+                            "mae":     float(vals.get("mae_d1",      999.0)),
+                            "samples": int(vals.get("sample_count", 0)),
+                        }
+            except Exception as e:
+                logger.warning(
+                    f"[RL] query_model_accuracy error for {symbol}/{model}: {e}"
+                )
+        logger.info(f"[RL] query_model_accuracy — {symbol}: {result}")
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -414,7 +608,7 @@ class DataCleaner:
         if nan_removed:
             logger.info(f"[CLEANER] NaN/zero Close rows removed: {nan_removed}")
         else:
-            logger.info(f"[CLEANER] NaN/zero check — 0 rows removed (all Close values valid)")
+            logger.info("[CLEANER] NaN/zero check — 0 rows removed (all Close values valid)")
 
         if df.empty:
             logger.warning("[CLEANER] DataFrame empty after NaN/zero drop — returning empty")
@@ -433,7 +627,7 @@ class DataCleaner:
             )
         else:
             logger.info(
-                f"[CLEANER] Outlier check — 0 rows removed (all within 4σ rolling bands)"
+                "[CLEANER] Outlier check — 0 rows removed (all within 4σ rolling bands)"
             )
         df = df[mask]
         after_outlier = len(df)
@@ -481,6 +675,10 @@ class DataCleaner:
     @staticmethod
     def to_history_list(df: pd.DataFrame) -> list:
         """Convert cleaned DataFrame → list of dicts used by main.py and models."""
+        if df.empty:
+            logger.warning("[CLEANER] to_history_list() — empty DataFrame, returning []")
+            return []
+
         logger.info(f"[CLEANER] to_history_list() — converting {len(df)} rows to dicts")
         out = []
         for ts, row in df.iterrows():
@@ -492,10 +690,14 @@ class DataCleaner:
                 "close":  float(row.get("Close",  0)),
                 "volume": float(row.get("Volume", 0)),
             })
-        logger.info(
-            f"[CLEANER] ✓ to_history_list() — {len(out)} dict rows produced | "
-            f"close: ${out[0]['close']:.2f} (oldest) → ${out[-1]['close']:.2f} (latest)"
-        )
+
+        if out:
+            logger.info(
+                f"[CLEANER] ✓ to_history_list() — {len(out)} dict rows produced | "
+                f"close: ${out[0]['close']:.2f} (oldest) → ${out[-1]['close']:.2f} (latest)"
+            )
+        else:
+            logger.warning("[CLEANER] to_history_list() — 0 rows produced from non-empty df")
         return out
 
 
@@ -526,8 +728,8 @@ class SerpService:
         """
         if not Config.SERP_API_KEY:
             logger.info(
-                f"[SERP] API key not set — news/trending fetch SKIPPED "
-                f"(returning empty news_results and markets)"
+                "[SERP] API key not set — news/trending fetch SKIPPED "
+                "(returning empty news_results and markets)"
             )
             return {"news_results": [], "markets": {}}
 
