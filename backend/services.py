@@ -28,6 +28,35 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Input validation — prevents Flux/InfluxQL injection via user-supplied tags
+# ---------------------------------------------------------------------------
+
+_SAFE_TAG_RE = re.compile(r"^[A-Za-z0-9._:\-]+$")
+
+
+def _validate_tag(value: str, field: str = "tag") -> str:
+    """
+    Strict validation for values that are interpolated into Flux queries.
+    Rejects any character outside [A-Za-z0-9._:-] to prevent query injection
+    (e.g. a symbol like `AAPL" or r._field == "`).
+    """
+    if not isinstance(value, str) or not _SAFE_TAG_RE.match(value):
+        raise ValueError(f"Invalid {field}: {value!r}")
+    if len(value) > 32:
+        raise ValueError(f"{field} too long: {value!r}")
+    return value
+
+
+_ALLOWED_MODELS = frozenset({"prophet", "sarima", "rf"})
+
+
+def _validate_model(model: str) -> str:
+    if model not in _ALLOWED_MODELS:
+        raise ValueError(f"Invalid model: {model!r}")
+    return model
+
+
+# ---------------------------------------------------------------------------
 # InfluxDB Service  —  stores and retrieves full OHLCV data
 # ---------------------------------------------------------------------------
 
@@ -49,6 +78,11 @@ class InfluxService:
 
     # --- Write a single live close price (used for intraday snapshots) -------
     def write_price(self, symbol: str, price: float):
+        try:
+            _validate_tag(symbol, "symbol")
+        except ValueError as e:
+            logger.error(f"[INFLUXDB] write_price rejected — {e}")
+            return
         logger.info(f"[INFLUXDB] write_price — symbol={symbol}, price=${price:.2f}")
         try:
             p = (
@@ -73,6 +107,11 @@ class InfluxService:
         df must have a DatetimeIndex (UTC) and columns: Open, High, Low, Close, Volume.
         InfluxDB Cloud has a 30-day retention policy — rows older than 29 days are skipped.
         """
+        try:
+            _validate_tag(symbol, "symbol")
+        except ValueError as e:
+            logger.error(f"[INFLUXDB] write_ohlcv_batch rejected — {e}")
+            return
         cutoff = datetime.now(timezone.utc) - timedelta(days=29)
 
         logger.info(
@@ -130,6 +169,12 @@ class InfluxService:
         """
         Returns list of dicts with keys: _time, open, high, low, close, volume
         """
+        try:
+            _validate_tag(symbol, "symbol")
+        except ValueError as e:
+            logger.error(f"[INFLUXDB] query_history rejected — {e}")
+            return []
+        days = max(1, int(days))
         logger.info(
             f"[INFLUXDB] query_history — symbol={symbol}, range=last {days}d, "
             f"measurement=market_data"
@@ -178,6 +223,12 @@ class InfluxService:
 
     def has_recent_data(self, symbol: str, within_hours: int = 20) -> bool:
         """Return True if we already have fresh data for today (avoids re-fetching)."""
+        try:
+            _validate_tag(symbol, "symbol")
+        except ValueError as e:
+            logger.error(f"[INFLUXDB] has_recent_data rejected — {e}")
+            return False
+        within_hours = max(1, int(within_hours))
         logger.info(
             f"[INFLUXDB] has_recent_data — symbol={symbol}, "
             f"checking last {within_hours}h ..."
@@ -254,6 +305,11 @@ class ForecastStore:
         d1_high: Optional[float] = None,
         d1_low: Optional[float] = None,
     ) -> None:
+        try:
+            _validate_tag(symbol, "symbol")
+        except ValueError as e:
+            logger.error(f"[RL] write_forecast_record rejected — {e}")
+            return
         p_str = f"{prophet_d1:.2f}" if prophet_d1 is not None else "N/A"
         s_str = f"{sarima_d1:.2f}"  if sarima_d1  is not None else "N/A"
         r_str = f"{rf_d1:.2f}"      if rf_d1       is not None else "N/A"
@@ -292,6 +348,11 @@ class ForecastStore:
         self, symbol: str, outcome_dt: datetime, actual_close: float
     ) -> None:
         try:
+            _validate_tag(symbol, "symbol")
+        except ValueError as e:
+            logger.error(f"[RL] write_price_outcome rejected — {e}")
+            return
+        try:
             p = (
                 Point("price_outcome")
                 .tag("symbol", symbol)
@@ -307,9 +368,70 @@ class ForecastStore:
         except Exception as e:
             logger.error(f"[RL] ✗ write_price_outcome error for {symbol}: {e}")
 
+    def mark_forecast_resolved(
+        self, symbol: str, record_time: datetime
+    ) -> None:
+        """
+        Write a resolution marker so a given forecast_record is only applied
+        to model_accuracy once, even if multiple concurrent /predict requests
+        call resolve_past_forecasts simultaneously.
+        """
+        try:
+            _validate_tag(symbol, "symbol")
+        except ValueError as e:
+            logger.error(f"[RL] mark_forecast_resolved rejected — {e}")
+            return
+        try:
+            p = (
+                Point("forecast_resolution")
+                .tag("symbol", symbol)
+                .field("resolved", 1)
+                .time(record_time, WritePrecision.NS)
+            )
+            self._svc.write_api.write(
+                bucket=Config.INFLUXDB_BUCKET, org=Config.INFLUXDB_ORG, record=p
+            )
+        except Exception as e:
+            logger.error(f"[RL] ✗ mark_forecast_resolved error for {symbol}: {e}")
+
+    def query_resolved_timestamps(
+        self, symbol: str, days: int = 30
+    ) -> set:
+        """Return set of forecast_record _time values already resolved."""
+        try:
+            _validate_tag(symbol, "symbol")
+        except ValueError as e:
+            logger.error(f"[RL] query_resolved_timestamps rejected — {e}")
+            return set()
+        days = max(1, int(days))
+        query = f"""
+        from(bucket: "{Config.INFLUXDB_BUCKET}")
+          |> range(start: -{days}d)
+          |> filter(fn: (r) => r["_measurement"] == "forecast_resolution" and r["symbol"] == "{symbol}")
+          |> keep(columns: ["_time"])
+        """
+        try:
+            tables = self._svc.query_api.query(query)
+            out: set = set()
+            for t in tables:
+                for r in t.records:
+                    tv = r.values.get("_time")
+                    if tv is not None:
+                        out.add(tv)
+            return out
+        except Exception as e:
+            logger.error(f"[RL] ✗ query_resolved_timestamps error for {symbol}: {e}")
+            return set()
+
     def write_model_accuracy(
         self, symbol: str, model: str, mae: float, sample_count: int
     ) -> None:
+        try:
+            _validate_tag(symbol, "symbol")
+            _validate_model(model)
+        except ValueError as e:
+            logger.error(f"[RL] write_model_accuracy rejected — {e}")
+            return
         try:
             p = (
                 Point("model_accuracy")
@@ -332,6 +454,12 @@ class ForecastStore:
 
     def query_forecast_records(self, symbol: str, days: int = 10) -> List[dict]:
         """Returns forecast record rows from the last N days."""
+        try:
+            _validate_tag(symbol, "symbol")
+        except ValueError as e:
+            logger.error(f"[RL] query_forecast_records rejected — {e}")
+            return []
+        days = max(1, int(days))
         query = f"""
         from(bucket: "{Config.INFLUXDB_BUCKET}")
           |> range(start: -{days}d)
@@ -352,6 +480,12 @@ class ForecastStore:
 
     def query_price_outcomes(self, symbol: str, days: int = 15) -> Dict[object, float]:
         """Returns {date: actual_close} from price_outcome measurement."""
+        try:
+            _validate_tag(symbol, "symbol")
+        except ValueError as e:
+            logger.error(f"[RL] query_price_outcomes rejected — {e}")
+            return {}
+        days = max(1, int(days))
         query = f"""
         from(bucket: "{Config.INFLUXDB_BUCKET}")
           |> range(start: -{days}d)
@@ -380,8 +514,15 @@ class ForecastStore:
         Returns most-recent per-model accuracy record.
         { "prophet": {"mae": float, "samples": int}, "sarima": {...}, "rf": {...} }
         """
+        try:
+            _validate_tag(symbol, "symbol")
+        except ValueError as e:
+            logger.error(f"[RL] query_model_accuracy rejected — {e}")
+            return {}
+        lookback_days = max(1, int(lookback_days))
         result: Dict[str, dict] = {}
         for model in ("prophet", "sarima", "rf"):
+            _validate_model(model)
             query = f"""
             from(bucket: "{Config.INFLUXDB_BUCKET}")
               |> range(start: -{lookback_days}d)
@@ -636,19 +777,36 @@ class DataCleaner:
             logger.warning("[CLEANER] DataFrame empty after outlier removal — returning empty")
             return df
 
-        # 3. Reindex to business-day frequency and forward-fill gaps
+        # 3. Reindex to business-day frequency and forward-fill gaps.
+        #    IMPORTANT: Only price columns (Open/High/Low/Close) are
+        #    forward-filled. Volume is LEFT AS NaN on synthetic rows and then
+        #    set to 0 — forward-filling volume copies real traded volume onto
+        #    non-trading days, which biases Prophet/SARIMAX/RF (they'd see
+        #    repeated high-volume bars that never actually happened).
+        #    Downstream (main.py) replaces zero-volume rows with a rolling
+        #    mean so the synthetic markers don't contaminate normalisation.
         try:
             full_idx = pd.bdate_range(
                 start=df.index.min(), end=df.index.max(), freq="B"
             )
             full_idx = full_idx.tz_localize("UTC") if full_idx.tz is None else full_idx
-            df = df.reindex(full_idx).ffill()
+
+            price_cols = [c for c in ("Open", "High", "Low", "Close") if c in df.columns]
+            has_volume = "Volume" in df.columns
+
+            df = df.reindex(full_idx)
+            if price_cols:
+                df[price_cols] = df[price_cols].ffill()
+            if has_volume:
+                # Mark synthetic rows with volume=0 (not ffill).
+                df["Volume"] = df["Volume"].fillna(0.0)
+
             after_ffill = len(df)
             synthetic   = after_ffill - after_outlier
             logger.info(
                 f"[CLEANER] Gap-fill (bdate_range ffill) — "
                 f"rows before={after_outlier}, after={after_ffill} "
-                f"(+{synthetic} synthetic business-day rows forward-filled)"
+                f"(+{synthetic} synthetic rows; price ffill, volume=0 on synthetics)"
             )
         except Exception as e:
             logger.warning(

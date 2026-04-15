@@ -349,6 +349,12 @@ async def resolve_past_forecasts(symbol: str) -> None:
             forecast_store.query_price_outcomes, symbol, 15
         )
 
+        # Resolution markers prevent double-applying errors under concurrent
+        # /predict calls (each call spawns resolve_past_forecasts as a task).
+        resolved_set = await asyncio.to_thread(
+            forecast_store.query_resolved_timestamps, symbol, 30
+        )
+
         # Fetch 30d yfinance history → build date → actual_close map
         df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "30d")
         actual_map: dict = {}
@@ -366,9 +372,13 @@ async def resolve_past_forecasts(symbol: str) -> None:
         errors_per_model: dict = {"prophet": [], "sarima": [], "rf": []}
         band_hits: list = []  # 1=actual inside [low,high], 0=missed
 
+        newly_resolved: list = []
         for rec in records:
             pred_time = rec.get("_time")
             if pred_time is None:
+                continue
+            # Skip records already resolved in a prior pass
+            if pred_time in resolved_set:
                 continue
             pred_date = pred_time.date()
 
@@ -420,6 +430,10 @@ async def resolve_past_forecasts(symbol: str) -> None:
                         f"err={abs(pred_val - actual_close):.4f} ({target})"
                     )
 
+            # Record was successfully resolved — mark it so a concurrent
+            # resolver doesn't apply the same errors again.
+            newly_resolved.append(pred_time)
+
             # Band accuracy — did actual price land inside [low, high]?
             e_d1_high = float(rec.get("e_d1_high", 0) or 0)
             e_d1_low  = float(rec.get("e_d1_low",  0) or 0)
@@ -435,6 +449,13 @@ async def resolve_past_forecasts(symbol: str) -> None:
         for outcome_dt, actual_close in new_outcomes:
             await asyncio.to_thread(
                 forecast_store.write_price_outcome, symbol, outcome_dt, actual_close
+            )
+
+        # Persist resolution markers BEFORE updating model_accuracy so that a
+        # concurrent resolver sees them and skips the same records.
+        for rt in newly_resolved:
+            await asyncio.to_thread(
+                forecast_store.mark_forecast_resolved, symbol, rt
             )
 
         # Update model accuracy (exponential decay MAE)
@@ -509,7 +530,7 @@ async def debug():
 
     # Test InfluxDB connectivity
     try:
-        influx_svc.has_recent_data("DEBUG_TEST")
+        await asyncio.to_thread(influx_svc.has_recent_data, "DEBUG_TEST")
         results["influxdb_reachable"] = True
     except Exception as e:
         results["influxdb_reachable"] = False
@@ -579,7 +600,7 @@ async def predict(payload: dict = Body(...)):
 
     # Cache recent rows to InfluxDB (last 29d) for downstream analytics
     logger.info(f"[STEP-1] [INFLUXDB] Checking cache freshness for {symbol} ...")
-    has_fresh = influx_svc.has_recent_data(symbol)
+    has_fresh = await asyncio.to_thread(influx_svc.has_recent_data, symbol)
     if not has_fresh:
         logger.info(
             "[STEP-1] [INFLUXDB] Cache MISS — "
