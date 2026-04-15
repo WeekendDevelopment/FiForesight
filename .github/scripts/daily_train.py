@@ -4,9 +4,9 @@ Each call writes a forecast_record and resolves past forecasts,
 building the RL feedback loop without user intervention.
 
 Usage:
-  python backend/scripts/daily_train.py                                # prod
-  python backend/scripts/daily_train.py --url http://localhost:3000    # local
-  python backend/scripts/daily_train.py --url http://localhost:8000 --direct  # FastAPI direct
+  python .github/scripts/daily_train.py                                # prod
+  python .github/scripts/daily_train.py --url http://localhost:3000    # local
+  python .github/scripts/daily_train.py --url http://localhost:8000 --direct  # FastAPI direct
 
 Runs automatically via .github/workflows/daily-train.yml (weekdays after market close).
 """
