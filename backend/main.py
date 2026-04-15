@@ -2,9 +2,10 @@
 import asyncio
 import logging
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List
 
+import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, Body, Request
 from fastapi.responses import JSONResponse
@@ -17,7 +18,7 @@ from models import (
     calculate_support_resistance,
 )
 from services import (
-    DataCleaner, AnalystJuryService, InfluxService,
+    DataCleaner, AnalystJuryService, ForecastStore, InfluxService,
     ANALYST_PERSONAS,
     SerpService, YFinanceService,
 )
@@ -46,6 +47,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 # Services
 # ---------------------------------------------------------------------------
 influx_svc       = InfluxService()
+forecast_store   = ForecastStore(influx_svc)
 serp_svc         = SerpService()
 yf_svc           = YFinanceService()
 analyst_jury_svc = AnalystJuryService()
@@ -98,6 +100,16 @@ def _fmt_pct(val) -> str:
         return "N/A"
 
 
+def _safe_background(coro_or_future, *, name: str = "background"):
+    """Wrap a coroutine in a task that logs exceptions instead of dropping them."""
+    async def _wrapper():
+        try:
+            await coro_or_future
+        except Exception as e:
+            logger.error(f"[{name}] Background task failed: {e}", exc_info=True)
+    return asyncio.create_task(_wrapper())
+
+
 async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict) -> str:
     """
     Header analyst note via Groq llama-3.3-70b (14,400 RPD free, no quota issues).
@@ -117,13 +129,28 @@ async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict)
         f"[Confidence: {forecast.get('conf', 'low')}]\n"
         f"Write a concise 2-sentence analyst note covering the price outlook and the key risk."
     )
+    logger.info(
+        f"[AI-NOTE] Requesting header note — "
+        f"model=llama-3.3-70b-versatile, symbol={symbol}, RSI={rsi:.1f}, "
+        f"forecast_high=${forecast['high']:.2f}, forecast_low=${forecast['low']:.2f}, "
+        f"conf={forecast.get('conf', 'low')} | "
+        f"data_sent: last 20 closes of {len(closes)} total"
+    )
     try:
         raw = await analyst_jury_svc._call_groq(
             "llama-3.3-70b-versatile", system, prompt
         )
-        return raw.strip()
+        note = raw.strip()
+        logger.info(
+            f"[AI-NOTE] ✓ Header note received — {len(note)} chars | "
+            f"ensemble note fallback SKIPPED"
+        )
+        return note
     except Exception as e:
-        logger.warning(f"Groq analyst note failed: {e}")
+        logger.warning(
+            f"[AI-NOTE] ✗ Groq header note failed: {e} — "
+            f"FALLBACK: using ensemble note ({len(forecast['note'])} chars)"
+        )
         return forecast["note"]
 
 
@@ -142,6 +169,7 @@ async def _run_analyst_jury(
     sr_levels: dict,
     *,
     news_task=None,
+    track_record: str = "",
 ) -> List[dict]:
     """
     Run all 3 analyst personas concurrently via AnalystJuryService.
@@ -263,6 +291,7 @@ async def _run_analyst_jury(
         f"Volume: {vol_line}\n"
         f"Support: {sup_str} | Resistance: {res_str}\n"
         f"{news_block}"
+        + (f"{track_record}\n" if track_record else "")
     )
 
     # ------------------------------------------------------------------
@@ -296,6 +325,187 @@ async def _run_analyst_jury(
 
 
 # ---------------------------------------------------------------------------
+# RL feedback: resolve past forecasts against actual closes
+# ---------------------------------------------------------------------------
+
+async def resolve_past_forecasts(symbol: str) -> None:
+    """
+    Background task — matches forecast records against actual market closes,
+    then writes/updates model_accuracy in InfluxDB.
+
+    Runs once per /predict request (non-blocking, fire-and-forget).
+    """
+    try:
+        logger.info(f"[RL] resolve_past_forecasts — starting for {symbol}")
+
+        records = await asyncio.to_thread(
+            forecast_store.query_forecast_records, symbol, 10
+        )
+        if not records:
+            logger.info(f"[RL] No forecast records to resolve for {symbol}")
+            return
+
+        existing_outcomes = await asyncio.to_thread(
+            forecast_store.query_price_outcomes, symbol, 15
+        )
+
+        # Resolution markers prevent double-applying errors under concurrent
+        # /predict calls (each call spawns resolve_past_forecasts as a task).
+        resolved_set = await asyncio.to_thread(
+            forecast_store.query_resolved_timestamps, symbol, 30
+        )
+
+        # Fetch 30d yfinance history → build date → actual_close map
+        df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "30d")
+        actual_map: dict = {}
+        if not df.empty:
+            for ts, row in df.iterrows():
+                actual_map[ts.date()] = float(
+                    row.get("Close", row.get("close", 0)) or 0
+                )
+
+        # Merge already-stored outcomes (takes precedence)
+        actual_map.update(existing_outcomes)
+
+        now_date = datetime.now(timezone.utc).date()
+        new_outcomes: list = []
+        errors_per_model: dict = {"prophet": [], "sarima": [], "rf": []}
+        band_hits: list = []  # 1=actual inside [low,high], 0=missed
+
+        newly_resolved: list = []
+        for rec in records:
+            pred_time = rec.get("_time")
+            if pred_time is None:
+                continue
+            # Skip records already resolved in a prior pass
+            if pred_time in resolved_set:
+                continue
+            pred_date = pred_time.date()
+
+            # Find first market day strictly after the prediction date
+            target = pred_date + timedelta(days=1)
+            while target.weekday() >= 5:       # skip weekend
+                target += timedelta(days=1)
+
+            # Skip if target hasn't passed yet
+            if target >= now_date:
+                continue
+
+            # If not in actual_map, try up to 3 forward days (holidays)
+            if target not in actual_map:
+                for offset in range(1, 4):
+                    candidate = target + timedelta(days=offset)
+                    if candidate in actual_map:
+                        target = candidate
+                        break
+                else:
+                    continue  # still can't resolve
+
+            actual_close = actual_map[target]
+            if actual_close <= 0:
+                continue
+
+            # Write outcome if not already stored
+            if target not in existing_outcomes:
+                outcome_dt = datetime(
+                    target.year, target.month, target.day,
+                    tzinfo=timezone.utc
+                )
+                new_outcomes.append((outcome_dt, actual_close))
+
+            # Per-model day-1 errors
+            for model_name, field_key in [
+                ("prophet", "p_d1"),
+                ("sarima",  "s_d1"),
+                ("rf",      "r_d1"),
+            ]:
+                pred_val = float(rec.get(field_key, 0) or 0)
+                if pred_val > 0:
+                    errors_per_model[model_name].append(
+                        abs(pred_val - actual_close)
+                    )
+                    logger.info(
+                        f"[RL] {symbol}/{model_name}: pred={pred_val:.2f}, "
+                        f"actual={actual_close:.2f}, "
+                        f"err={abs(pred_val - actual_close):.4f} ({target})"
+                    )
+
+            # Record was successfully resolved — mark it so a concurrent
+            # resolver doesn't apply the same errors again.
+            newly_resolved.append(pred_time)
+
+            # Band accuracy — did actual price land inside [low, high]?
+            e_d1_high = float(rec.get("e_d1_high", 0) or 0)
+            e_d1_low  = float(rec.get("e_d1_low",  0) or 0)
+            if e_d1_high > 0 and e_d1_low > 0:
+                hit = 1 if e_d1_low <= actual_close <= e_d1_high else 0
+                band_hits.append(hit)
+                logger.info(
+                    f"[RL] {symbol} band check: actual=${actual_close:.2f} "
+                    f"vs [{e_d1_low:.2f}-{e_d1_high:.2f}] → {'HIT' if hit else 'MISS'}"
+                )
+
+        # Persist new outcomes
+        for outcome_dt, actual_close in new_outcomes:
+            await asyncio.to_thread(
+                forecast_store.write_price_outcome, symbol, outcome_dt, actual_close
+            )
+
+        # Persist resolution markers BEFORE updating model_accuracy so that a
+        # concurrent resolver sees them and skips the same records.
+        for rt in newly_resolved:
+            await asyncio.to_thread(
+                forecast_store.mark_forecast_resolved, symbol, rt
+            )
+
+        # Update model accuracy (exponential decay MAE)
+        # Decay=0.85 means recent errors count ~6× more than 10-day-old errors.
+        # A model that improves sees its MAE drop faster than with a flat average.
+        existing_acc = await asyncio.to_thread(
+            forecast_store.query_model_accuracy, symbol
+        )
+        ema_decay = 0.85
+        for model_name, errs in errors_per_model.items():
+            if not errs:
+                continue
+            prev = existing_acc.get(model_name, {"mae": 0.0, "samples": 0})
+            prev_n   = prev.get("samples", 0)
+            prev_mae = prev.get("mae", 0.0)
+            cur_mae  = prev_mae
+            cur_n    = prev_n
+            for err in errs:
+                if cur_n == 0:
+                    cur_mae = err
+                else:
+                    cur_mae = ema_decay * cur_mae + (1.0 - ema_decay) * err
+                cur_n += 1
+            await asyncio.to_thread(
+                forecast_store.write_model_accuracy, symbol, model_name, cur_mae, cur_n
+            )
+            logger.info(
+                f"[RL] {symbol}/{model_name} MAE updated — "
+                f"prev={prev_mae:.3f} (n={prev_n}) -> {cur_mae:.3f} (n={cur_n}) "
+                f"[decay={ema_decay}]"
+            )
+
+        band_pct = (
+            f"{sum(band_hits)/len(band_hits)*100:.0f}% ({sum(band_hits)}/{len(band_hits)})"
+            if band_hits else "no data yet"
+        )
+        logger.info(
+            f"[RL] ✓ resolve_past_forecasts complete — {symbol}: "
+            f"{len(new_outcomes)} new outcomes | "
+            + ", ".join(f"{m}={len(e)} err(s)" for m, e in errors_per_model.items())
+            + f" | band hit rate: {band_pct}"
+        )
+
+    except Exception as e:
+        logger.warning(
+            f"[RL] resolve_past_forecasts failed for {symbol}: {e}", exc_info=True
+        )
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -320,7 +530,7 @@ async def debug():
 
     # Test InfluxDB connectivity
     try:
-        influx_svc.has_recent_data("DEBUG_TEST")
+        await asyncio.to_thread(influx_svc.has_recent_data, "DEBUG_TEST")
         results["influxdb_reachable"] = True
     except Exception as e:
         results["influxdb_reachable"] = False
@@ -350,38 +560,63 @@ async def predict(payload: dict = Body(...)):
     symbol = payload.get("data", "SPY").upper()
     now    = datetime.now(timezone.utc)
 
-    # 1. Fetch OHLCV history
-    if not influx_svc.has_recent_data(symbol):
-        df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "2y")
-        if not df.empty:
-            try:
-                df = DataCleaner.clean(df)
-            except Exception as e:
-                logger.warning(f"DataCleaner.clean failed for {symbol}: {e}")
-                df = df.__class__()
-            if not df.empty:
-                await asyncio.to_thread(influx_svc.write_ohlcv_batch, symbol, df)
+    logger.info("[REQUEST] ════════════════════════════════════════════")
+    logger.info(f"[REQUEST] /predict → symbol={symbol} | {now.isoformat()}")
+    logger.info("[REQUEST] ════════════════════════════════════════════")
 
-    historical_prices: list = await asyncio.to_thread(influx_svc.query_history, symbol)
+    # ── Step 1. Fetch OHLCV history ───────────────────────────────────────────
+    # FIX (Issue 4): yfinance is always the primary historical source.
+    # InfluxDB Cloud has a 29-day retention window — it cannot hold 2y of data.
+    # query_history(365d) was returning only ~21 rows, always triggering the
+    # yfinance fallback anyway (double-fetch every request). Now:
+    #   • yfinance 2y fetch runs once unconditionally (models need 500+ rows)
+    #   • has_recent_data() guards the InfluxDB write — skip if already fresh
+    #     (avoids redundant batch writes on repeated requests within 20h)
+    #   • InfluxDB write_ohlcv_batch writes the last 29d for downstream analytics
+    #   • InfluxDB write_price (Step 7) still tracks intraday live-price history
+    logger.info(f"[STEP-1] Fetching 2y OHLCV history from yfinance for {symbol} ...")
+    df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "2y")
 
-    # Fallback: yfinance directly if InfluxDB has insufficient history
-    if not historical_prices or len(historical_prices) < 60:
-        df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "2y")
-        if not df.empty:
-            try:
-                df = DataCleaner.clean(df)
-            except Exception as e:
-                logger.warning(f"DataCleaner.clean fallback failed for {symbol}: {e}")
-                df = df.__class__()
-            if not df.empty:
-                historical_prices = DataCleaner.to_history_list(df)
-
-    if not historical_prices:
+    if df.empty:
+        logger.error(f"[STEP-1] yfinance returned empty df for {symbol} — returning 404")
         raise HTTPException(status_code=404, detail=f"No data found for {symbol}.")
+
+    try:
+        df = DataCleaner.clean(df)
+    except Exception as e:
+        logger.warning(f"[STEP-1] DataCleaner.clean failed for {symbol}: {e} — using raw df")
+
+    if df.empty:
+        logger.error(f"[STEP-1] DataCleaner returned empty df for {symbol} — returning 404")
+        raise HTTPException(status_code=404, detail=f"No usable data for {symbol} after cleaning.")
+
+    historical_prices: list = DataCleaner.to_history_list(df)
+    logger.info(
+        f"[STEP-1] ✓ yfinance fetch complete — {len(historical_prices)} rows | "
+        f"range: {str(historical_prices[0]['_time'])[:10]} → "
+        f"{str(historical_prices[-1]['_time'])[:10]} | "
+        f"close: ${historical_prices[0]['close']:.2f} → ${historical_prices[-1]['close']:.2f}"
+    )
+
+    # Cache recent rows to InfluxDB (last 29d) for downstream analytics
+    logger.info(f"[STEP-1] [INFLUXDB] Checking cache freshness for {symbol} ...")
+    has_fresh = await asyncio.to_thread(influx_svc.has_recent_data, symbol)
+    if not has_fresh:
+        logger.info(
+            "[STEP-1] [INFLUXDB] Cache MISS — "
+            "writing last 29d rows to InfluxDB for analytics ..."
+        )
+        await asyncio.to_thread(influx_svc.write_ohlcv_batch, symbol, df)
+    else:
+        logger.info(
+            "[STEP-1] [INFLUXDB] Cache HIT — "
+            "InfluxDB write SKIPPED (fresh data already present)"
+        )
 
     historical_prices.sort(key=lambda x: x["_time"])
 
-    # 2. Live price
+    # ── Step 2. Live price ────────────────────────────────────────────────────
+    logger.info(f"[STEP-2] Fetching live price for {symbol} ...")
     live_price = await asyncio.to_thread(yf_svc.get_live_price, symbol)
     if live_price > 0:
         historical_prices.append({
@@ -389,10 +624,19 @@ async def predict(payload: dict = Body(...)):
             "open":  live_price, "high": live_price,
             "low":   live_price, "volume": 0.0,
         })
+        logger.info(
+            f"[STEP-2] ✓ Live price ${live_price:.2f} injected as latest bar "
+            f"(total bars now: {len(historical_prices)})"
+        )
     else:
         live_price = float(historical_prices[-1]["close"])
+        logger.info(
+            f"[STEP-2] Live price unavailable — "
+            f"using last historical close: ${live_price:.2f}"
+        )
 
-    # 3. Fundamentals
+    # ── Step 3. Fundamentals ─────────────────────────────────────────────────
+    logger.info(f"[STEP-3] Fetching fundamentals for {symbol} ...")
     info = await asyncio.to_thread(yf_svc.fetch_info, symbol)
     metrics = {
         "market_cap": _fmt_market_cap(info.get("market_cap")),
@@ -403,25 +647,148 @@ async def predict(payload: dict = Body(...)):
         "sector":     info.get("sector",    "N/A"),
         "currency":   info.get("currency",  "USD"),
     }
+    logger.info(
+        f"[STEP-3] ✓ Fundamentals — sector={metrics['sector']}, "
+        f"market_cap={metrics['market_cap']}, pe={metrics['pe_ratio']}, "
+        f"yield={metrics['yield']}, 52w={metrics['range_52w']}"
+    )
 
-    # 4. Analytics & ensemble forecast
-    closes   = [float(p["close"]) for p in historical_prices]
-    rsi      = calculate_rsi(closes)
-    forecast = run_ensemble_forecast(closes, symbol)
+    # ── Step 4. Analytics & ensemble forecast ────────────────────────────────
+    # FIX (Issue 3): extract full OHLCV arrays — all are now passed to models
+    # so Prophet/SARIMAX/RF can use volume and intraday range as additional context.
+    closes  = [float(p["close"])              for p in historical_prices]
+    opens   = [float(p.get("open",  p["close"])) for p in historical_prices]
+    highs   = [float(p.get("high",  p["close"])) for p in historical_prices]
+    lows    = [float(p.get("low",   p["close"])) for p in historical_prices]
 
-    # 4b. Technical indicators (full series, sliced to chart window later)
+    # Replace zero-volume rows (e.g. live-price injection) with rolling mean
+    # so the synthetic bar doesn't skew normalisation inside the models.
+    volumes_raw  = [float(p.get("volume", 0)) for p in historical_prices]
+    nonzero_vols = [v for v in volumes_raw if v > 0]
+    vol_fill     = float(np.mean(nonzero_vols)) if nonzero_vols else 1.0
+    volumes      = [v if v > 0 else vol_fill for v in volumes_raw]
+
+    zero_vol_count = sum(1 for v in volumes_raw if v == 0)
+    logger.info(
+        f"[STEP-4] OHLCV arrays built — {len(closes)} rows | "
+        f"zero-volume rows filled with mean ({zero_vol_count} filled, mean_vol={vol_fill:.0f}) | "
+        f"last OHLCV: O=${opens[-1]:.2f} H=${highs[-1]:.2f} "
+        f"L=${lows[-1]:.2f} C=${closes[-1]:.2f} V={volumes[-1]:.0f}"
+    )
+
+    # ── RL: load historical model accuracy for weight calibration ────────────
+    logger.info(f"[RL] Querying historical model accuracy for {symbol} ...")
+    model_acc = await asyncio.to_thread(forecast_store.query_model_accuracy, symbol)
+
+    historical_weights = None
+    rl_sample_count    = 0
+    track_record       = ""
+
+    if model_acc:
+        p_acc = model_acc.get("prophet", {})
+        s_acc = model_acc.get("sarima",  {})
+        r_acc = model_acc.get("rf",      {})
+        min_samples = min(
+            p_acc.get("samples", 0),
+            s_acc.get("samples", 0),
+            r_acc.get("samples", 0),
+        )
+        rl_sample_count = min_samples
+        if rl_sample_count > 0:
+            eps      = 1e-6
+            inv_maes = [
+                1.0 / (p_acc.get("mae", 999.0) + eps),
+                1.0 / (s_acc.get("mae", 999.0) + eps),
+                1.0 / (r_acc.get("mae", 999.0) + eps),
+            ]
+            total_inv          = sum(inv_maes)
+            historical_weights = [v / total_inv for v in inv_maes] if total_inv > 0 else None
+            logger.info(
+                f"[RL] Historical weights (inv-MAE) — "
+                f"prophet={historical_weights[0]:.3f}, "
+                f"sarima={historical_weights[1]:.3f}, "
+                f"rf={historical_weights[2]:.3f} | samples={rl_sample_count}"
+            )
+        # Build track record string for analyst jury context
+        parts = []
+        for label, acc in [("Prophet", p_acc), ("SARIMA", s_acc), ("RF", r_acc)]:
+            n = acc.get("samples", 0)
+            if n > 0:
+                parts.append(f"{label} d1_MAE=${acc['mae']:.2f} (n={n})")
+        if parts:
+            track_record = "Model track record: " + " | ".join(parts)
+            logger.info(f"[RL] Track record for jury: {track_record}")
+
+    rsi = calculate_rsi(closes)
+    logger.info(f"[STEP-4] RSI scalar computed: {rsi:.2f}")
+
+    logger.info(
+        "[STEP-4] Running ensemble forecast (Prophet + SARIMAX + RF) "
+        "with full OHLCV context ..."
+        + (f" | RL blending active ({rl_sample_count} samples)" if rl_sample_count > 0 else "")
+    )
+    forecast = run_ensemble_forecast(
+        closes, symbol,
+        opens=opens, highs=highs, lows=lows, volumes=volumes,
+        historical_weights=historical_weights,
+        sample_count=rl_sample_count,
+    )
+
+    # ── RL: record this forecast + resolve old ones (background) ─────────────
+    fweights    = forecast.get("weights",      {"prophet": 0.0, "sarima": 0.0, "rf": 0.0})
+    per_model   = forecast.get("per_model_d1", {"prophet": None, "sarima": None, "rf": None})
+    forecast_days = forecast.get("forecast_days", [])
+    ensemble_d1_preds = [d["predicted"] for d in forecast_days]
+    d1_high = forecast_days[0]["high"] if forecast_days else None
+    d1_low  = forecast_days[0]["low"]  if forecast_days else None
+    _safe_background(asyncio.to_thread(
+        forecast_store.write_forecast_record,
+        symbol,
+        float(closes[-1]),
+        per_model.get("prophet"),
+        per_model.get("sarima"),
+        per_model.get("rf"),
+        fweights.get("prophet", 0.0),
+        fweights.get("sarima",  0.0),
+        fweights.get("rf",      0.0),
+        ensemble_d1_preds,
+        d1_high,
+        d1_low,
+    ), name="RL-WRITE")
+    _safe_background(resolve_past_forecasts(symbol), name="RL-RESOLVE")
+
+    # ── Step 4b. Technical indicators (close-based — correct by definition) ──
+    logger.info(
+        "[STEP-4b] Computing technical indicators — "
+        "MACD(12,26,9), BB(window=20, std=2), SMA50, SMA200 ..."
+    )
     macd_data = calculate_macd(closes)
     bb_data   = calculate_bollinger_bands(closes)
     sma50     = calculate_sma_series(closes, 50)
     sma200    = calculate_sma_series(closes, 200)
+    logger.info(f"[STEP-4b] ✓ All indicator series computed ({len(closes)} points each)")
 
-    # Fire news fetch concurrently — started now, awaited after jury
+    # ── Step 4c. Fire news fetch concurrently ────────────────────────────────
+    logger.info("[STEP-4c] Launching SerpAPI news task concurrently (non-blocking) ...")
     serp_task = asyncio.create_task(serp_svc.fetch_data(symbol))
 
-    # Support/resistance — computed before jury so levels can be cited
-    sr_levels = calculate_support_resistance(closes)
+    # ── Support/resistance — now uses intraday highs/lows ────────────────────
+    logger.info(
+        "[STEP-4d] Computing support/resistance levels "
+        "(using intraday High/Low extrema) ..."
+    )
+    sr_levels = calculate_support_resistance(closes, highs=highs, lows=lows)
 
-    # 5. AI analyst note + jury (concurrent)
+    # ── Step 5. AI analyst note + jury (concurrent) ──────────────────────────
+    logger.info(
+        f"[STEP-5] Dispatching AI header note (Groq llama-3.3-70b) + "
+        f"analyst jury ({len(ANALYST_PERSONAS)} personas) concurrently ..."
+    )
+    logger.info(
+        f"[STEP-5] Data sent to AI layer — symbol={symbol}, RSI={rsi:.2f}, "
+        f"forecast_high=${forecast['high']:.2f}, forecast_low=${forecast['low']:.2f}, "
+        f"conf={forecast['conf']}, ann_vol={forecast.get('stats', {}).get('ann_volatility_pct', 'N/A')}%"
+    )
     note, jury = await asyncio.gather(
         _ai_note(symbol, closes, rsi, forecast),
         _run_analyst_jury(
@@ -430,10 +797,21 @@ async def predict(payload: dict = Body(...)):
             info, macd_data, bb_data, sma50, sma200,
             historical_prices, sr_levels,
             news_task=serp_task,
+            track_record=track_record,
         ),
     )
+    logger.info(
+        f"[STEP-5] ✓ AI layer complete — "
+        f"note={len(note)} chars | jury={len(jury)} verdicts"
+    )
+    for v in jury:
+        logger.info(
+            f"[STEP-5] [JURY/{v['id']}] rating={v['rating']}, "
+            f"confidence={v['confidence']}%, model={v['model']}"
+        )
 
-    # 6. News + trending via SerpAPI
+    # ── Step 6. News + trending via SerpAPI ──────────────────────────────────
+    logger.info("[STEP-6] Awaiting SerpAPI news task result ...")
     news: list     = []
     trending: list = []
     try:
@@ -462,15 +840,31 @@ async def predict(payload: dict = Body(...)):
                         "change":   str(t.get("price_change_percentage", "0%")),
                         "category": category,
                     })
+        logger.info(
+            f"[STEP-6] ✓ SerpAPI — news={len(news)} articles, "
+            f"trending={len(trending)} tickers"
+        )
     except Exception as e:
-        logger.warning(f"SerpAPI fetch failed: {e}")
+        logger.warning(f"[STEP-6] SerpAPI fetch failed: {e}")
 
-    # 7. Background price snapshot
-    asyncio.create_task(asyncio.to_thread(influx_svc.write_price, symbol, live_price))
+    # ── Step 7. Background price snapshot ────────────────────────────────────
+    logger.info(
+        f"[STEP-7] Scheduling background InfluxDB price snapshot — "
+        f"{symbol} @ ${live_price:.2f}"
+    )
+    _safe_background(
+        asyncio.to_thread(influx_svc.write_price, symbol, live_price),
+        name="INFLUX-WRITE",
+    )
 
-    # 8. Chart history (last 90 trading days) with indicator slices
+    # ── Step 8. Build chart history (last 90 trading days) ───────────────────
     total       = len(historical_prices)
     slice_start = max(0, total - 90)
+    logger.info(
+        f"[STEP-8] Building chart history — total_bars={total}, "
+        f"chart_window=90, slice_start={slice_start} "
+        f"(showing bars {slice_start}–{total - 1})"
+    )
     history = []
     for idx, p in enumerate(historical_prices[slice_start:], start=slice_start):
         history.append({
@@ -493,6 +887,20 @@ async def predict(payload: dict = Body(...)):
     # RSI series — last 90 points aligned to chart window
     rsi_full   = calculate_rsi_series(closes)
     rsi_series = rsi_full[slice_start:]
+    logger.info(
+        f"[STEP-8] ✓ Chart history built — {len(history)} bars | "
+        f"RSI series: {len(rsi_series)} points"
+    )
+
+    # ── Response summary ──────────────────────────────────────────────────────
+    logger.info(
+        f"[RESPONSE] {symbol} — price=${live_price:.2f}, RSI={rsi:.2f} | "
+        f"forecast: high=${forecast['high']:.2f}, low=${forecast['low']:.2f}, "
+        f"conf={forecast['conf']} | "
+        f"history={len(history)} bars | news={len(news)} | trending={len(trending)} | "
+        f"jury={len(jury)} analysts"
+    )
+    logger.info(f"[REQUEST] ════════════════ /predict ← {symbol} complete ════════════════")
 
     return PredictionResponse(
         symbol       = symbol,
