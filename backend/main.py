@@ -370,7 +370,29 @@ async def resolve_past_forecasts(symbol: str) -> None:
         now_date = datetime.now(timezone.utc).date()
         new_outcomes: list = []
         errors_per_model: dict = {"prophet": [], "sarima": [], "rf": []}
+        # Per-horizon ensemble errors: ensemble_d1 … ensemble_d5
+        errors_per_horizon: dict = {f"ensemble_d{i}": [] for i in range(1, 6)}
         band_hits: list = []  # 1=actual inside [low,high], 0=missed
+
+        def nth_market_day(base_date, n: int):
+            """Return the n-th market weekday after base_date."""
+            d = base_date
+            hops = 0
+            while hops < n:
+                d += timedelta(days=1)
+                while d.weekday() >= 5:  # skip Sat/Sun
+                    d += timedelta(days=1)
+                hops += 1
+            return d
+
+        def resolve_actual(target_date):
+            """Return actual close for target_date (±3 holiday days), or None."""
+            d = target_date
+            for _ in range(4):
+                if d in actual_map and actual_map[d] > 0:
+                    return actual_map[d]
+                d += timedelta(days=1)
+            return None
 
         newly_resolved: list = []
         for rec in records:
@@ -382,36 +404,24 @@ async def resolve_past_forecasts(symbol: str) -> None:
                 continue
             pred_date = pred_time.date()
 
-            # Find first market day strictly after the prediction date
-            target = pred_date + timedelta(days=1)
-            while target.weekday() >= 5:       # skip weekend
-                target += timedelta(days=1)
+            # ── d1 resolution (per-model + ensemble_d1 + outcome write) ──────
+            target_d1 = nth_market_day(pred_date, 1)
 
-            # Skip if target hasn't passed yet
-            if target >= now_date:
+            # Skip entirely if d1 hasn't closed yet
+            if target_d1 > now_date:
                 continue
 
-            # If not in actual_map, try up to 3 forward days (holidays)
-            if target not in actual_map:
-                for offset in range(1, 4):
-                    candidate = target + timedelta(days=offset)
-                    if candidate in actual_map:
-                        target = candidate
-                        break
-                else:
-                    continue  # still can't resolve
-
-            actual_close = actual_map[target]
-            if actual_close <= 0:
+            actual_d1 = resolve_actual(target_d1)
+            if actual_d1 is None:
                 continue
 
-            # Write outcome if not already stored
-            if target not in existing_outcomes:
+            # Write price_outcome for d1 if not already stored
+            if target_d1 not in existing_outcomes:
                 outcome_dt = datetime(
-                    target.year, target.month, target.day,
+                    target_d1.year, target_d1.month, target_d1.day,
                     tzinfo=timezone.utc
                 )
-                new_outcomes.append((outcome_dt, actual_close))
+                new_outcomes.append((outcome_dt, actual_d1))
 
             # Per-model day-1 errors
             for model_name, field_key in [
@@ -421,29 +431,45 @@ async def resolve_past_forecasts(symbol: str) -> None:
             ]:
                 pred_val = float(rec.get(field_key, 0) or 0)
                 if pred_val > 0:
-                    errors_per_model[model_name].append(
-                        abs(pred_val - actual_close)
-                    )
+                    err = abs(pred_val - actual_d1)
+                    errors_per_model[model_name].append(err)
                     logger.info(
                         f"[RL] {symbol}/{model_name}: pred={pred_val:.2f}, "
-                        f"actual={actual_close:.2f}, "
-                        f"err={abs(pred_val - actual_close):.4f} ({target})"
+                        f"actual={actual_d1:.2f}, err={err:.4f} ({target_d1})"
                     )
-
-            # Record was successfully resolved — mark it so a concurrent
-            # resolver doesn't apply the same errors again.
-            newly_resolved.append(pred_time)
 
             # Band accuracy — did actual price land inside [low, high]?
             e_d1_high = float(rec.get("e_d1_high", 0) or 0)
             e_d1_low  = float(rec.get("e_d1_low",  0) or 0)
             if e_d1_high > 0 and e_d1_low > 0:
-                hit = 1 if e_d1_low <= actual_close <= e_d1_high else 0
+                hit = 1 if e_d1_low <= actual_d1 <= e_d1_high else 0
                 band_hits.append(hit)
                 logger.info(
-                    f"[RL] {symbol} band check: actual=${actual_close:.2f} "
+                    f"[RL] {symbol} band check: actual=${actual_d1:.2f} "
                     f"vs [{e_d1_low:.2f}-{e_d1_high:.2f}] → {'HIT' if hit else 'MISS'}"
                 )
+
+            # ── d1-d5 ensemble horizon resolution ────────────────────────────
+            for horizon in range(1, 6):
+                target_dn = nth_market_day(pred_date, horizon)
+                if target_dn > now_date:
+                    break  # d1 passed but d2+ not yet — stop this record
+                field_key = f"e_d{horizon}"
+                pred_val  = float(rec.get(field_key, 0) or 0)
+                if pred_val <= 0:
+                    continue
+                actual_dn = resolve_actual(target_dn)
+                if actual_dn is None:
+                    continue
+                err = abs(pred_val - actual_dn)
+                errors_per_horizon[f"ensemble_d{horizon}"].append(err)
+                logger.info(
+                    f"[RL] {symbol}/ensemble_d{horizon}: pred={pred_val:.2f}, "
+                    f"actual={actual_dn:.2f}, err={err:.4f} ({target_dn})"
+                )
+
+            # Mark resolved so concurrent calls don't re-apply same errors
+            newly_resolved.append(pred_time)
 
         # Persist new outcomes
         for outcome_dt, actual_close in new_outcomes:
@@ -458,44 +484,62 @@ async def resolve_past_forecasts(symbol: str) -> None:
                 forecast_store.mark_forecast_resolved, symbol, rt
             )
 
-        # Update model accuracy (exponential decay MAE)
+        # Update per-model accuracy (exponential decay MAE)
         # Decay=0.85 means recent errors count ~6× more than 10-day-old errors.
-        # A model that improves sees its MAE drop faster than with a flat average.
         existing_acc = await asyncio.to_thread(
             forecast_store.query_model_accuracy, symbol
         )
         ema_decay = 0.85
+
+        def _apply_ema(prev: dict, errs: list) -> tuple:
+            prev_n   = prev.get("samples", 0)
+            prev_mae = prev.get("mae", 0.0)
+            cur_mae, cur_n = prev_mae, prev_n
+            for err in errs:
+                cur_mae = err if cur_n == 0 else ema_decay * cur_mae + (1.0 - ema_decay) * err
+                cur_n += 1
+            return cur_mae, cur_n
+
         for model_name, errs in errors_per_model.items():
             if not errs:
                 continue
-            prev = existing_acc.get(model_name, {"mae": 0.0, "samples": 0})
-            prev_n   = prev.get("samples", 0)
-            prev_mae = prev.get("mae", 0.0)
-            cur_mae  = prev_mae
-            cur_n    = prev_n
-            for err in errs:
-                if cur_n == 0:
-                    cur_mae = err
-                else:
-                    cur_mae = ema_decay * cur_mae + (1.0 - ema_decay) * err
-                cur_n += 1
+            cur_mae, cur_n = _apply_ema(existing_acc.get(model_name, {}), errs)
             await asyncio.to_thread(
                 forecast_store.write_model_accuracy, symbol, model_name, cur_mae, cur_n
             )
             logger.info(
-                f"[RL] {symbol}/{model_name} MAE updated — "
-                f"prev={prev_mae:.3f} (n={prev_n}) -> {cur_mae:.3f} (n={cur_n}) "
-                f"[decay={ema_decay}]"
+                f"[RL] {symbol}/{model_name} MAE → ${cur_mae:.3f} (n={cur_n})"
+            )
+
+        # Update per-horizon ensemble accuracy
+        existing_ens = await asyncio.to_thread(
+            forecast_store.query_ensemble_mae, symbol
+        )
+        for horizon_key, errs in errors_per_horizon.items():
+            if not errs:
+                continue
+            cur_mae, cur_n = _apply_ema(existing_ens.get(horizon_key, {}), errs)
+            await asyncio.to_thread(
+                forecast_store.write_model_accuracy, symbol, horizon_key, cur_mae, cur_n
+            )
+            logger.info(
+                f"[RL] {symbol}/{horizon_key} MAE → ${cur_mae:.3f} (n={cur_n})"
             )
 
         band_pct = (
             f"{sum(band_hits)/len(band_hits)*100:.0f}% ({sum(band_hits)}/{len(band_hits)})"
             if band_hits else "no data yet"
         )
+        ens_summary = ", ".join(
+            f"d{i}={len(errors_per_horizon[f'ensemble_d{i}'])}err"
+            for i in range(1, 6)
+            if errors_per_horizon[f"ensemble_d{i}"]
+        ) or "none"
         logger.info(
             f"[RL] ✓ resolve_past_forecasts complete — {symbol}: "
             f"{len(new_outcomes)} new outcomes | "
-            + ", ".join(f"{m}={len(e)} err(s)" for m, e in errors_per_model.items())
+            + ", ".join(f"{m}={len(e)}err" for m, e in errors_per_model.items())
+            + f" | ensemble horizons: {ens_summary}"
             + f" | band hit rate: {band_pct}"
         )
 
@@ -679,6 +723,7 @@ async def predict(payload: dict = Body(...)):
     # ── RL: load historical model accuracy for weight calibration ────────────
     logger.info(f"[RL] Querying historical model accuracy for {symbol} ...")
     model_acc = await asyncio.to_thread(forecast_store.query_model_accuracy, symbol)
+    ensemble_mae = await asyncio.to_thread(forecast_store.query_ensemble_mae, symbol)
 
     historical_weights = None
     rl_sample_count    = 0
@@ -732,6 +777,7 @@ async def predict(payload: dict = Body(...)):
         opens=opens, highs=highs, lows=lows, volumes=volumes,
         historical_weights=historical_weights,
         sample_count=rl_sample_count,
+        ensemble_mae=ensemble_mae,
     )
 
     # ── RL: record this forecast + resolve old ones (background) ─────────────

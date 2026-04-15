@@ -47,7 +47,11 @@ def _validate_tag(value: str, field: str = "tag") -> str:
     return value
 
 
-_ALLOWED_MODELS = frozenset({"prophet", "sarima", "rf"})
+_ALLOWED_MODELS = frozenset({
+    "prophet", "sarima", "rf",
+    # per-horizon ensemble accuracy trackers (d1 reuses same slot as per-model)
+    "ensemble_d1", "ensemble_d2", "ensemble_d3", "ensemble_d4", "ensemble_d5",
+})
 
 
 def _validate_model(model: str) -> str:
@@ -548,6 +552,45 @@ class ForecastStore:
                     f"[RL] query_model_accuracy error for {symbol}/{model}: {e}"
                 )
         logger.info(f"[RL] query_model_accuracy — {symbol}: {result}")
+        return result
+
+    def query_ensemble_mae(self, symbol: str, lookback_days: int = 90) -> Dict[str, dict]:
+        """
+        Returns most-recent per-horizon ensemble accuracy.
+        { "ensemble_d1": {"mae": float, "samples": int}, ..., "ensemble_d5": {...} }
+        Empty dict or missing keys = no data yet for that horizon.
+        """
+        try:
+            _validate_tag(symbol, "symbol")
+        except ValueError as e:
+            logger.error(f"[RL] query_ensemble_mae rejected — {e}")
+            return {}
+        lookback_days = max(1, int(lookback_days))
+        result: Dict[str, dict] = {}
+        for model in ("ensemble_d1", "ensemble_d2", "ensemble_d3", "ensemble_d4", "ensemble_d5"):
+            query = f"""
+            from(bucket: "{Config.INFLUXDB_BUCKET}")
+              |> range(start: -{lookback_days}d)
+              |> filter(fn: (r) =>
+                  r["_measurement"] == "model_accuracy"
+                  and r["symbol"] == "{symbol}"
+                  and r["model"] == "{model}")
+              |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+              |> sort(columns: ["_time"], desc: true)
+              |> limit(n: 1)
+            """
+            try:
+                tables = self._svc.query_api.query(query)
+                for t in tables:
+                    for r in t.records:
+                        vals = r.values
+                        result[model] = {
+                            "mae":     float(vals.get("mae_d1", 999.0)),
+                            "samples": int(vals.get("sample_count", 0)),
+                        }
+            except Exception as e:
+                logger.warning(f"[RL] query_ensemble_mae error for {symbol}/{model}: {e}")
+        logger.info(f"[RL] query_ensemble_mae — {symbol}: {result}")
         return result
 
 

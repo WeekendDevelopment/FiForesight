@@ -616,6 +616,7 @@ def run_ensemble_forecast(
     volumes: Optional[List[float]] = None,
     historical_weights: Optional[List[float]] = None,
     sample_count: int = 0,
+    ensemble_mae: Optional[Dict] = None,
 ) -> Dict:
     """
     Ensemble of Prophet + SARIMAX + RandomForest forecasting closing price.
@@ -863,8 +864,19 @@ def run_ensemble_forecast(
         day_low  = round(predicted - (predicted - raw_low)  * horizon_factor, 2)
 
         n_models  = len(available)
-        base_conf = 40 + (len(closes) // 10) + (n_models * 10)
-        conf_pct  = max(10, min(90, base_conf - i * 5))
+        horizon_key = f"ensemble_d{i + 1}"
+        hor_data    = (ensemble_mae or {}).get(horizon_key, {})
+        hor_mae     = hor_data.get("mae", 0.0)
+        hor_samples = hor_data.get("samples", 0)
+        if hor_samples > 0 and hor_mae > 0 and predicted > 0:
+            # MAE as % of current price — lower = more accurate = higher confidence.
+            # 1% error → ~91% conf, 3% → ~73%, 5% → ~55%, 10% → ~10% (floor).
+            mae_pct  = (hor_mae / predicted) * 100
+            conf_pct = max(10, min(95, round(95 - mae_pct * 8.5)))
+        else:
+            # No historical data yet — use heuristic, improves automatically over time
+            base_conf = 40 + (len(closes) // 10) + (n_models * 10)
+            conf_pct  = max(10, min(90, base_conf - i * 5))
 
         dt = datetime.now(timezone.utc) + timedelta(days=i + 1)
         days.append({
