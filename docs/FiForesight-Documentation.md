@@ -8,23 +8,6 @@
 
 ---
 
-## ⚠️ Discrepancies vs. Original Prompt
-
-The documentation request mentioned several technologies that **do not match the current codebase**. The doc below describes what **actually** exists. Flagged for clarity:
-
-| In request                                           | In code (truth)                                          |
-| ---------------------------------------------------- | -------------------------------------------------------- |
-| Project named **“Foresight”**                        | Named **FiForesight**                                    |
-| **PostgreSQL** database                              | **InfluxDB** (time-series DB, OSS by InfluxData)         |
-| **PyTorch**                                          | Not used. ML is **statsmodels** + **scikit-learn** + **Prophet** |
-| **LSTM** model                                       | Not present. Models are **Prophet + SARIMAX + RandomForestRegressor** |
-| **DeepSeek** LLM analysts, personas **Alpha / Bravo / Charlie / Delta** | **Groq API** is the provider. **3 personas** exist: **KIMI-K2**, **LLAMA-70B**, **QWEN3-32B** |
-| 4-analyst jury                                       | 3-analyst jury                                           |
-
-If any of those technologies are planned for the future, they are not in the code today and are **not** documented below.
-
----
-
 ## Table of Contents
 
 1. [Project Overview](#1-project-overview)
