@@ -100,6 +100,16 @@ def _fmt_pct(val) -> str:
         return "N/A"
 
 
+def _safe_background(coro_or_future, *, name: str = "background"):
+    """Wrap a coroutine in a task that logs exceptions instead of dropping them."""
+    async def _wrapper():
+        try:
+            await coro_or_future
+        except Exception as e:
+            logger.error(f"[{name}] Background task failed: {e}", exc_info=True)
+    return asyncio.create_task(_wrapper())
+
+
 async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict) -> str:
     """
     Header analyst note via Groq llama-3.3-70b (14,400 RPD free, no quota issues).
@@ -413,7 +423,7 @@ async def resolve_past_forecasts(symbol: str) -> None:
             # Band accuracy — did actual price land inside [low, high]?
             e_d1_high = float(rec.get("e_d1_high", 0) or 0)
             e_d1_low  = float(rec.get("e_d1_low",  0) or 0)
-            if e_d1_high > 0 and e_d1_low > 0 and actual_close > 0:
+            if e_d1_high > 0 and e_d1_low > 0:
                 hit = 1 if e_d1_low <= actual_close <= e_d1_high else 0
                 band_hits.append(hit)
                 logger.info(
@@ -710,7 +720,7 @@ async def predict(payload: dict = Body(...)):
     ensemble_d1_preds = [d["predicted"] for d in forecast_days]
     d1_high = forecast_days[0]["high"] if forecast_days else None
     d1_low  = forecast_days[0]["low"]  if forecast_days else None
-    asyncio.create_task(asyncio.to_thread(
+    _safe_background(asyncio.to_thread(
         forecast_store.write_forecast_record,
         symbol,
         float(closes[-1]),
@@ -723,8 +733,8 @@ async def predict(payload: dict = Body(...)):
         ensemble_d1_preds,
         d1_high,
         d1_low,
-    ))
-    asyncio.create_task(resolve_past_forecasts(symbol))
+    ), name="RL-WRITE")
+    _safe_background(resolve_past_forecasts(symbol), name="RL-RESOLVE")
 
     # ── Step 4b. Technical indicators (close-based — correct by definition) ──
     logger.info(
@@ -821,7 +831,10 @@ async def predict(payload: dict = Body(...)):
         f"[STEP-7] Scheduling background InfluxDB price snapshot — "
         f"{symbol} @ ${live_price:.2f}"
     )
-    asyncio.create_task(asyncio.to_thread(influx_svc.write_price, symbol, live_price))
+    _safe_background(
+        asyncio.to_thread(influx_svc.write_price, symbol, live_price),
+        name="INFLUX-WRITE",
+    )
 
     # ── Step 8. Build chart history (last 90 trading days) ───────────────────
     total       = len(historical_prices)

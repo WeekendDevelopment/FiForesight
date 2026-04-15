@@ -348,7 +348,8 @@ def _prophet_forecast(
         # Log-scale volume — reduces magnitude spread (e.g. 1M → 13.8)
         vol_arr = np.array(volumes, dtype=float)
         vol_arr = np.where(vol_arr <= 0, np.nan, vol_arr)
-        vol_arr = np.where(np.isnan(vol_arr), np.nanmean(vol_arr), vol_arr)
+        vol_fill = np.nanmean(vol_arr) if not np.all(np.isnan(vol_arr)) else 1.0
+        vol_arr = np.where(np.isnan(vol_arr), vol_fill, vol_arr)
         df["volume_log"] = np.log1p(vol_arr)
         df["hl_range"]   = hl_ranges
         logger.info(
