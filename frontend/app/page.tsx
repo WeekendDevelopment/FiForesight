@@ -17,6 +17,7 @@ import {
   LineChart, Line, ReferenceLine, ComposedChart, Area, Legend,
   BarChart, Bar, Cell,
 } from 'recharts';
+import AdvancedChart from '../components/AdvancedChart';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -406,6 +407,7 @@ export default function QuantumDashboard() {
   const [error,       setError]       = useState<string | null>(null);
   const [indicators,  setIndicators]  = useState<IndicatorKey[]>(['bb', 'sma']);
   const [chartMode,   setChartMode]   = useState<'line' | 'candle'>('line');
+  const [chartEngine, setChartEngine] = useState<'classic' | 'pro'>('classic');
   const [legendOpen,  setLegendOpen]  = useState(false);
   const chartBoxRef = useRef<HTMLDivElement>(null);
 
@@ -825,24 +827,44 @@ export default function QuantumDashboard() {
                         ))}
                       </ToggleButtonGroup>
 
-                      {/* ── Chart mode toggle ───────────────────── */}
-                      <Box sx={{ display: 'flex', mb: 2 }}>
-                        {(['line', 'candle'] as const).map((mode, idx) => (
-                          <Box key={mode} onClick={() => setChartMode(mode)} sx={{
-                            px: 1.5, py: 0.4, cursor: 'pointer',
-                            fontSize: '0.65rem', fontWeight: 800, letterSpacing: 1,
-                            border: '1px solid rgba(128,128,128,0.2)',
-                            borderRadius: idx === 0 ? '6px 0 0 6px' : '0 6px 6px 0',
-                            ml: idx === 1 ? '-1px' : 0,
-                            background: chartMode === mode ? `${primaryColor}1a` : 'transparent',
-                            color: chartMode === mode ? primaryColor : 'rgba(128,128,128,0.5)',
-                            transition: 'all 0.15s',
-                            '&:hover': { color: primaryColor, background: `${primaryColor}0d` },
-                            userSelect: 'none',
-                          }}>
-                            {mode === 'line' ? 'LINE' : 'CANDLE'}
-                          </Box>
-                        ))}
+                      {/* ── Chart mode + engine toggles ─────────── */}
+                      <Box sx={{ display: 'flex', gap: 1.5, mb: 2, flexWrap: 'wrap' }}>
+                        <Box sx={{ display: 'flex' }}>
+                          {(['line', 'candle'] as const).map((mode, idx) => (
+                            <Box key={mode} onClick={() => setChartMode(mode)} sx={{
+                              px: 1.5, py: 0.4, cursor: 'pointer',
+                              fontSize: '0.65rem', fontWeight: 800, letterSpacing: 1,
+                              border: '1px solid rgba(128,128,128,0.2)',
+                              borderRadius: idx === 0 ? '6px 0 0 6px' : '0 6px 6px 0',
+                              ml: idx === 1 ? '-1px' : 0,
+                              background: chartMode === mode ? `${primaryColor}1a` : 'transparent',
+                              color: chartMode === mode ? primaryColor : 'rgba(128,128,128,0.5)',
+                              transition: 'all 0.15s',
+                              '&:hover': { color: primaryColor, background: `${primaryColor}0d` },
+                              userSelect: 'none',
+                            }}>
+                              {mode === 'line' ? 'LINE' : 'CANDLE'}
+                            </Box>
+                          ))}
+                        </Box>
+                        <Box sx={{ display: 'flex' }}>
+                          {(['classic', 'pro'] as const).map((eng, idx) => (
+                            <Box key={eng} onClick={() => setChartEngine(eng)} sx={{
+                              px: 1.5, py: 0.4, cursor: 'pointer',
+                              fontSize: '0.65rem', fontWeight: 800, letterSpacing: 1,
+                              border: '1px solid rgba(128,128,128,0.2)',
+                              borderRadius: idx === 0 ? '6px 0 0 6px' : '0 6px 6px 0',
+                              ml: idx === 1 ? '-1px' : 0,
+                              background: chartEngine === eng ? `${primaryColor}1a` : 'transparent',
+                              color: chartEngine === eng ? primaryColor : 'rgba(128,128,128,0.5)',
+                              transition: 'all 0.15s',
+                              '&:hover': { color: primaryColor, background: `${primaryColor}0d` },
+                              userSelect: 'none',
+                            }}>
+                              {eng === 'classic' ? 'CLASSIC' : 'PRO (ZOOM)'}
+                            </Box>
+                          ))}
+                        </Box>
                       </Box>
 
                       {/* ── Indicators Guide (collapsible) ──────────── */}
@@ -959,6 +981,20 @@ export default function QuantumDashboard() {
                         </Collapse>
                       </Box>
 
+                      {chartEngine === 'pro' ? (
+                        <AdvancedChart
+                          history={prediction.history}
+                          forecast={prediction.forecastDays}
+                          rsiSeries={prediction.indicators?.rsi_series ?? []}
+                          indicators={indicators}
+                          mode={chartMode}
+                          isDark={isDark}
+                          primaryColor={primaryColor}
+                          trendColor={trendColor}
+                          support={prediction.indicators?.support ?? []}
+                          resistance={prediction.indicators?.resistance ?? []}
+                        />
+                      ) : (<>
                       {/* ── Main price + overlay chart ──────────────── */}
                       <Box ref={chartBoxRef} sx={{ height: 380, position: 'relative' }}>
                         <ResponsiveContainer width="100%" height="100%">
@@ -1160,6 +1196,7 @@ export default function QuantumDashboard() {
                           </Box>
                         </Box>
                       )}
+                      </>)}
                     </CardContent>
                   </Card>
 
