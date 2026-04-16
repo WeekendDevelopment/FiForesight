@@ -2,8 +2,9 @@
 import asyncio
 import logging
 import traceback
-from datetime import datetime, timedelta, timezone
-from typing import List
+import datetime as _dt
+from datetime import datetime, timedelta, timezone, date
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import uvicorn
@@ -357,7 +358,7 @@ async def resolve_past_forecasts(symbol: str) -> None:
 
         # Fetch 30d yfinance history → build date → actual_close map
         df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "30d")
-        actual_map: dict = {}
+        actual_map: Dict[date, float] = {}
         if not df.empty:
             for ts, row in df.iterrows():
                 actual_map[ts.date()] = float(
@@ -374,7 +375,7 @@ async def resolve_past_forecasts(symbol: str) -> None:
         errors_per_horizon: dict = {f"ensemble_d{i}": [] for i in range(1, 6)}
         band_hits: list = []  # 1=actual inside [low,high], 0=missed
 
-        def nth_market_day(base_date, n: int):
+        def nth_market_day(base_date: date, n: int) -> date:
             """
             Return the n-th actual trading day after base_date, determined by
             actual_map (yfinance data) so holidays are excluded automatically.
@@ -398,7 +399,7 @@ async def resolve_past_forecasts(symbol: str) -> None:
                 hops += 1
             return d
 
-        def resolve_actual(target_date):
+        def resolve_actual(target_date: date) -> Optional[float]:
             """
             Return actual close for target_date, or None.
             Searches forward up to 3 calendar days for the first entry in
@@ -494,22 +495,16 @@ async def resolve_past_forecasts(symbol: str) -> None:
                 forecast_store.write_price_outcome, symbol, outcome_dt, actual_close
             )
 
-        # Persist resolution markers BEFORE updating model_accuracy so that a
-        # concurrent resolver sees them and skips the same records.
-        # Write max_horizon so a future pass resumes from where this one stopped.
-        for rt, max_h in newly_resolved.items():
-            await asyncio.to_thread(
-                forecast_store.mark_forecast_resolved, symbol, rt, max_h
-            )
-
-        # Update per-model accuracy (exponential decay MAE)
+        # Update per-model accuracy (exponential decay MAE) BEFORE persisting
+        # resolution markers.  If an accuracy write fails the markers are never
+        # advanced, so the next cron pass can safely retry from scratch.
         # Decay=0.85 means recent errors count ~6× more than 10-day-old errors.
         existing_acc = await asyncio.to_thread(
             forecast_store.query_model_accuracy, symbol
         )
         ema_decay = 0.85
 
-        def _apply_ema(prev: dict, errs: list) -> tuple:
+        def _apply_ema(prev: Dict[str, float], errs: List[float]) -> Tuple[float, int]:
             prev_n   = prev.get("samples", 0)
             prev_mae = prev.get("mae", 0.0)
             cur_mae, cur_n = prev_mae, prev_n
@@ -542,6 +537,14 @@ async def resolve_past_forecasts(symbol: str) -> None:
             )
             logger.info(
                 f"[RL] {symbol}/{horizon_key} MAE → ${cur_mae:.3f} (n={cur_n})"
+            )
+
+        # All accuracy writes succeeded — now advance resolution markers so the
+        # next pass skips these records.  mark_forecast_resolved is idempotent
+        # (same timestamp+tag overwrites in InfluxDB), so a retry is safe.
+        for rt, max_h in newly_resolved.items():
+            await asyncio.to_thread(
+                forecast_store.mark_forecast_resolved, symbol, rt, max_h
             )
 
         band_pct = (
