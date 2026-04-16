@@ -134,7 +134,6 @@ jobs:
       - create-release
       - build-frontend
       - build-backend
-      - terraform
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
