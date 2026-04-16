@@ -70,8 +70,22 @@ function buildTimestamps(
   allDates: string[],
   histLen: number
 ): { histTimes: UTCTimestamp[]; foreTimes: UTCTimestamp[] } {
+  if (allDates.length === 0) return { histTimes: [], foreTimes: [] };
+
+  // Anchor the starting year to the last element of allDates, which is always
+  // a near-future forecast date (~5 trading days out).  Using Date.now() as the
+  // anchor drifts when the payload is rendered near midnight UTC on 31-Dec and
+  // the last forecast date has already rolled into January of the next year.
+  // Fix: if interpreting the last date with the current UTC year produces a
+  // timestamp more than 7 days in the past, the forecast must span a Dec→Jan
+  // year boundary, so start from currentYear + 1 instead.
   const now = new Date();
+  const [lastMm, lastDd] = allDates[allDates.length - 1].split('/').map(Number);
   let year = now.getUTCFullYear();
+  if (Date.UTC(year, lastMm - 1, lastDd) < now.getTime() - 7 * 86_400_000) {
+    year += 1;
+  }
+
   const times: UTCTimestamp[] = new Array(allDates.length);
 
   // Walk backward so we can detect year rollovers (month jumps forward).
