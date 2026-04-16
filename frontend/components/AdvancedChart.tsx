@@ -61,19 +61,34 @@ interface Props {
 
 const DAY_SEC = 86400;
 
-// Map `(historyLen, forecastLen)` to sequential daily UTC timestamps.
-// Backend returns MM/DD with no year, so we synthesise a monotonic
-// time axis anchored at today for the last forecast day.
-function buildTimestamps(histLen: number, foreLen: number): {
-  histTimes: UTCTimestamp[]; foreTimes: UTCTimestamp[];
-} {
-  const total = histLen + foreLen;
-  const todayUtc = Math.floor(Date.now() / 1000 / DAY_SEC) * DAY_SEC;
-  const end = todayUtc + Math.max(foreLen - 1, 0) * DAY_SEC;
-  const times: UTCTimestamp[] = [];
-  for (let i = 0; i < total; i++) {
-    times.push((end - (total - 1 - i) * DAY_SEC) as UTCTimestamp);
+/**
+ * Convert an array of MM/DD date strings (from the backend payload) into
+ * UTC timestamps. The backend strips the year, so we reconstruct it by
+ * walking the array in reverse from today: whenever the month jumps forward
+ * (e.g., "01/05" after "12/28") we subtract one year, giving each entry a
+ * deterministic calendar date without relying on Date.now() drift.
+ */
+function buildTimestamps(
+  allDates: string[],
+  histLen: number
+): { histTimes: UTCTimestamp[]; foreTimes: UTCTimestamp[] } {
+  const now = new Date();
+  let year = now.getUTCFullYear();
+  const times: UTCTimestamp[] = new Array(allDates.length);
+
+  // Walk backward so we can detect year rollovers (month jumps forward).
+  let prevMonth = -1;
+  for (let i = allDates.length - 1; i >= 0; i--) {
+    const [mm, dd] = allDates[i].split('/').map(Number);
+    if (prevMonth !== -1 && mm > prevMonth) {
+      // Month jumped forward going backward → crossed a year boundary
+      year -= 1;
+    }
+    prevMonth = mm;
+    const ms = Date.UTC(year, mm - 1, dd);
+    times[i] = Math.floor(ms / 1000) as UTCTimestamp;
   }
+
   return {
     histTimes: times.slice(0, histLen),
     foreTimes: times.slice(histLen),
@@ -100,7 +115,11 @@ export default function AdvancedChart({
   useEffect(() => {
     if (!priceRef.current || history.length === 0) return;
 
-    const { histTimes, foreTimes } = buildTimestamps(history.length, forecast.length);
+    const allDates = [
+      ...history.map(h => h.date),
+      ...forecast.map(f => f.date),
+    ];
+    const { histTimes, foreTimes } = buildTimestamps(allDates, history.length);
 
     const bg          = isDark ? '#0d1520' : '#ffffff';
     const textColor   = isDark ? 'rgba(220,220,220,0.75)' : 'rgba(20,30,50,0.75)';

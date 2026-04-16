@@ -375,18 +375,35 @@ async def resolve_past_forecasts(symbol: str) -> None:
         band_hits: list = []  # 1=actual inside [low,high], 0=missed
 
         def nth_market_day(base_date, n: int):
-            """Return the n-th market weekday after base_date."""
+            """
+            Return the n-th actual trading day after base_date, determined by
+            actual_map (yfinance data) so holidays are excluded automatically.
+            Falls back to weekday-skip logic if actual_map lacks enough data.
+            """
+            d = base_date
+            hops = 0
+            for _ in range(20):  # safety: never loop more than 20 calendar days
+                d += timedelta(days=1)
+                if d in actual_map and actual_map[d] > 0:
+                    hops += 1
+                    if hops == n:
+                        return d
+            # Fallback: weekday-based (handles edge case where actual_map is sparse)
             d = base_date
             hops = 0
             while hops < n:
                 d += timedelta(days=1)
-                while d.weekday() >= 5:  # skip Sat/Sun
+                while d.weekday() >= 5:
                     d += timedelta(days=1)
                 hops += 1
             return d
 
         def resolve_actual(target_date):
-            """Return actual close for target_date (±3 holiday days), or None."""
+            """
+            Return actual close for target_date, or None.
+            Searches forward up to 3 calendar days for the first entry in
+            actual_map with a positive price (handles remaining holiday gaps).
+            """
             d = target_date
             for _ in range(4):
                 if d in actual_map and actual_map[d] > 0:
@@ -394,82 +411,82 @@ async def resolve_past_forecasts(symbol: str) -> None:
                 d += timedelta(days=1)
             return None
 
-        newly_resolved: list = []
+        # resolved_set: {pred_time -> max_horizon_resolved} (0 = not started)
+        newly_resolved: dict = {}  # {pred_time: max_horizon} for this pass
         for rec in records:
             pred_time = rec.get("_time")
             if pred_time is None:
                 continue
-            # Skip records already resolved in a prior pass
-            if pred_time in resolved_set:
+            # Skip records where all 5 horizons are already resolved
+            max_resolved = resolved_set.get(pred_time, 0)
+            if max_resolved >= 5:
                 continue
             pred_date = pred_time.date()
 
-            # ── d1 resolution (per-model + ensemble_d1 + outcome write) ──────
+            # ── d1: per-model errors + price_outcome (first time only) ────────
             target_d1 = nth_market_day(pred_date, 1)
-
-            # Skip entirely if d1 hasn't closed yet
             if target_d1 > now_date:
-                continue
+                continue  # d1 close not available yet
 
             actual_d1 = resolve_actual(target_d1)
             if actual_d1 is None:
                 continue
 
-            # Write price_outcome for d1 if not already stored
-            if target_d1 not in existing_outcomes:
-                outcome_dt = datetime(
-                    target_d1.year, target_d1.month, target_d1.day,
-                    tzinfo=timezone.utc
-                )
-                new_outcomes.append((outcome_dt, actual_d1))
+            if max_resolved < 1:
+                # Write price_outcome once per record
+                if target_d1 not in existing_outcomes:
+                    outcome_dt = datetime(
+                        target_d1.year, target_d1.month, target_d1.day,
+                        tzinfo=timezone.utc
+                    )
+                    new_outcomes.append((outcome_dt, actual_d1))
 
-            # Per-model day-1 errors
-            for model_name, field_key in [
-                ("prophet", "p_d1"),
-                ("sarima",  "s_d1"),
-                ("rf",      "r_d1"),
-            ]:
-                pred_val = float(rec.get(field_key, 0) or 0)
-                if pred_val > 0:
-                    err = abs(pred_val - actual_d1)
-                    errors_per_model[model_name].append(err)
+                # Per-model d1 errors (only on first pass)
+                for model_name, field_key in [
+                    ("prophet", "p_d1"),
+                    ("sarima",  "s_d1"),
+                    ("rf",      "r_d1"),
+                ]:
+                    pred_val = float(rec.get(field_key, 0) or 0)
+                    if pred_val > 0:
+                        err = abs(pred_val - actual_d1)
+                        errors_per_model[model_name].append(err)
+                        logger.info(
+                            f"[RL] {symbol}/{model_name}: pred={pred_val:.2f}, "
+                            f"actual={actual_d1:.2f}, err={err:.4f} ({target_d1})"
+                        )
+
+                # Band accuracy check (once per record)
+                e_d1_high = float(rec.get("e_d1_high", 0) or 0)
+                e_d1_low  = float(rec.get("e_d1_low",  0) or 0)
+                if e_d1_high > 0 and e_d1_low > 0:
+                    hit = 1 if e_d1_low <= actual_d1 <= e_d1_high else 0
+                    band_hits.append(hit)
                     logger.info(
-                        f"[RL] {symbol}/{model_name}: pred={pred_val:.2f}, "
-                        f"actual={actual_d1:.2f}, err={err:.4f} ({target_d1})"
+                        f"[RL] {symbol} band check: actual=${actual_d1:.2f} "
+                        f"vs [{e_d1_low:.2f}-{e_d1_high:.2f}] → {'HIT' if hit else 'MISS'}"
                     )
 
-            # Band accuracy — did actual price land inside [low, high]?
-            e_d1_high = float(rec.get("e_d1_high", 0) or 0)
-            e_d1_low  = float(rec.get("e_d1_low",  0) or 0)
-            if e_d1_high > 0 and e_d1_low > 0:
-                hit = 1 if e_d1_low <= actual_d1 <= e_d1_high else 0
-                band_hits.append(hit)
-                logger.info(
-                    f"[RL] {symbol} band check: actual=${actual_d1:.2f} "
-                    f"vs [{e_d1_low:.2f}-{e_d1_high:.2f}] → {'HIT' if hit else 'MISS'}"
-                )
-
-            # ── d1-d5 ensemble horizon resolution ────────────────────────────
-            for horizon in range(1, 6):
+            # ── d1-d5 ensemble horizon resolution (resume from last resolved) ─
+            for horizon in range(max(max_resolved, 0) + 1, 6):
                 target_dn = nth_market_day(pred_date, horizon)
                 if target_dn > now_date:
-                    break  # d1 passed but d2+ not yet — stop this record
+                    break  # this and later horizons not yet closed
                 field_key = f"e_d{horizon}"
                 pred_val  = float(rec.get(field_key, 0) or 0)
                 if pred_val <= 0:
+                    newly_resolved[pred_time] = max(newly_resolved.get(pred_time, 0), horizon)
                     continue
                 actual_dn = resolve_actual(target_dn)
                 if actual_dn is None:
-                    continue
+                    break  # can't find data — stop this record for now
                 err = abs(pred_val - actual_dn)
                 errors_per_horizon[f"ensemble_d{horizon}"].append(err)
                 logger.info(
                     f"[RL] {symbol}/ensemble_d{horizon}: pred={pred_val:.2f}, "
                     f"actual={actual_dn:.2f}, err={err:.4f} ({target_dn})"
                 )
-
-            # Mark resolved so concurrent calls don't re-apply same errors
-            newly_resolved.append(pred_time)
+                newly_resolved[pred_time] = max(newly_resolved.get(pred_time, 0), horizon)
 
         # Persist new outcomes
         for outcome_dt, actual_close in new_outcomes:
@@ -479,9 +496,10 @@ async def resolve_past_forecasts(symbol: str) -> None:
 
         # Persist resolution markers BEFORE updating model_accuracy so that a
         # concurrent resolver sees them and skips the same records.
-        for rt in newly_resolved:
+        # Write max_horizon so a future pass resumes from where this one stopped.
+        for rt, max_h in newly_resolved.items():
             await asyncio.to_thread(
-                forecast_store.mark_forecast_resolved, symbol, rt
+                forecast_store.mark_forecast_resolved, symbol, rt, max_h
             )
 
         # Update per-model accuracy (exponential decay MAE)
@@ -537,7 +555,7 @@ async def resolve_past_forecasts(symbol: str) -> None:
         ) or "none"
         logger.info(
             f"[RL] ✓ resolve_past_forecasts complete — {symbol}: "
-            f"{len(new_outcomes)} new outcomes | "
+            f"{len(new_outcomes)} new outcomes | {len(newly_resolved)} records advanced | "
             + ", ".join(f"{m}={len(e)}err" for m, e in errors_per_model.items())
             + f" | ensemble horizons: {ens_summary}"
             + f" | band hit rate: {band_pct}"

@@ -925,16 +925,16 @@ def run_ensemble_forecast(
 
     overall_high = max(d["high"] for d in days)
     overall_low  = min(d["low"]  for d in days)
-    conf_label   = (
-        "high"   if len(closes) > 100 and len(available) == 3 else
-        "medium" if len(closes) > 40  else "low"
-    )
+    # Derive top-level confidence from the mean of per-horizon conf_pct values.
+    # When MAE data exists these are calibrated; otherwise they use the heuristic.
+    avg_conf_pct = sum(d["confidence_pct"] for d in days) / len(days) if days else 50
+    conf_label   = "high" if avg_conf_pct >= 70 else "medium" if avg_conf_pct >= 45 else "low"
 
     logger.info(
         f"[ENSEMBLE] ✓ Result — "
         f"5d high=${overall_high:.2f}, 5d low=${overall_low:.2f} | "
         f"direction={direction} ({pct_change:.2f}%) | "
-        f"conf={conf_label} | models_used={len(available)}/3 | "
+        f"conf={conf_label} (avg={avg_conf_pct:.0f}%) | models_used={len(available)}/3 | "
         f"ohlcv_used={ohlcv_available}"
     )
     logger.info(f"[ENSEMBLE] ══════════ Forecast for {symbol} done ══════════")

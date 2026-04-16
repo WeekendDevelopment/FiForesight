@@ -373,12 +373,13 @@ class ForecastStore:
             logger.error(f"[RL] ✗ write_price_outcome error for {symbol}: {e}")
 
     def mark_forecast_resolved(
-        self, symbol: str, record_time: datetime
+        self, symbol: str, record_time: datetime, horizon: int = 1
     ) -> None:
         """
-        Write a resolution marker so a given forecast_record is only applied
-        to model_accuracy once, even if multiple concurrent /predict requests
-        call resolve_past_forecasts simultaneously.
+        Write a resolution marker for a given forecast_record.
+        `horizon` is the highest ensemble day resolved so far (1–5).
+        Writing the same timestamp overwrites the previous value in InfluxDB,
+        so the stored value always reflects the max horizon resolved.
         """
         try:
             _validate_tag(symbol, "symbol")
@@ -389,7 +390,7 @@ class ForecastStore:
             p = (
                 Point("forecast_resolution")
                 .tag("symbol", symbol)
-                .field("resolved", 1)
+                .field("resolved", int(horizon))
                 .time(record_time, WritePrecision.NS)
             )
             self._svc.write_api.write(
@@ -400,32 +401,37 @@ class ForecastStore:
 
     def query_resolved_timestamps(
         self, symbol: str, days: int = 30
-    ) -> set:
-        """Return set of forecast_record _time values already resolved."""
+    ) -> Dict[object, int]:
+        """
+        Return {forecast_record_time: max_horizon_resolved} for all resolved records.
+        horizon=1 means d1 done, horizon=5 means fully resolved.
+        Old records written with resolved=1 (boolean) continue to work correctly.
+        """
         try:
             _validate_tag(symbol, "symbol")
         except ValueError as e:
             logger.error(f"[RL] query_resolved_timestamps rejected — {e}")
-            return set()
+            return {}
         days = max(1, int(days))
         query = f"""
         from(bucket: "{Config.INFLUXDB_BUCKET}")
           |> range(start: -{days}d)
           |> filter(fn: (r) => r["_measurement"] == "forecast_resolution" and r["symbol"] == "{symbol}")
-          |> keep(columns: ["_time"])
+          |> keep(columns: ["_time", "_value"])
         """
         try:
             tables = self._svc.query_api.query(query)
-            out: set = set()
+            out: Dict[object, int] = {}
             for t in tables:
                 for r in t.records:
-                    tv = r.values.get("_time")
+                    tv  = r.values.get("_time")
+                    val = r.values.get("_value", 0) or 0
                     if tv is not None:
-                        out.add(tv)
+                        out[tv] = max(out.get(tv, 0), int(val))
             return out
         except Exception as e:
             logger.error(f"[RL] ✗ query_resolved_timestamps error for {symbol}: {e}")
-            return set()
+            return {}
 
     def write_model_accuracy(
         self, symbol: str, model: str, mae: float, sample_count: int

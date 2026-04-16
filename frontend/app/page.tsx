@@ -829,42 +829,28 @@ export default function QuantumDashboard() {
 
                       {/* ── Chart mode + engine toggles ─────────── */}
                       <Box sx={{ display: 'flex', gap: 1.5, mb: 2, flexWrap: 'wrap' }}>
-                        <Box sx={{ display: 'flex' }}>
-                          {(['line', 'candle'] as const).map((mode, idx) => (
-                            <Box key={mode} onClick={() => setChartMode(mode)} sx={{
-                              px: 1.5, py: 0.4, cursor: 'pointer',
-                              fontSize: '0.65rem', fontWeight: 800, letterSpacing: 1,
-                              border: '1px solid rgba(128,128,128,0.2)',
-                              borderRadius: idx === 0 ? '6px 0 0 6px' : '0 6px 6px 0',
-                              ml: idx === 1 ? '-1px' : 0,
-                              background: chartMode === mode ? `${primaryColor}1a` : 'transparent',
-                              color: chartMode === mode ? primaryColor : 'rgba(128,128,128,0.5)',
-                              transition: 'all 0.15s',
-                              '&:hover': { color: primaryColor, background: `${primaryColor}0d` },
-                              userSelect: 'none',
-                            }}>
-                              {mode === 'line' ? 'LINE' : 'CANDLE'}
-                            </Box>
-                          ))}
-                        </Box>
-                        <Box sx={{ display: 'flex' }}>
-                          {(['classic', 'pro'] as const).map((eng, idx) => (
-                            <Box key={eng} onClick={() => setChartEngine(eng)} sx={{
-                              px: 1.5, py: 0.4, cursor: 'pointer',
-                              fontSize: '0.65rem', fontWeight: 800, letterSpacing: 1,
-                              border: '1px solid rgba(128,128,128,0.2)',
-                              borderRadius: idx === 0 ? '6px 0 0 6px' : '0 6px 6px 0',
-                              ml: idx === 1 ? '-1px' : 0,
-                              background: chartEngine === eng ? `${primaryColor}1a` : 'transparent',
-                              color: chartEngine === eng ? primaryColor : 'rgba(128,128,128,0.5)',
-                              transition: 'all 0.15s',
-                              '&:hover': { color: primaryColor, background: `${primaryColor}0d` },
-                              userSelect: 'none',
-                            }}>
-                              {eng === 'classic' ? 'CLASSIC' : 'PRO (ZOOM)'}
-                            </Box>
-                          ))}
-                        </Box>
+                        <ToggleButtonGroup
+                          exclusive
+                          aria-label="chart-mode"
+                          value={chartMode}
+                          onChange={(_e, val) => val && setChartMode(val)}
+                          size="small"
+                          sx={{ '& .MuiToggleButton-root': { fontSize: '0.65rem', fontWeight: 800, letterSpacing: 1, py: 0.4, px: 1.5, borderRadius: '6px !important', border: '1px solid rgba(128,128,128,0.2) !important', '&.Mui-selected': { background: `${primaryColor}1a`, color: primaryColor }, '&:not(.Mui-selected)': { color: 'rgba(128,128,128,0.5)' }, '&:hover': { color: primaryColor, background: `${primaryColor}0d` } } }}
+                        >
+                          <ToggleButton value="line">LINE</ToggleButton>
+                          <ToggleButton value="candle">CANDLE</ToggleButton>
+                        </ToggleButtonGroup>
+                        <ToggleButtonGroup
+                          exclusive
+                          aria-label="chart-engine"
+                          value={chartEngine}
+                          onChange={(_e, val) => val && setChartEngine(val)}
+                          size="small"
+                          sx={{ '& .MuiToggleButton-root': { fontSize: '0.65rem', fontWeight: 800, letterSpacing: 1, py: 0.4, px: 1.5, borderRadius: '6px !important', border: '1px solid rgba(128,128,128,0.2) !important', '&.Mui-selected': { background: `${primaryColor}1a`, color: primaryColor }, '&:not(.Mui-selected)': { color: 'rgba(128,128,128,0.5)' }, '&:hover': { color: primaryColor, background: `${primaryColor}0d` } } }}
+                        >
+                          <ToggleButton value="classic">CLASSIC</ToggleButton>
+                          <ToggleButton value="pro">PRO (ZOOM)</ToggleButton>
+                        </ToggleButtonGroup>
                       </Box>
 
                       {/* ── Indicators Guide (collapsible) ──────────── */}
