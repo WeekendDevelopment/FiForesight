@@ -59,8 +59,6 @@ interface Props {
   resistance?: number[];
 }
 
-const DAY_SEC = 86400;
-
 /**
  * Convert an array of MM/DD date strings (from the backend payload) into
  * UTC timestamps. The backend strips the year, so we reconstruct it by
