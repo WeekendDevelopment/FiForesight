@@ -2,7 +2,6 @@
 import asyncio
 import logging
 import traceback
-import datetime as _dt
 from datetime import datetime, timedelta, timezone, date
 from typing import Dict, List, Optional, Tuple
 
