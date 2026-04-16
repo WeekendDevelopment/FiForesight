@@ -10,21 +10,19 @@ ARG NEXT_PUBLIC_APP_ENV
 ENV NEXT_PUBLIC_APP_ENV=$NEXT_PUBLIC_APP_ENV
 
 COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
-RUN pnpm install
+RUN pnpm install --frozen-lockfile
 COPY frontend/ ./
 RUN pnpm build
 
-# Final production image
-FROM node:25-slim
+# ---- Python deps stage ----
+FROM python:3.14-slim AS python-deps
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     gcc \
-    g++
-
-# Install Python and build dependencies
-RUN apt install python3 python3-pip python3-venv -y
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create a virtual environment for Python to keep it clean and set PATH
 ENV VIRTUAL_ENV=/opt/venv
@@ -35,26 +33,35 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 COPY backend/requirements.txt ./backend/
 RUN pip install --no-cache-dir -r ./backend/requirements.txt
 
+# ---- Final image ----
+FROM node:25-slim
+WORKDIR /app
+
 # Copy root package.json and install dependencies
 COPY package.json pnpm-lock.yaml ./
+
+# Copy Python binary + stdlib from python-deps stage
+COPY --from=python-deps /usr/local/bin/python3 /usr/local/bin/python3
+COPY --from=python-deps /usr/local/lib/python3.14 /usr/local/lib/python3.14
+
+# Copy venv from python-deps stage
+COPY --from=python-deps /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+ENV VIRTUAL_ENV=/opt/venv
 
 # Install pnpm
 RUN npm install -g pnpm
 
 # Install dependencies
-RUN pnpm install
+RUN pnpm install --frozen-lockfile
 
 # Copy backend code
 COPY backend/ ./backend/
 
-# Copy frontend build artifacts
-COPY --from=frontend-builder /app/frontend/.next /app/frontend/.next
-COPY --from=frontend-builder /app/frontend/node_modules /app/frontend/node_modules
-COPY --from=frontend-builder /app/frontend/package.json /app/frontend/package.json
-COPY --from=frontend-builder /app/frontend/public /app/frontend/public
+# Next.js standalone — no node_modules needed
+COPY --from=frontend-builder /app/frontend/.next/standalone ./
+COPY --from=frontend-builder /app/frontend/.next/static ./frontend/.next/static
+COPY --from=frontend-builder /app/frontend/public ./frontend/public
 
-# Expose only the frontend port (Next.js defaults to 3000)
 EXPOSE 3000
-
-# Start script using pnpm run
 CMD ["pnpm", "run", "app:start"]
