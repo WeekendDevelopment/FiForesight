@@ -616,6 +616,7 @@ def run_ensemble_forecast(
     volumes: Optional[List[float]] = None,
     historical_weights: Optional[List[float]] = None,
     sample_count: int = 0,
+    ensemble_mae: Optional[Dict] = None,
 ) -> Dict:
     """
     Ensemble of Prophet + SARIMAX + RandomForest forecasting closing price.
@@ -863,8 +864,19 @@ def run_ensemble_forecast(
         day_low  = round(predicted - (predicted - raw_low)  * horizon_factor, 2)
 
         n_models  = len(available)
-        base_conf = 40 + (len(closes) // 10) + (n_models * 10)
-        conf_pct  = max(10, min(90, base_conf - i * 5))
+        horizon_key = f"ensemble_d{i + 1}"
+        hor_data    = (ensemble_mae or {}).get(horizon_key, {})
+        hor_mae     = hor_data.get("mae", 0.0)
+        hor_samples = hor_data.get("samples", 0)
+        if hor_samples > 0 and hor_mae > 0 and predicted > 0:
+            # MAE as % of current price — lower = more accurate = higher confidence.
+            # 1% error → ~91% conf, 3% → ~73%, 5% → ~55%, 10% → ~10% (floor).
+            mae_pct  = (hor_mae / predicted) * 100
+            conf_pct = max(10, min(95, round(95 - mae_pct * 8.5)))
+        else:
+            # No historical data yet — use heuristic, improves automatically over time
+            base_conf = 40 + (len(closes) // 10) + (n_models * 10)
+            conf_pct  = max(10, min(90, base_conf - i * 5))
 
         dt = datetime.now(timezone.utc) + timedelta(days=i + 1)
         days.append({
@@ -913,16 +925,16 @@ def run_ensemble_forecast(
 
     overall_high = max(d["high"] for d in days)
     overall_low  = min(d["low"]  for d in days)
-    conf_label   = (
-        "high"   if len(closes) > 100 and len(available) == 3 else
-        "medium" if len(closes) > 40  else "low"
-    )
+    # Derive top-level confidence from the mean of per-horizon conf_pct values.
+    # When MAE data exists these are calibrated; otherwise they use the heuristic.
+    avg_conf_pct = sum(d["confidence_pct"] for d in days) / len(days) if days else 50
+    conf_label   = "high" if avg_conf_pct >= 70 else "medium" if avg_conf_pct >= 45 else "low"
 
     logger.info(
         f"[ENSEMBLE] ✓ Result — "
         f"5d high=${overall_high:.2f}, 5d low=${overall_low:.2f} | "
         f"direction={direction} ({pct_change:.2f}%) | "
-        f"conf={conf_label} | models_used={len(available)}/3 | "
+        f"conf={conf_label} (avg={avg_conf_pct:.0f}%) | models_used={len(available)}/3 | "
         f"ohlcv_used={ohlcv_available}"
     )
     logger.info(f"[ENSEMBLE] ══════════ Forecast for {symbol} done ══════════")
