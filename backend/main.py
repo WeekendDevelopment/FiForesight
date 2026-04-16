@@ -512,16 +512,28 @@ async def resolve_past_forecasts(symbol: str) -> None:
                 cur_n += 1
             return cur_mae, cur_n
 
+        # all_accuracy_ok gates mark_forecast_resolved: if any write_model_accuracy
+        # call returns False the markers are not advanced so the next cron pass
+        # retries all accuracy writes from scratch (idempotent EMA replay).
+        all_accuracy_ok = True
+
         for model_name, errs in errors_per_model.items():
             if not errs:
                 continue
             cur_mae, cur_n = _apply_ema(existing_acc.get(model_name, {}), errs)
-            await asyncio.to_thread(
+            ok = await asyncio.to_thread(
                 forecast_store.write_model_accuracy, symbol, model_name, cur_mae, cur_n
             )
-            logger.info(
-                f"[RL] {symbol}/{model_name} MAE → ${cur_mae:.3f} (n={cur_n})"
-            )
+            if ok:
+                logger.info(
+                    f"[RL] {symbol}/{model_name} MAE → ${cur_mae:.3f} (n={cur_n})"
+                )
+            else:
+                logger.warning(
+                    f"[RL] {symbol}/{model_name} accuracy write failed — "
+                    "resolution markers will not be advanced this pass"
+                )
+                all_accuracy_ok = False
 
         # Update per-horizon ensemble accuracy
         existing_ens = await asyncio.to_thread(
@@ -531,19 +543,32 @@ async def resolve_past_forecasts(symbol: str) -> None:
             if not errs:
                 continue
             cur_mae, cur_n = _apply_ema(existing_ens.get(horizon_key, {}), errs)
-            await asyncio.to_thread(
+            ok = await asyncio.to_thread(
                 forecast_store.write_model_accuracy, symbol, horizon_key, cur_mae, cur_n
             )
-            logger.info(
-                f"[RL] {symbol}/{horizon_key} MAE → ${cur_mae:.3f} (n={cur_n})"
-            )
+            if ok:
+                logger.info(
+                    f"[RL] {symbol}/{horizon_key} MAE → ${cur_mae:.3f} (n={cur_n})"
+                )
+            else:
+                logger.warning(
+                    f"[RL] {symbol}/{horizon_key} accuracy write failed — "
+                    "resolution markers will not be advanced this pass"
+                )
+                all_accuracy_ok = False
 
-        # All accuracy writes succeeded — now advance resolution markers so the
-        # next pass skips these records.  mark_forecast_resolved is idempotent
-        # (same timestamp+tag overwrites in InfluxDB), so a retry is safe.
-        for rt, max_h in newly_resolved.items():
-            await asyncio.to_thread(
-                forecast_store.mark_forecast_resolved, symbol, rt, max_h
+        # Advance resolution markers only when every accuracy write succeeded.
+        # mark_forecast_resolved is idempotent (same timestamp+tag overwrites in
+        # InfluxDB), so a future retry is safe.
+        if all_accuracy_ok:
+            for rt, max_h in newly_resolved.items():
+                await asyncio.to_thread(
+                    forecast_store.mark_forecast_resolved, symbol, rt, max_h
+                )
+        else:
+            logger.warning(
+                f"[RL] {symbol}: skipping {len(newly_resolved)} resolution marker(s) "
+                "due to accuracy write failure(s) — will retry on next pass"
             )
 
         band_pct = (

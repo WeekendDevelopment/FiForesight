@@ -435,13 +435,19 @@ class ForecastStore:
 
     def write_model_accuracy(
         self, symbol: str, model: str, mae: float, sample_count: int
-    ) -> None:
+    ) -> bool:
+        """Write updated EMA-MAE stats for one model/horizon key.
+
+        Returns True on success, False on any validation or InfluxDB failure
+        so callers can gate downstream operations (e.g. mark_forecast_resolved)
+        on confirmed writes.
+        """
         try:
             _validate_tag(symbol, "symbol")
             _validate_model(model)
         except ValueError as e:
             logger.error(f"[RL] write_model_accuracy rejected — {e}")
-            return
+            return False
         try:
             p = (
                 Point("model_accuracy")
@@ -457,8 +463,10 @@ class ForecastStore:
             logger.info(
                 f"[RL] ✓ model_accuracy updated — {symbol}/{model}: MAE=${mae:.3f}, n={sample_count}"
             )
+            return True
         except Exception as e:
             logger.error(f"[RL] ✗ write_model_accuracy error for {symbol}/{model}: {e}")
+            return False
 
     # ── Queries ───────────────────────────────────────────────────────────────
 
