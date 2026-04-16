@@ -14,15 +14,20 @@ RUN pnpm install --frozen-lockfile
 COPY frontend/ ./
 RUN pnpm build
 
-# ---- Python deps stage ----
-FROM python:3.14-slim AS python-deps
+# Final production image
+FROM node:25-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     gcc \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
+    g++
+
+# Install Python and build dependencies
+RUN apt install python3 python3-pip python3-venv -y
+
+# This deletes the index — not needed anymore
+RUN rm -rf /var/lib/apt/lists/*
 
 # Create a virtual environment for Python to keep it clean and set PATH
 ENV VIRTUAL_ENV=/opt/venv
@@ -33,21 +38,8 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 COPY backend/requirements.txt ./backend/
 RUN pip install --no-cache-dir -r ./backend/requirements.txt
 
-# ---- Final image ----
-FROM node:25-slim
-WORKDIR /app
-
 # Copy root package.json and install dependencies
 COPY package.json pnpm-lock.yaml ./
-
-# Copy Python binary + stdlib from python-deps stage
-COPY --from=python-deps /usr/local/bin/python3 /usr/local/bin/python3
-COPY --from=python-deps /usr/local/lib/python3.14 /usr/local/lib/python3.14
-
-# Copy venv from python-deps stage
-COPY --from=python-deps /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-ENV VIRTUAL_ENV=/opt/venv
 
 # Install pnpm
 RUN npm install -g pnpm
