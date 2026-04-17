@@ -72,7 +72,8 @@ class PredictionResponse(BaseModel):
     trending:     List[dict]
     indicators:   dict
     lastUpdated:  str
-    juryAnalysts: List[dict]
+    juryAnalysts:  List[dict]
+    modelWeights:  dict
 
 
 # ---------------------------------------------------------------------------
@@ -603,6 +604,22 @@ async def health():
     return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
+@app.get("/sparklines")
+async def sparklines(tickers: str):
+    """Return last-5-close prices for a comma-separated list of tickers."""
+    symbols = [t.strip().upper() for t in tickers.split(",") if t.strip()][:18]
+    result: Dict[str, List[float]] = {}
+    for sym in symbols:
+        try:
+            closes = await asyncio.to_thread(yf_svc.fetch_history, sym, "7d")
+            if closes is not None and not closes.empty:
+                vals = closes["Close"].dropna().tolist()[-5:]
+                result[sym] = [round(float(v), 2) for v in vals]
+        except Exception:
+            pass
+    return result
+
+
 @app.get("/debug")
 async def debug():
     """Checks every service dependency — hit this in the browser to diagnose 500s."""
@@ -1032,7 +1049,8 @@ async def predict(payload: dict = Body(...)):
             "resistance": sr_levels["resistance"],
         },
         lastUpdated  = now.isoformat(),
-        juryAnalysts = jury,
+        juryAnalysts  = jury,
+        modelWeights  = forecast.get("weights", {"prophet": 0.0, "sarima": 0.0, "rf": 0.0}),
     )
 
 

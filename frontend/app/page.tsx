@@ -21,6 +21,9 @@ import dynamic from 'next/dynamic';
 // ssr:false prevents Next.js from evaluating lightweight-charts on the server
 // (the library calls document/window at module level, which fails in Node.js).
 const AdvancedChart = dynamic(() => import('../components/AdvancedChart'), { ssr: false });
+import VolumeProfile    from '../components/VolumeProfile';
+import ModelWeightBar   from '../components/ModelWeightBar';
+import TrendingSparklines from '../components/TrendingSparklines';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -95,6 +98,7 @@ interface PredictionData {
   trending:  { symbol: string; name?: string; price: string | number; change: string; category?: string }[];
   indicators?: { rsi_series?: number[]; support?: number[]; resistance?: number[] };
   juryAnalysts?: AnalystJuror[];
+  modelWeights?: { prophet: number; sarima: number; rf: number };
   lastUpdated: string;
 }
 
@@ -985,7 +989,8 @@ export default function QuantumDashboard() {
                         />
                       ) : (<>
                       {/* ── Main price + overlay chart ──────────────── */}
-                      <Box ref={chartBoxRef} sx={{ height: 380, position: 'relative' }}>
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                      <Box ref={chartBoxRef} sx={{ height: 380, position: 'relative', flex: 1 }}>
                         <ResponsiveContainer width="100%" height="100%">
                           <ComposedChart data={(chartMode === 'line' ? chartData : candleChartData) as ChartEntry[]} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
                             <defs>
@@ -1118,6 +1123,8 @@ export default function QuantumDashboard() {
                           );
                         })()}
                       </Box>
+                      <VolumeProfile history={prediction.history.map(h => ({ price: h.price, high: h.high, low: h.low, volume: h.volume }))} isDark={isDark} height={380} />
+                      </Box>{/* end flex row */}
 
                       {/* ── MACD sub-chart ──────────────────────────── */}
                       {indicators.includes('macd') && macdData.length > 0 && (
@@ -1220,6 +1227,11 @@ export default function QuantumDashboard() {
                         </Box>
                       </CardContent>
                     </Card>
+                  )}
+
+                  {/* ── Ensemble Model Weights ────────────────────────────── */}
+                  {prediction.modelWeights && (
+                    <ModelWeightBar weights={prediction.modelWeights} isDark={isDark} />
                   )}
 
                   {/* ── Analyst Jury ──────────────────────────────────────── */}
@@ -1334,50 +1346,11 @@ export default function QuantumDashboard() {
                     </>
                   )}
 
-                  {/* Active markets */}
-                  <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
-                    <Zap size={20} color={isDark ? '#00ffa3' : '#16a34a'} /> Active Markets
-                  </Typography>
-                  <Stack spacing={1}>
-                    {(prediction?.trending || []).map((t, i) => {
-                      const meta      = CATEGORY_META[(t as any).category ?? ''] ?? { label: '??', color: '#64748b' };
-                      const isUp      = String(t.change ?? '').startsWith('+');
-                      const sparkColor = isUp ? (isDark ? '#00ffa3' : '#16a34a') : (isDark ? '#ff0055' : '#dc2626');
-                      const sparkData  = trendingSparklines[i] ?? [];
-                      const rawPrice   = parseFloat(String(t.price).replace(/[^\d.]/g, ''));
-                      const priceStr   = isNaN(rawPrice) ? String(t.price)
-                        : rawPrice >= 10000 ? rawPrice.toLocaleString('en-US', { maximumFractionDigits: 0 })
-                        : rawPrice >= 1     ? rawPrice.toFixed(2)
-                        : rawPrice.toFixed(5);
-                      return (
-                        <Paper key={i} sx={{
-                          px: 1.5, py: 1.2,
-                          background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)',
-                          display: 'flex', alignItems: 'center', gap: 1,
-                          border: '1px solid transparent',
-                          '&:hover': { border: `1px solid ${sparkColor}44`, background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' },
-                          transition: 'all 0.2s ease',
-                        }}>
-                          <Box sx={{ width: 26, height: 26, borderRadius: '6px', background: `${meta.color}20`, border: `1px solid ${meta.color}50`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                            <Typography sx={{ fontSize: '0.5rem', fontWeight: 900, color: meta.color, lineHeight: 1 }}>{meta.label}</Typography>
-                          </Box>
-                          <Box sx={{ flex: 1, minWidth: 0 }}>
-                            <Typography sx={{ fontSize: '0.7rem', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {(t as any).name || t.symbol}
-                            </Typography>
-                            {(t as any).name && t.symbol && (
-                              <Typography sx={{ fontSize: '0.55rem', opacity: 0.3 }}>{t.symbol}</Typography>
-                            )}
-                          </Box>
-                          {sparkData.length > 0 && <MiniSparkline data={sparkData} color={sparkColor} />}
-                          <Box sx={{ textAlign: 'right', flexShrink: 0 }}>
-                            <Typography sx={{ fontSize: '0.7rem', fontWeight: 700 }}>{priceStr}</Typography>
-                            <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: sparkColor }}>{String(t.change ?? '0%')}</Typography>
-                          </Box>
-                        </Paper>
-                      );
-                    })}
-                  </Stack>
+                  {/* ── Trending Sparklines (real 5-day) ─────────────────── */}
+                  {prediction?.trending?.length > 0 && (
+                    <TrendingSparklines tickers={prediction.trending} isDark={isDark} />
+                  )}
+
                 </Stack>
               )}
             </Grid>
