@@ -3,6 +3,10 @@
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
+import Box from '@mui/material/Box';
+import Chip from '@mui/material/Chip';
+import Stack from '@mui/material/Stack';
+import Typography from '@mui/material/Typography';
 
 const ForceGraph2D = dynamic(() => import('react-force-graph-2d'), { ssr: false });
 
@@ -56,7 +60,6 @@ const NODES: AppNode[] = [
 
   // ── Next.js API routes ───────────────────────────────────────────────────
   { id: 'api_predict',    label: '/api/predict',     group: 'api',       description: 'POST proxy → FastAPI /predict' },
-  { id: 'api_compare',    label: '/api/compare',     group: 'api',       description: 'GET stub → FastAPI /compare (pending)' },
 
   // ── FastAPI backend ──────────────────────────────────────────────────────
   { id: 'be_predict',     label: 'POST /predict',    group: 'backend',   description: 'Main forecast endpoint — full pipeline' },
@@ -95,7 +98,6 @@ const LINKS: AppLink[] = [
 
   // api routes proxy to backend
   { source: 'api_predict',   target: 'be_predict',     label: 'proxies' },
-  { source: 'api_compare',   target: 'be_predict',     label: 'stub' },
 
   // backend pipeline
   { source: 'be_predict',    target: 'svc_yfinance',   label: 'fetch OHLCV' },
@@ -154,33 +156,38 @@ export default function GraphPage() {
   };
 
   return (
-    <div style={{ width: '100vw', height: '100vh', background: '#0d1117', display: 'flex', flexDirection: 'column', fontFamily: 'Inter, sans-serif' }}>
+    <Box sx={{ width: '100vw', height: '100vh', bgcolor: '#0d1117', display: 'flex', flexDirection: 'column', fontFamily: 'Inter, sans-serif' }}>
 
       {/* ── Header ── */}
-      <div style={{ padding: '12px 20px', borderBottom: '1px solid #21262d', display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0 }}>
-        <Link href="/" style={{ color: '#60a5fa', fontSize: 13, textDecoration: 'none', opacity: 0.7 }}>← Dashboard</Link>
-        <span style={{ color: '#e6edf3', fontWeight: 700, fontSize: 15, letterSpacing: 0.5 }}>FiForesight — App Graph</span>
-        <span style={{ color: '#8b949e', fontSize: 12 }}>{NODES.length} nodes · {LINKS.length} edges</span>
+      <Box component="header" sx={{ px: 2.5, py: 1.5, borderBottom: '1px solid #21262d', display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+        <Link href="/" aria-label="Back to dashboard" style={{ color: '#60a5fa', fontSize: 13, textDecoration: 'none', opacity: 0.7 }}>← Dashboard</Link>
+        <Typography variant="subtitle1" sx={{ color: '#e6edf3', fontWeight: 700, letterSpacing: 0.5 }}>
+          FiForesight — App Graph
+        </Typography>
+        <Typography variant="caption" sx={{ color: '#8b949e' }}>
+          {NODES.length} nodes · {LINKS.length} edges
+        </Typography>
 
         {/* ── Legend / filter toggles ── */}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Stack direction="row" spacing={1} flexWrap="wrap" sx={{ ml: 'auto' }}>
           {(Object.keys(GROUP_COLORS) as NodeGroup[]).map(g => (
-            <button
+            <Chip
               key={g}
+              label={GROUP_LABELS[g]}
+              size="small"
               onClick={() => toggleGroup(g)}
-              style={{
-                padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+              aria-pressed={activeGroups.has(g)}
+              sx={{
+                fontSize: 11, fontWeight: 600, cursor: 'pointer',
                 border: `1px solid ${GROUP_COLORS[g]}`,
-                background: activeGroups.has(g) ? GROUP_COLORS[g] + '22' : 'transparent',
+                bgcolor: activeGroups.has(g) ? GROUP_COLORS[g] + '22' : 'transparent',
                 color: activeGroups.has(g) ? GROUP_COLORS[g] : '#8b949e',
-                transition: 'all 0.15s',
+                '&:hover': { bgcolor: GROUP_COLORS[g] + '33' },
               }}
-            >
-              {GROUP_LABELS[g]}
-            </button>
+            />
           ))}
-        </div>
-      </div>
+        </Stack>
+      </Box>
 
       {/* ── Graph canvas ── */}
       <div ref={containerRef} style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
@@ -263,6 +270,6 @@ export default function GraphPage() {
           </div>
         )}
       </div>
-    </div>
+    </Box>
   );
 }

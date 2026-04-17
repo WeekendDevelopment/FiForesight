@@ -3,7 +3,7 @@ import asyncio
 import logging
 import traceback
 from datetime import datetime, timedelta, timezone, date
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import uvicorn
@@ -712,10 +712,10 @@ async def predict(payload: dict = Body(...)):
         # with the live price instead of appending a duplicate — otherwise the
         # chart sees two bars with the same date and lightweight-charts fails
         # its strict-ascending assertion.
-        last_time = historical_prices[-1]["_time"] if historical_prices else None
-        last_date = last_time.date() if hasattr(last_time, "date") else None
+        last_time: Optional[Any]       = historical_prices[-1]["_time"] if historical_prices else None
+        last_date: Optional[date]      = last_time.date() if hasattr(last_time, "date") else None
         if last_date == now.date():
-            last_bar = historical_prices[-1]
+            last_bar: Dict[str, Any]   = historical_prices[-1]
             last_bar["close"] = live_price
             last_bar["high"]  = max(float(last_bar.get("high", live_price)), live_price)
             last_bar["low"]   = min(float(last_bar.get("low",  live_price)), live_price)
