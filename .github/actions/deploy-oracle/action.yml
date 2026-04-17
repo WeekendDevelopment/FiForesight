@@ -47,7 +47,7 @@ runs:
           docker run -d \
             --name fiforesight \
             --restart always \
-            -p 80:3000 \
+            -p 3000:3000 \
             -e GOOGLE_GENAI_API_KEY=${{ env.GOOGLE_GENAI_API_KEY }} \
             -e FINNHUB_API_KEY=${{ env.FINNHUB_API_KEY }} \
             -e INFLUXDB_BUCKET=${{ env.INFLUXDB_BUCKET }} \

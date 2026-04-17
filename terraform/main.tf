@@ -68,8 +68,8 @@ resource "oci_core_security_list" "sl" {
     protocol = "6" # TCP
     source   = "0.0.0.0/0"
     tcp_options {
-      min = 80
-      max = 80
+      min = 443
+      max = 443
     }
   }
 

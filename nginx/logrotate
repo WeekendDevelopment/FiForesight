@@ -1,0 +1,14 @@
+/var/log/nginx/*.log {
+    daily
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    sharedscripts
+    postrotate
+        if pidof nginx > /dev/null 2>&1; then
+            nginx -s reopen || true
+        fi
+    endscript
+}

@@ -36,7 +36,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="FiForesight daily RL training")
     parser.add_argument(
         "--url",
-        default="http://fiforesight.duckdns.org",
+        default="https://fiforesight.duckdns.org",
         help="Base URL of the deployed app (default: prod)",
     )
     parser.add_argument(
