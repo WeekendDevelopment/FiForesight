@@ -9,7 +9,7 @@ import {
   Skeleton, ToggleButton, ToggleButtonGroup, IconButton, Autocomplete, Collapse,
 } from '@mui/material';
 import {
-  Search, BrainCircuit, Newspaper, Zap, BarChart2, Sun, Moon,
+  Search, BrainCircuit, Newspaper, BarChart2, Sun, Moon,
   Info, ChevronDown, ChevronUp, Scale,
 } from 'lucide-react';
 import {
@@ -17,7 +17,13 @@ import {
   LineChart, Line, ReferenceLine, ComposedChart, Area, Legend,
   BarChart, Bar, Cell,
 } from 'recharts';
-import AdvancedChart from '../components/AdvancedChart';
+import dynamic from 'next/dynamic';
+// ssr:false prevents Next.js from evaluating lightweight-charts on the server
+// (the library calls document/window at module level, which fails in Node.js).
+const AdvancedChart = dynamic(() => import('../components/AdvancedChart'), { ssr: false });
+import VolumeProfile    from '../components/VolumeProfile';
+import ModelWeightBar   from '../components/ModelWeightBar';
+import TrendingSparklines from '../components/TrendingSparklines';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -92,6 +98,7 @@ interface PredictionData {
   trending:  { symbol: string; name?: string; price: string | number; change: string; category?: string }[];
   indicators?: { rsi_series?: number[]; support?: number[]; resistance?: number[] };
   juryAnalysts?: AnalystJuror[];
+  modelWeights?: { prophet: number; sarima: number; rf: number };
   lastUpdated: string;
 }
 
@@ -157,29 +164,7 @@ const POPULAR_TICKERS = [
   'SPY','QQQ','DIA','IWM','GLD','SLV','TLT','BTC-USD','ETH-USD',
 ];
 
-const CATEGORY_META: Record<string, { label: string; color: string }> = {
-  us:         { label: 'US',  color: '#3b82f6' },
-  europe:     { label: 'EU',  color: '#8b5cf6' },
-  asia:       { label: 'AS',  color: '#f59e0b' },
-  currencies: { label: 'FX',  color: '#10b981' },
-  crypto:     { label: 'DFI', color: '#f97316' },
-};
-
 type IndicatorKey = 'bb' | 'sma' | 'macd' | 'rsi' | 'volume';
-
-// ── Mini sparkline ────────────────────────────────────────────────────────────
-
-function MiniSparkline({ data, color }: { data: { v: number }[]; color: string }) {
-  return (
-    <Box sx={{ width: 68, height: 30, flexShrink: 0 }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
-          <Line type="monotone" dataKey="v" stroke={color} strokeWidth={1.5} dot={false} isAnimationActive={false} />
-        </LineChart>
-      </ResponsiveContainer>
-    </Box>
-  );
-}
 
 // ── Confidence badge ──────────────────────────────────────────────────────────
 
@@ -549,19 +534,6 @@ export default function QuantumDashboard() {
       color: isUp ? (isDark ? '#00ffa3' : '#16a34a') : (isDark ? '#ff0055' : '#dc2626'),
     };
   }, [prediction?.history, isDark]);
-
-  const trendingSparklines = useMemo(() => {
-    if (!prediction?.trending) return {} as Record<number, { v: number }[]>;
-    return prediction.trending.reduce((acc, t, i) => {
-      const isUp = String(t.change ?? '').startsWith('+');
-      const base = parseFloat(String(t.price).replace(/[^\d.]/g, '')) || 100;
-      const seed = i * 3.7 + base * 0.01;
-      acc[i] = Array.from({ length: 12 }, (_, j) => ({
-        v: base * (1 + (isUp ? 1 : -1) * (j / 11) * 0.025 + Math.sin(seed + j * 0.9) * 0.007),
-      }));
-      return acc;
-    }, {} as Record<number, { v: number }[]>);
-  }, [prediction?.trending]);
 
   const trendColor   = chartStats?.color ?? (isDark ? '#00f2ff' : '#0077ff');
   const primaryColor = isDark ? '#00f2ff' : '#0077ff';
@@ -982,7 +954,8 @@ export default function QuantumDashboard() {
                         />
                       ) : (<>
                       {/* ── Main price + overlay chart ──────────────── */}
-                      <Box ref={chartBoxRef} sx={{ height: 380, position: 'relative' }}>
+                      <Box sx={{ display: 'flex', gap: 1 }}>
+                      <Box ref={chartBoxRef} sx={{ height: 380, position: 'relative', flex: 1 }}>
                         <ResponsiveContainer width="100%" height="100%">
                           <ComposedChart data={(chartMode === 'line' ? chartData : candleChartData) as ChartEntry[]} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
                             <defs>
@@ -1115,6 +1088,8 @@ export default function QuantumDashboard() {
                           );
                         })()}
                       </Box>
+                      <VolumeProfile history={prediction.history.map(h => ({ price: h.price, high: h.high, low: h.low, volume: h.volume }))} isDark={isDark} height={380} />
+                      </Box>{/* end flex row */}
 
                       {/* ── MACD sub-chart ──────────────────────────── */}
                       {indicators.includes('macd') && macdData.length > 0 && (
@@ -1217,6 +1192,11 @@ export default function QuantumDashboard() {
                         </Box>
                       </CardContent>
                     </Card>
+                  )}
+
+                  {/* ── Ensemble Model Weights ────────────────────────────── */}
+                  {prediction.modelWeights && (
+                    <ModelWeightBar weights={prediction.modelWeights} isDark={isDark} />
                   )}
 
                   {/* ── Analyst Jury ──────────────────────────────────────── */}
@@ -1331,50 +1311,11 @@ export default function QuantumDashboard() {
                     </>
                   )}
 
-                  {/* Active markets */}
-                  <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
-                    <Zap size={20} color={isDark ? '#00ffa3' : '#16a34a'} /> Active Markets
-                  </Typography>
-                  <Stack spacing={1}>
-                    {(prediction?.trending || []).map((t, i) => {
-                      const meta      = CATEGORY_META[(t as any).category ?? ''] ?? { label: '??', color: '#64748b' };
-                      const isUp      = String(t.change ?? '').startsWith('+');
-                      const sparkColor = isUp ? (isDark ? '#00ffa3' : '#16a34a') : (isDark ? '#ff0055' : '#dc2626');
-                      const sparkData  = trendingSparklines[i] ?? [];
-                      const rawPrice   = parseFloat(String(t.price).replace(/[^\d.]/g, ''));
-                      const priceStr   = isNaN(rawPrice) ? String(t.price)
-                        : rawPrice >= 10000 ? rawPrice.toLocaleString('en-US', { maximumFractionDigits: 0 })
-                        : rawPrice >= 1     ? rawPrice.toFixed(2)
-                        : rawPrice.toFixed(5);
-                      return (
-                        <Paper key={i} sx={{
-                          px: 1.5, py: 1.2,
-                          background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)',
-                          display: 'flex', alignItems: 'center', gap: 1,
-                          border: '1px solid transparent',
-                          '&:hover': { border: `1px solid ${sparkColor}44`, background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' },
-                          transition: 'all 0.2s ease',
-                        }}>
-                          <Box sx={{ width: 26, height: 26, borderRadius: '6px', background: `${meta.color}20`, border: `1px solid ${meta.color}50`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                            <Typography sx={{ fontSize: '0.5rem', fontWeight: 900, color: meta.color, lineHeight: 1 }}>{meta.label}</Typography>
-                          </Box>
-                          <Box sx={{ flex: 1, minWidth: 0 }}>
-                            <Typography sx={{ fontSize: '0.7rem', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {(t as any).name || t.symbol}
-                            </Typography>
-                            {(t as any).name && t.symbol && (
-                              <Typography sx={{ fontSize: '0.55rem', opacity: 0.3 }}>{t.symbol}</Typography>
-                            )}
-                          </Box>
-                          {sparkData.length > 0 && <MiniSparkline data={sparkData} color={sparkColor} />}
-                          <Box sx={{ textAlign: 'right', flexShrink: 0 }}>
-                            <Typography sx={{ fontSize: '0.7rem', fontWeight: 700 }}>{priceStr}</Typography>
-                            <Typography sx={{ fontSize: '0.6rem', fontWeight: 700, color: sparkColor }}>{String(t.change ?? '0%')}</Typography>
-                          </Box>
-                        </Paper>
-                      );
-                    })}
-                  </Stack>
+                  {/* ── Trending Sparklines (real 5-day) ─────────────────── */}
+                  {prediction?.trending?.length > 0 && (
+                    <TrendingSparklines tickers={prediction.trending} isDark={isDark} />
+                  )}
+
                 </Stack>
               )}
             </Grid>

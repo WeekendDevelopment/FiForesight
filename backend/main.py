@@ -3,7 +3,7 @@ import asyncio
 import logging
 import traceback
 from datetime import datetime, timedelta, timezone, date
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import uvicorn
@@ -72,7 +72,8 @@ class PredictionResponse(BaseModel):
     trending:     List[dict]
     indicators:   dict
     lastUpdated:  str
-    juryAnalysts: List[dict]
+    juryAnalysts:  List[dict]
+    modelWeights:  dict
 
 
 # ---------------------------------------------------------------------------
@@ -603,6 +604,22 @@ async def health():
     return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
+@app.get("/sparklines")
+async def sparklines(tickers: str):
+    """Return last-5-close prices for a comma-separated list of tickers."""
+    symbols = [t.strip().upper() for t in tickers.split(",") if t.strip()][:18]
+    result: Dict[str, List[float]] = {}
+    for sym in symbols:
+        try:
+            closes = await asyncio.to_thread(yf_svc.fetch_history, sym, "7d")
+            if closes is not None and not closes.empty:
+                vals = closes["Close"].dropna().tolist()[-5:]
+                result[sym] = [round(float(v), 2) for v in vals]
+        except Exception as e:
+            logger.warning("[sparklines] %s fetch failed: %s", sym, e, exc_info=True)
+    return result
+
+
 @app.get("/debug")
 async def debug():
     """Checks every service dependency — hit this in the browser to diagnose 500s."""
@@ -708,15 +725,31 @@ async def predict(payload: dict = Body(...)):
     logger.info(f"[STEP-2] Fetching live price for {symbol} ...")
     live_price = await asyncio.to_thread(yf_svc.get_live_price, symbol)
     if live_price > 0:
-        historical_prices.append({
-            "_time": now, "close": live_price,
-            "open":  live_price, "high": live_price,
-            "low":   live_price, "volume": 0.0,
-        })
-        logger.info(
-            f"[STEP-2] ✓ Live price ${live_price:.2f} injected as latest bar "
-            f"(total bars now: {len(historical_prices)})"
-        )
+        # If yfinance already returned today's (partial) bar, replace its close
+        # with the live price instead of appending a duplicate — otherwise the
+        # chart sees two bars with the same date and lightweight-charts fails
+        # its strict-ascending assertion.
+        last_time: Optional[Any]       = historical_prices[-1]["_time"] if historical_prices else None
+        last_date: Optional[date]      = last_time.date() if hasattr(last_time, "date") else None
+        if last_date == now.date():
+            last_bar: Dict[str, Any]   = historical_prices[-1]
+            last_bar["close"] = live_price
+            last_bar["high"]  = max(float(last_bar.get("high", live_price)), live_price)
+            last_bar["low"]   = min(float(last_bar.get("low",  live_price)), live_price)
+            logger.info(
+                f"[STEP-2] ✓ Live price ${live_price:.2f} merged into today's "
+                f"existing bar (total bars: {len(historical_prices)})"
+            )
+        else:
+            historical_prices.append({
+                "_time": now, "close": live_price,
+                "open":  live_price, "high": live_price,
+                "low":   live_price, "volume": 0.0,
+            })
+            logger.info(
+                f"[STEP-2] ✓ Live price ${live_price:.2f} injected as latest bar "
+                f"(total bars now: {len(historical_prices)})"
+            )
     else:
         live_price = float(historical_prices[-1]["close"])
         logger.info(
@@ -1016,7 +1049,8 @@ async def predict(payload: dict = Body(...)):
             "resistance": sr_levels["resistance"],
         },
         lastUpdated  = now.isoformat(),
-        juryAnalysts = jury,
+        juryAnalysts  = jury,
+        modelWeights  = forecast.get("weights", {"prophet": 0.0, "sarima": 0.0, "rf": 0.0}),
     )
 
 

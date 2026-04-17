@@ -20,15 +20,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
     return (
-    <html lang="en">
-      <head>
-        <Script
-            id="newrelic"
-            strategy="beforeInteractive"
-            src={nrScript}
-        />
-      </head>
-      <body className={inter.className}>{children}</body>
+    <html lang="en" suppressHydrationWarning>
+      <body className={inter.className}>
+        {children}
+        <Script id="newrelic" strategy="afterInteractive" src={nrScript} />
+      </body>
     </html>
   );
 }

@@ -127,6 +127,11 @@ export default function AdvancedChart({
   useEffect(() => {
     if (!priceRef.current || history.length === 0) return;
 
+    // Hoist mutable state so the cleanup closure always has the latest refs.
+    let charts: IChartApi[] = [];
+    let handlers: Array<() => void> = [];
+
+    try {
     const allDates = [
       ...history.map(h => h.date),
       ...forecast.map(f => f.date),
@@ -149,7 +154,7 @@ export default function AdvancedChart({
     };
 
     const priceChart = createChart(priceRef.current, baseOptions);
-    const charts: IChartApi[] = [priceChart];
+    charts = [priceChart];
 
     // Helper — map over history with index, filter nulls, build {time,value}.
     const histPoints = (pick: (h: AdvHistoryPoint) => number | null | undefined) =>
@@ -287,7 +292,6 @@ export default function AdvancedChart({
 
     // ── Sync time scales across all panes ─────────────────────────
     const syncing = { current: false };
-    const handlers: Array<() => void> = [];
     charts.forEach(source => {
       const fn = (range: { from: Time; to: Time } | null) => {
         if (syncing.current || !range) return;
@@ -302,6 +306,13 @@ export default function AdvancedChart({
     });
 
     priceChart.timeScale().fitContent();
+
+    } catch (err) {
+      console.error('[AdvancedChart] Failed to initialise charts:', err);
+      // Partial cleanup — remove any charts that were created before the error.
+      charts.forEach(c => { try { c.remove(); } catch { /* ignore */ } });
+      charts = [];
+    }
 
     return () => {
       handlers.forEach(h => h());

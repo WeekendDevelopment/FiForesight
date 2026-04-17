@@ -986,7 +986,7 @@ class SerpService:
 # ---------------------------------------------------------------------------
 # Analyst Jury  —  3 personas, each pinned to a different model & provider
 #
-#   KIMI-K2   → Groq moonshotai/kimi-k2-instruct (free tier)      — Macro & Risk lens
+#   LLAMA-4-SCOUT → Groq meta-llama/llama-4-scout-17b-16e-instruct (free tier) — Macro & Risk lens
 #   LLAMA-70B → Groq llama-3.3-70b-versatile    (14,400 RPD free) — Growth lens
 #   QWEN3-32B → Groq qwen/qwen3-32b             (free tier)       — Quant lens
 #
@@ -995,15 +995,15 @@ class SerpService:
 
 ANALYST_PERSONAS = [
     {
-        "id":          "KIMI-K2",
-        "avatar":      "K2",
+        "id":          "LLAMA-4-SCOUT",
+        "avatar":      "L4",
         "title":       "Macro & Risk Lens",
-        "model_label": "Groq · Kimi K2",
+        "model_label": "Groq · Llama 4 Scout",
         "provider":    "groq",
-        "api_model":   "moonshotai/kimi-k2-instruct",
+        "api_model":   "meta-llama/llama-4-scout-17b-16e-instruct",
         "color":       "#94a3b8",
         "system": (
-            "You are KIMI-K2, a macro-economic and risk analyst running on Moonshot AI Kimi K2. "
+            "You are a macro-economic and risk analyst running on Meta Llama 4 Scout. "
             "Your lens is downside scenarios, warning signals, and risk-adjusted positioning. "
             "Analyse the provided market data and news results. "
             "Identify systemic risks, fundamental red flags, and external headwinds "
