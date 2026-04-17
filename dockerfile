@@ -19,15 +19,13 @@ FROM node:25-slim
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-venv \
     make \
     gcc \
-    g++
-
-# Install Python and build dependencies
-RUN apt install python3 python3-pip python3-venv -y
-
-# This deletes the index — not needed anymore
-RUN rm -rf /var/lib/apt/lists/*
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create a virtual environment for Python to keep it clean and set PATH
 ENV VIRTUAL_ENV=/opt/venv
@@ -54,6 +52,13 @@ COPY backend/ ./backend/
 COPY --from=frontend-builder /app/frontend/.next/standalone ./
 COPY --from=frontend-builder /app/frontend/.next/static ./frontend/.next/static
 COPY --from=frontend-builder /app/frontend/public ./frontend/public
+
+# ---- Non-root user ----
+RUN groupadd --gid 1001 appuser && \
+    useradd --uid 1001 --gid appuser --shell /bin/bash --create-home appuser && \
+    chown -R appuser:appuser /app /opt/venv
+
+USER appuser
 
 EXPOSE 3000
 CMD ["pnpm", "run", "app:start"]
