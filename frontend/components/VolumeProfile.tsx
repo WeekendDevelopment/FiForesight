@@ -21,6 +21,7 @@ interface Props {
 
 export default function VolumeProfile({ history, isDark, height = 380, buckets = 24 }: Props) {
   const data = useMemo(() => {
+    if (history.length === 0 || !(Number.isInteger(buckets) && buckets > 0)) return [];
     const prices = history.map(h => h.price);
     const minP   = Math.min(...prices);
     const maxP   = Math.max(...prices);

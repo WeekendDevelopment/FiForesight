@@ -9,7 +9,7 @@ import {
   Skeleton, ToggleButton, ToggleButtonGroup, IconButton, Autocomplete, Collapse,
 } from '@mui/material';
 import {
-  Search, BrainCircuit, Newspaper, Zap, BarChart2, Sun, Moon,
+  Search, BrainCircuit, Newspaper, BarChart2, Sun, Moon,
   Info, ChevronDown, ChevronUp, Scale,
 } from 'lucide-react';
 import {
@@ -164,29 +164,7 @@ const POPULAR_TICKERS = [
   'SPY','QQQ','DIA','IWM','GLD','SLV','TLT','BTC-USD','ETH-USD',
 ];
 
-const CATEGORY_META: Record<string, { label: string; color: string }> = {
-  us:         { label: 'US',  color: '#3b82f6' },
-  europe:     { label: 'EU',  color: '#8b5cf6' },
-  asia:       { label: 'AS',  color: '#f59e0b' },
-  currencies: { label: 'FX',  color: '#10b981' },
-  crypto:     { label: 'DFI', color: '#f97316' },
-};
-
 type IndicatorKey = 'bb' | 'sma' | 'macd' | 'rsi' | 'volume';
-
-// ── Mini sparkline ────────────────────────────────────────────────────────────
-
-function MiniSparkline({ data, color }: { data: { v: number }[]; color: string }) {
-  return (
-    <Box sx={{ width: 68, height: 30, flexShrink: 0 }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
-          <Line type="monotone" dataKey="v" stroke={color} strokeWidth={1.5} dot={false} isAnimationActive={false} />
-        </LineChart>
-      </ResponsiveContainer>
-    </Box>
-  );
-}
 
 // ── Confidence badge ──────────────────────────────────────────────────────────
 
@@ -556,19 +534,6 @@ export default function QuantumDashboard() {
       color: isUp ? (isDark ? '#00ffa3' : '#16a34a') : (isDark ? '#ff0055' : '#dc2626'),
     };
   }, [prediction?.history, isDark]);
-
-  const trendingSparklines = useMemo(() => {
-    if (!prediction?.trending) return {} as Record<number, { v: number }[]>;
-    return prediction.trending.reduce((acc, t, i) => {
-      const isUp = String(t.change ?? '').startsWith('+');
-      const base = parseFloat(String(t.price).replace(/[^\d.]/g, '')) || 100;
-      const seed = i * 3.7 + base * 0.01;
-      acc[i] = Array.from({ length: 12 }, (_, j) => ({
-        v: base * (1 + (isUp ? 1 : -1) * (j / 11) * 0.025 + Math.sin(seed + j * 0.9) * 0.007),
-      }));
-      return acc;
-    }, {} as Record<number, { v: number }[]>);
-  }, [prediction?.trending]);
 
   const trendColor   = chartStats?.color ?? (isDark ? '#00f2ff' : '#0077ff');
   const primaryColor = isDark ? '#00f2ff' : '#0077ff';

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import { LineChart, Line, ResponsiveContainer } from 'recharts';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
@@ -32,7 +32,7 @@ type SparklineMap = Record<string, number[]>;
 
 export default function TrendingSparklines({ tickers, isDark }: Props) {
   const [sparklines, setSparklines] = useState<SparklineMap>({});
-  const [loading, setLoading]       = useState(false);
+  const [isPending, startTransition] = useTransition();
 
   const textColor = isDark ? 'rgba(220,220,220,0.7)' : 'rgba(20,30,50,0.7)';
   const dimColor  = isDark ? 'rgba(220,220,220,0.35)' : 'rgba(20,30,50,0.35)';
@@ -44,11 +44,15 @@ export default function TrendingSparklines({ tickers, isDark }: Props) {
     const syms = tickers.map(t => t.symbol ?? t.ticker ?? '').filter(Boolean).slice(0, 18);
     if (!syms.length) return;
 
-    setLoading(true);
-    axios.get(`/api/sparklines?tickers=${syms.join(',')}`)
-      .then(r => setSparklines(r.data))
-      .catch(() => {/* silent — sparklines are non-critical */})
-      .finally(() => setLoading(false));
+    const controller = new AbortController();
+    axios.get(`/api/sparklines?tickers=${syms.join(',')}`, { signal: controller.signal })
+      .then(r => startTransition(() => setSparklines(r.data)))
+      .catch(err => {
+        if (err.name !== 'CanceledError' && !err.message?.includes('canceled')) {
+          // silent — sparklines are non-critical
+        }
+      });
+    return () => controller.abort();
   }, [tickers]);
 
   if (!tickers.length) return null;
@@ -56,7 +60,7 @@ export default function TrendingSparklines({ tickers, isDark }: Props) {
   return (
     <Box>
       <Typography sx={{ fontSize: 10, fontWeight: 800, letterSpacing: 1.2, color: dimColor, textTransform: 'uppercase', mb: 1 }}>
-        Trending {loading && <span style={{ opacity: 0.5 }}>· loading…</span>}
+        Trending {isPending && <span style={{ opacity: 0.5 }}>· loading…</span>}
       </Typography>
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 1 }}>
         {tickers.slice(0, 18).map((t, i) => {

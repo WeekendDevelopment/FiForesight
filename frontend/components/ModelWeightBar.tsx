@@ -18,10 +18,21 @@ const MODELS = [
 ];
 
 export default function ModelWeightBar({ weights, isDark }: Props) {
-  const total = weights.prophet + weights.sarima + weights.rf || 1;
-  const pcts  = MODELS.map(m => ({ ...m, pct: weights[m.key] / total }));
+  const total     = weights.prophet + weights.sarima + weights.rf;
   const textColor = isDark ? 'rgba(220,220,220,0.55)' : 'rgba(20,30,50,0.55)';
-  const dominant  = pcts.reduce((a, b) => a.pct > b.pct ? a : b);
+
+  if (total <= 0) {
+    return (
+      <Box sx={{ width: '100%' }}>
+        <Typography sx={{ fontSize: 10, fontWeight: 800, letterSpacing: 1.2, color: textColor, textTransform: 'uppercase' }}>
+          Ensemble Weights — Unavailable
+        </Typography>
+      </Box>
+    );
+  }
+
+  const pcts     = MODELS.map(m => ({ ...m, pct: weights[m.key] / total }));
+  const dominant = pcts.reduce((a, b) => a.pct > b.pct ? a : b);
 
   return (
     <Box sx={{ width: '100%' }}>

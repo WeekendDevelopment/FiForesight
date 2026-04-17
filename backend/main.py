@@ -615,8 +615,8 @@ async def sparklines(tickers: str):
             if closes is not None and not closes.empty:
                 vals = closes["Close"].dropna().tolist()[-5:]
                 result[sym] = [round(float(v), 2) for v in vals]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("[sparklines] %s fetch failed: %s", sym, e, exc_info=True)
     return result
 
 
