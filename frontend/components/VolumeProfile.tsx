@@ -76,7 +76,8 @@ export default function VolumeProfile({ history, isDark, height = 380, buckets =
             />
             <Bar dataKey="pct" maxBarSize={60} isAnimationActive={false}>
               {data.map((entry, i) => {
-                const isNear = Math.abs(entry.price - currentPrice) < (data[1]?.price - data[0]?.price) * 1.2;
+                const safeStep = data.length >= 2 ? (data[1].price - data[0].price) : 0;
+                const isNear = safeStep > 0 && Math.abs(entry.price - currentPrice) < safeStep * 1.2;
                 return <Cell key={i} fill={isNear ? poaColor : barColor + '99'} />;
               })}
             </Bar>
