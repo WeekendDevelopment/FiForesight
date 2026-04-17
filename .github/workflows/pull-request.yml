@@ -131,6 +131,8 @@ jobs:
       - name: Build Application
         uses: docker/build-push-action@v5
         with:
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           context: .
           push: true
           load: true
@@ -152,6 +154,7 @@ jobs:
         run: |
           for i in {1..30}; do
             if curl -f http://localhost:3000/ 2>/dev/null; then
+              curl http://localhost:3000/api/health
               echo "Application is up!" >> $GITHUB_STEP_SUMMARY
               exit 0
             fi

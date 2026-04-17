@@ -47,7 +47,11 @@ def _validate_tag(value: str, field: str = "tag") -> str:
     return value
 
 
-_ALLOWED_MODELS = frozenset({"prophet", "sarima", "rf"})
+_ALLOWED_MODELS = frozenset({
+    "prophet", "sarima", "rf",
+    # per-horizon ensemble accuracy trackers (d1 reuses same slot as per-model)
+    "ensemble_d1", "ensemble_d2", "ensemble_d3", "ensemble_d4", "ensemble_d5",
+})
 
 
 def _validate_model(model: str) -> str:
@@ -369,12 +373,13 @@ class ForecastStore:
             logger.error(f"[RL] ✗ write_price_outcome error for {symbol}: {e}")
 
     def mark_forecast_resolved(
-        self, symbol: str, record_time: datetime
+        self, symbol: str, record_time: datetime, horizon: int = 1
     ) -> None:
         """
-        Write a resolution marker so a given forecast_record is only applied
-        to model_accuracy once, even if multiple concurrent /predict requests
-        call resolve_past_forecasts simultaneously.
+        Write a resolution marker for a given forecast_record.
+        `horizon` is the highest ensemble day resolved so far (1–5).
+        Writing the same timestamp overwrites the previous value in InfluxDB,
+        so the stored value always reflects the max horizon resolved.
         """
         try:
             _validate_tag(symbol, "symbol")
@@ -385,7 +390,7 @@ class ForecastStore:
             p = (
                 Point("forecast_resolution")
                 .tag("symbol", symbol)
-                .field("resolved", 1)
+                .field("resolved", int(horizon))
                 .time(record_time, WritePrecision.NS)
             )
             self._svc.write_api.write(
@@ -396,42 +401,53 @@ class ForecastStore:
 
     def query_resolved_timestamps(
         self, symbol: str, days: int = 30
-    ) -> set:
-        """Return set of forecast_record _time values already resolved."""
+    ) -> Dict[object, int]:
+        """
+        Return {forecast_record_time: max_horizon_resolved} for all resolved records.
+        horizon=1 means d1 done, horizon=5 means fully resolved.
+        Old records written with resolved=1 (boolean) continue to work correctly.
+        """
         try:
             _validate_tag(symbol, "symbol")
         except ValueError as e:
             logger.error(f"[RL] query_resolved_timestamps rejected — {e}")
-            return set()
+            return {}
         days = max(1, int(days))
         query = f"""
         from(bucket: "{Config.INFLUXDB_BUCKET}")
           |> range(start: -{days}d)
           |> filter(fn: (r) => r["_measurement"] == "forecast_resolution" and r["symbol"] == "{symbol}")
-          |> keep(columns: ["_time"])
+          |> keep(columns: ["_time", "_value"])
         """
         try:
             tables = self._svc.query_api.query(query)
-            out: set = set()
+            out: Dict[object, int] = {}
             for t in tables:
                 for r in t.records:
-                    tv = r.values.get("_time")
+                    tv  = r.values.get("_time")
+                    val = r.values.get("_value", 0) or 0
                     if tv is not None:
-                        out.add(tv)
+                        out[tv] = max(out.get(tv, 0), int(val))
             return out
         except Exception as e:
             logger.error(f"[RL] ✗ query_resolved_timestamps error for {symbol}: {e}")
-            return set()
+            return {}
 
     def write_model_accuracy(
         self, symbol: str, model: str, mae: float, sample_count: int
-    ) -> None:
+    ) -> bool:
+        """Write updated EMA-MAE stats for one model/horizon key.
+
+        Returns True on success, False on any validation or InfluxDB failure
+        so callers can gate downstream operations (e.g. mark_forecast_resolved)
+        on confirmed writes.
+        """
         try:
             _validate_tag(symbol, "symbol")
             _validate_model(model)
         except ValueError as e:
             logger.error(f"[RL] write_model_accuracy rejected — {e}")
-            return
+            return False
         try:
             p = (
                 Point("model_accuracy")
@@ -447,8 +463,10 @@ class ForecastStore:
             logger.info(
                 f"[RL] ✓ model_accuracy updated — {symbol}/{model}: MAE=${mae:.3f}, n={sample_count}"
             )
+            return True
         except Exception as e:
             logger.error(f"[RL] ✗ write_model_accuracy error for {symbol}/{model}: {e}")
+            return False
 
     # ── Queries ───────────────────────────────────────────────────────────────
 
@@ -548,6 +566,45 @@ class ForecastStore:
                     f"[RL] query_model_accuracy error for {symbol}/{model}: {e}"
                 )
         logger.info(f"[RL] query_model_accuracy — {symbol}: {result}")
+        return result
+
+    def query_ensemble_mae(self, symbol: str, lookback_days: int = 90) -> Dict[str, dict]:
+        """
+        Returns most-recent per-horizon ensemble accuracy.
+        { "ensemble_d1": {"mae": float, "samples": int}, ..., "ensemble_d5": {...} }
+        Empty dict or missing keys = no data yet for that horizon.
+        """
+        try:
+            _validate_tag(symbol, "symbol")
+        except ValueError as e:
+            logger.error(f"[RL] query_ensemble_mae rejected — {e}")
+            return {}
+        lookback_days = max(1, int(lookback_days))
+        result: Dict[str, dict] = {}
+        for model in ("ensemble_d1", "ensemble_d2", "ensemble_d3", "ensemble_d4", "ensemble_d5"):
+            query = f"""
+            from(bucket: "{Config.INFLUXDB_BUCKET}")
+              |> range(start: -{lookback_days}d)
+              |> filter(fn: (r) =>
+                  r["_measurement"] == "model_accuracy"
+                  and r["symbol"] == "{symbol}"
+                  and r["model"] == "{model}")
+              |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+              |> sort(columns: ["_time"], desc: true)
+              |> limit(n: 1)
+            """
+            try:
+                tables = self._svc.query_api.query(query)
+                for t in tables:
+                    for r in t.records:
+                        vals = r.values
+                        result[model] = {
+                            "mae":     float(vals.get("mae_d1", 999.0)),
+                            "samples": int(vals.get("sample_count", 0)),
+                        }
+            except Exception as e:
+                logger.warning(f"[RL] query_ensemble_mae error for {symbol}/{model}: {e}")
+        logger.info(f"[RL] query_ensemble_mae — {symbol}: {result}")
         return result
 
 

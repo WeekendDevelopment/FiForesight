@@ -134,7 +134,6 @@ jobs:
       - create-release
       - build-frontend
       - build-backend
-      - terraform
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -155,6 +154,8 @@ jobs:
       - name: Build Application and push
         uses: docker/build-push-action@v5
         with:
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           context: .
           push: true
           build-args: |
