@@ -17,7 +17,10 @@ import {
   LineChart, Line, ReferenceLine, ComposedChart, Area, Legend,
   BarChart, Bar, Cell,
 } from 'recharts';
-import AdvancedChart from '../components/AdvancedChart';
+import dynamic from 'next/dynamic';
+// ssr:false prevents Next.js from evaluating lightweight-charts on the server
+// (the library calls document/window at module level, which fails in Node.js).
+const AdvancedChart = dynamic(() => import('../components/AdvancedChart'), { ssr: false });
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

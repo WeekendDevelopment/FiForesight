@@ -708,15 +708,31 @@ async def predict(payload: dict = Body(...)):
     logger.info(f"[STEP-2] Fetching live price for {symbol} ...")
     live_price = await asyncio.to_thread(yf_svc.get_live_price, symbol)
     if live_price > 0:
-        historical_prices.append({
-            "_time": now, "close": live_price,
-            "open":  live_price, "high": live_price,
-            "low":   live_price, "volume": 0.0,
-        })
-        logger.info(
-            f"[STEP-2] ✓ Live price ${live_price:.2f} injected as latest bar "
-            f"(total bars now: {len(historical_prices)})"
-        )
+        # If yfinance already returned today's (partial) bar, replace its close
+        # with the live price instead of appending a duplicate — otherwise the
+        # chart sees two bars with the same date and lightweight-charts fails
+        # its strict-ascending assertion.
+        last_time = historical_prices[-1]["_time"] if historical_prices else None
+        last_date = last_time.date() if hasattr(last_time, "date") else None
+        if last_date == now.date():
+            last_bar = historical_prices[-1]
+            last_bar["close"] = live_price
+            last_bar["high"]  = max(float(last_bar.get("high", live_price)), live_price)
+            last_bar["low"]   = min(float(last_bar.get("low",  live_price)), live_price)
+            logger.info(
+                f"[STEP-2] ✓ Live price ${live_price:.2f} merged into today's "
+                f"existing bar (total bars: {len(historical_prices)})"
+            )
+        else:
+            historical_prices.append({
+                "_time": now, "close": live_price,
+                "open":  live_price, "high": live_price,
+                "low":   live_price, "volume": 0.0,
+            })
+            logger.info(
+                f"[STEP-2] ✓ Live price ${live_price:.2f} injected as latest bar "
+                f"(total bars now: {len(historical_prices)})"
+            )
     else:
         live_price = float(historical_prices[-1]["close"])
         logger.info(
