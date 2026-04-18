@@ -52,6 +52,8 @@ def _calc_rsi(closes: List[float], period: int = 14) -> float:
     losses = [-d for d in recent if d < 0]
     avg_gain = sum(gains) / period
     avg_loss = sum(losses) / period
+    if avg_gain == 0 and avg_loss == 0:
+        return 50.0
     if avg_loss == 0:
         return 100.0
     return round(100 - (100 / (1 + avg_gain / avg_loss)), 2)
@@ -70,11 +72,14 @@ async def _analyze_ticker(
             logger.warning("[SIM] %s: insufficient data", symbol)
             return None
 
-        closes  = df["Close"].dropna().tolist()
-        opens   = df["Open"].dropna().tolist()   if "Open"   in df.columns else None
-        highs   = df["High"].dropna().tolist()   if "High"   in df.columns else None
-        lows    = df["Low"].dropna().tolist()    if "Low"    in df.columns else None
-        volumes = df["Volume"].dropna().tolist() if "Volume" in df.columns else None
+        ohlcv_cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in df.columns]
+        df_clean   = df[ohlcv_cols].dropna()
+
+        closes  = df_clean["Close"].tolist()
+        opens   = df_clean["Open"].tolist()   if "Open"   in df_clean.columns else None
+        highs   = df_clean["High"].tolist()   if "High"   in df_clean.columns else None
+        lows    = df_clean["Low"].tolist()    if "Low"    in df_clean.columns else None
+        volumes = df_clean["Volume"].tolist() if "Volume" in df_clean.columns else None
 
         info = await asyncio.to_thread(yf_svc.fetch_info, symbol)
 

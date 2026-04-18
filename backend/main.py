@@ -9,7 +9,7 @@ import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, Body, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from config import Config, SanitizeHttpxFilter
 from models import (
@@ -1065,11 +1065,19 @@ class SimSuggestRequest(BaseModel):
     budget:     float = 100_000.0
 
 
+class SimHolding(BaseModel):
+    symbol:        str
+    name:          str   = ""
+    shares:        int
+    buyPrice:      float = Field(gt=0)
+    allocationUsd: float = 0.0
+
+
 class SimPerfRequest(BaseModel):
-    holdings:      List[dict]
+    holdings:      List[SimHolding]
     start_date:    str
-    spy_buy_price: float
-    budget:        float = 100_000.0
+    spy_buy_price: float = Field(ge=0)
+    budget:        float = Field(default=100_000.0, gt=0)
 
 
 @app.post("/simulation/suggest")
@@ -1091,7 +1099,7 @@ async def simulation_suggest(req: SimSuggestRequest):
 @app.post("/simulation/performance")
 async def simulation_performance(req: SimPerfRequest):
     return await get_portfolio_performance(
-        holdings=req.holdings,
+        holdings=[h.model_dump() for h in req.holdings],
         start_date=req.start_date,
         spy_buy_price=req.spy_buy_price,
         budget=req.budget,

@@ -678,12 +678,12 @@ class YFinanceService:
             keep = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in df.columns]
             df   = df[keep].dropna(subset=["Close"])
 
-            close_series = df['Close'].squeeze()
+            close_col = df['Close']
             logger.info(
                 f"[YFINANCE] ✓ fetch_history — {len(df)} rows for {ticker} | "
                 f"date range: {df.index.min().date()} → {df.index.max().date()} | "
-                f"close: ${float(close_series.iloc[0]):.2f} (oldest) → "
-                f"${float(close_series.iloc[-1]):.2f} (latest) | "
+                f"close: ${float(close_col.iloc[0]):.2f} (oldest) → "
+                f"${float(close_col.iloc[-1]):.2f} (latest) | "
                 f"columns: {list(df.columns)}"
             )
             return df

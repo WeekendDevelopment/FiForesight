@@ -7,6 +7,7 @@ import {
   Grid, CircularProgress, ThemeProvider, createTheme,
   CssBaseline, Paper, Chip, Stack, IconButton, TextField,
   Avatar, LinearProgress, Divider, Alert,
+  Table, TableHead, TableBody, TableRow, TableCell,
 } from '@mui/material';
 import {
   ArrowLeft, Trash2, BarChart2, Trophy, RefreshCw,
@@ -246,7 +247,7 @@ function SuggestionCard({
           WebkitBoxOrient: 'vertical', overflow: 'hidden',
           lineHeight: 1.5, mb: 1.5, fontStyle: 'italic',
         }}>
-          "{stock.juryNote}"
+          &ldquo;{stock.juryNote}&rdquo;
         </Typography>
       )}
 
@@ -399,7 +400,7 @@ export default function SimulationPage() {
         };
       }),
       spyBuyPrice: benchmark?.currentPrice ?? 0,
-      spyShares:   benchmark ? Math.floor(totalInvested / benchmark.currentPrice) : 0,
+      spyShares:   benchmark && benchmark.currentPrice > 0 ? Math.floor(totalInvested / benchmark.currentPrice) : 0,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(sim));
     setSimulation(sim);
@@ -637,7 +638,7 @@ export default function SimulationPage() {
 
         <Grid container spacing={2} sx={{ mb: 3 }}>
           {active.map(s => (
-            <Grid item xs={12} sm={6} md={4} key={s.symbol}>
+            <Grid size={{ xs: 12, sm: 6, md: 4 }} key={s.symbol}>
               <SuggestionCard
                 stock={s}
                 shares={effectiveShares(s)}
@@ -777,7 +778,7 @@ export default function SimulationPage() {
 
         {/* Stats row */}
         <Grid container spacing={2} sx={{ mb: 3 }}>
-          <Grid item xs={6} md={3}>
+          <Grid size={{ xs: 6, md: 3 }}>
             <StatCard
               label="Your Portfolio"
               value={`${portReturn >= 0 ? '+' : ''}${portReturn.toFixed(2)}%`}
@@ -785,7 +786,7 @@ export default function SimulationPage() {
               color={portReturn >= 0 ? '#10b981' : '#ef4444'}
             />
           </Grid>
-          <Grid item xs={6} md={3}>
+          <Grid size={{ xs: 6, md: 3 }}>
             <StatCard
               label="S&P 500 (SPY)"
               value={`${spyReturn >= 0 ? '+' : ''}${spyReturn.toFixed(2)}%`}
@@ -793,7 +794,7 @@ export default function SimulationPage() {
               color={spyReturn >= 0 ? '#10b981' : '#ef4444'}
             />
           </Grid>
-          <Grid item xs={6} md={3}>
+          <Grid size={{ xs: 6, md: 3 }}>
             <StatCard
               label="vs S&P 500"
               value={`${diff >= 0 ? '+' : ''}${diff.toFixed(2)}%`}
@@ -801,7 +802,7 @@ export default function SimulationPage() {
               color={isWinning ? '#f59e0b' : '#94a3b8'}
             />
           </Grid>
-          <Grid item xs={6} md={3}>
+          <Grid size={{ xs: 6, md: 3 }}>
             <StatCard
               label="Portfolio"
               value={String(sim.holdings.length)}
@@ -861,40 +862,39 @@ export default function SimulationPage() {
         <Paper sx={{ p: 2.5, border: '1px solid rgba(255,255,255,0.07)' }}>
           <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 2 }}>Holdings</Typography>
           <Box sx={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+            <Table size="small">
+              <TableHead>
+                <TableRow sx={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
                   {['Symbol', 'Shares', 'Buy Price', 'Current', 'Value', 'P&L', 'Return'].map(h => (
-                    <th key={h} style={{
-                      textAlign: 'left', padding: '8px 12px',
-                      color: '#475569', fontWeight: 600, fontSize: 12,
-                    }}>{h}</th>
+                    <TableCell key={h} sx={{ color: '#475569', fontWeight: 600, fontSize: 12, borderBottom: 'none' }}>
+                      {h}
+                    </TableCell>
                   ))}
-                </tr>
-              </thead>
-              <tbody>
+                </TableRow>
+              </TableHead>
+              <TableBody>
                 {holdingsRows.map(h => (
-                  <tr key={h.symbol} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-                    <td style={{ padding: '10px 12px' }}>
+                  <TableRow key={h.symbol} sx={{ borderBottom: '1px solid rgba(255,255,255,0.04)', '&:last-child td': { borderBottom: 0 } }}>
+                    <TableCell sx={{ borderBottom: 'none' }}>
                       <Typography variant="subtitle2" fontWeight={700}>{h.symbol}</Typography>
                       <Typography variant="caption" color="text.secondary">{h.name}</Typography>
-                    </td>
-                    <td style={{ padding: '10px 12px', color: '#94a3b8', fontSize: 14 }}>{h.shares}</td>
-                    <td style={{ padding: '10px 12px', color: '#94a3b8', fontSize: 14 }}>${h.buyPrice.toFixed(2)}</td>
-                    <td style={{ padding: '10px 12px', fontSize: 14 }}>${h.currentPrice.toFixed(2)}</td>
-                    <td style={{ padding: '10px 12px', fontSize: 14 }}>
+                    </TableCell>
+                    <TableCell sx={{ color: '#94a3b8', fontSize: 14, borderBottom: 'none' }}>{h.shares}</TableCell>
+                    <TableCell sx={{ color: '#94a3b8', fontSize: 14, borderBottom: 'none' }}>${h.buyPrice.toFixed(2)}</TableCell>
+                    <TableCell sx={{ fontSize: 14, borderBottom: 'none' }}>${h.currentPrice.toFixed(2)}</TableCell>
+                    <TableCell sx={{ fontSize: 14, borderBottom: 'none' }}>
                       ${h.value.toLocaleString('en-US', { maximumFractionDigits: 0 })}
-                    </td>
-                    <td style={{ padding: '10px 12px', fontSize: 14, color: h.pnl >= 0 ? '#10b981' : '#ef4444' }}>
+                    </TableCell>
+                    <TableCell sx={{ fontSize: 14, borderBottom: 'none', color: h.pnl >= 0 ? '#10b981' : '#ef4444' }}>
                       {h.pnl >= 0 ? '+' : ''}${h.pnl.toFixed(2)}
-                    </td>
-                    <td style={{ padding: '10px 12px', fontSize: 14, fontWeight: 700, color: h.pnlPct >= 0 ? '#10b981' : '#ef4444' }}>
+                    </TableCell>
+                    <TableCell sx={{ fontSize: 14, fontWeight: 700, borderBottom: 'none', color: h.pnlPct >= 0 ? '#10b981' : '#ef4444' }}>
                       {h.pnlPct >= 0 ? '+' : ''}{h.pnlPct.toFixed(2)}%
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </Box>
         </Paper>
       </Box>
