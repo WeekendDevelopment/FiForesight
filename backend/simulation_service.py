@@ -175,7 +175,7 @@ async def _bulk_jury(
           '"confidence":50,"note":"1 concise sentence"}'
     )
     try:
-        raw = await analyst_jury_svc._call_groq(
+        raw = await analyst_jury_svc.call_groq(
             "llama-3.3-70b-versatile",
             "You are a portfolio advisor. Output only a valid JSON array, nothing else.",
             prompt,

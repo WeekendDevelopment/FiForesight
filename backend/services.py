@@ -1140,6 +1140,12 @@ class AnalystJuryService:
     # Internal: provider-specific wrapper
     # ------------------------------------------------------------------
 
+    async def call_groq(
+        self, model: str, system: str, user: str, max_tokens: int = 320
+    ) -> str:
+        """Public entry point for a single Groq chat completion."""
+        return await self._call_groq(model, system, user, max_tokens)
+
     async def _call_groq(
         self, model: str, system: str, user: str, max_tokens: int = 320
     ) -> str:

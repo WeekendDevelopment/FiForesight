@@ -183,7 +183,8 @@ function SuggestionCard({
   onRemove: () => void;
   onSharesChange: (n: number) => void;
 }) {
-  const upside     = ((stock.forecastHigh - stock.currentPrice) / stock.currentPrice * 100);
+  const forecastRef = stock.direction === 'Bullish' ? stock.forecastHigh : stock.forecastLow;
+  const upside      = stock.currentPrice > 0 ? ((forecastRef - stock.currentPrice) / stock.currentPrice * 100) : 0;
   const allocUsd   = shares * stock.currentPrice;
   return (
     <Paper sx={{
@@ -320,10 +321,15 @@ export default function SimulationPage() {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        setSimulation(JSON.parse(saved) as SimulationState);
-        setPhase('race');
+        const parsed = JSON.parse(saved) as SimulationState;
+        if (parsed?.id && parsed?.holdings?.length && parsed?.startDate) {
+          setSimulation(parsed);
+          setPhase('race');
+        } else {
+          localStorage.removeItem(STORAGE_KEY);
+        }
       }
-    } catch { /* ignore */ }
+    } catch { localStorage.removeItem(STORAGE_KEY); }
   }, []);
 
   // Cycle analysis progress messages
@@ -349,8 +355,8 @@ export default function SimulationPage() {
         budget:        sim.budget,
       });
       setPerfData(data);
-    } catch { /* fail silently — show empty chart */ }
-    finally   { setPerfLoading(false); }
+    } catch (e) { console.error('[SimPerf] performance fetch failed:', e); }
+    finally     { setPerfLoading(false); }
   }
 
   async function handleAnalyze() {
@@ -694,7 +700,7 @@ export default function SimulationPage() {
                 {active.length} stocks selected
               </Typography>
             </Box>
-            {benchmark && (
+            {benchmark && benchmark.currentPrice > 0 && (
               <Box textAlign={{ xs: 'left', sm: 'right' }}>
                 <Typography variant="caption" color="text.secondary">Benchmark (SPY)</Typography>
                 <Typography variant="h6" fontWeight={700} color="text.secondary">
@@ -741,11 +747,12 @@ export default function SimulationPage() {
     const daysSince   = Math.floor((Date.now() - new Date(sim.startDate).getTime()) / 86_400_000);
     const initialCost = sim.holdings.reduce((s, h) => s + h.shares * h.buyPrice, 0);
 
-    const chartData = (perfData?.dates ?? []).map((d, i) => ({
-      date:      d.slice(5),
-      portfolio: perfData!.portfolioReturns[i],
-      spy:       perfData!.spyReturns[i],
-    }));
+    const chartData = (perfData?.dates ?? []).reduce<{ date: string; portfolio: number; spy: number }[]>((acc, d, i) => {
+      const p = perfData!.portfolioReturns[i];
+      const s = perfData!.spyReturns[i];
+      if (p !== undefined && s !== undefined) acc.push({ date: d.slice(5), portfolio: p, spy: s });
+      return acc;
+    }, []);
 
     const riskLabel = RISK_OPTIONS.find(r => r.key === sim.riskLevel)?.label ?? sim.riskLevel;
     const holdingsRows: HoldingPnl[] = perfData?.holdings ?? sim.holdings.map(h => ({
