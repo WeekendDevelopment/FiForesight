@@ -2,7 +2,7 @@
 import asyncio
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +61,9 @@ def _calc_rsi(closes: List[float], period: int = 14) -> float:
 
 async def _analyze_ticker(
     symbol: str,
-    yf_svc,
-    run_forecast_fn,
-    influx_svc,
+    yf_svc: Any,
+    run_forecast_fn: Callable[..., Dict],
+    influx_svc: Optional[Any],
 ) -> Optional[Dict]:
     """Fetch OHLCV data and run ensemble ML forecast for one ticker."""
     try:
@@ -147,7 +147,7 @@ def _score(stock: Dict, risk_level: str) -> float:
 async def _bulk_jury(
     stocks: List[Dict],
     risk_level: str,
-    analyst_jury_svc,
+    analyst_jury_svc: Optional[Any],
 ) -> Dict[str, Dict]:
     """Single Groq call that rates all top stocks at once."""
     if not stocks or not analyst_jury_svc:
@@ -191,10 +191,10 @@ async def suggest_portfolio(
     sectors: List[str],
     risk_level: str,
     budget: float,
-    yf_svc,
-    run_forecast_fn,
-    influx_svc,
-    analyst_jury_svc,
+    yf_svc: Any,
+    run_forecast_fn: Callable[..., Dict],
+    influx_svc: Optional[Any],
+    analyst_jury_svc: Optional[Any],
 ) -> Dict[str, Any]:
     """Analyze sector candidates → rank → return portfolio suggestions."""
     candidates: List[str] = []
@@ -272,11 +272,11 @@ async def suggest_portfolio(
 
 
 async def get_portfolio_performance(
-    holdings: List[Dict],   # [{symbol, shares, buyPrice, name?}]
+    holdings: List[Dict],
     start_date: str,
     spy_buy_price: float,
     budget: float,
-    yf_svc,
+    yf_svc: Any,
 ) -> Dict[str, Any]:
     """
     Fetch price history from start_date → today for all holdings + SPY.
