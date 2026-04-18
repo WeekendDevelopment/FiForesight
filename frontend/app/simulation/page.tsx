@@ -220,7 +220,7 @@ function SuggestionCard({
         <Box textAlign="right">
           <Typography variant="caption" color="text.secondary">5d Forecast</Typography>
           <Typography fontWeight={700} color={stock.direction === 'Bullish' ? '#10b981' : '#ef4444'}>
-            {stock.direction === 'Bullish' ? '▲' : '▼'} +{upside.toFixed(1)}%
+            {stock.direction === 'Bullish' ? '▲' : '▼'} {upside.toFixed(1)}%
           </Typography>
         </Box>
       </Stack>
@@ -363,6 +363,11 @@ export default function SimulationPage() {
         risk_level: riskLevel,
         budget:     BUDGET,
       });
+      if (data.error && !(data.suggestions?.length)) {
+        setError(data.error);
+        setPhase('chat');
+        return;
+      }
       setSuggestions(data.suggestions ?? []);
       setBenchmark(data.benchmark ?? null);
       setRemoved(new Set());
@@ -427,10 +432,11 @@ export default function SimulationPage() {
     setError('');
     try {
       const { data } = await axios.post('/api/predict', { data: sym });
-      const price    = parseFloat(data.currentPrice ?? '0');
-      const active   = suggestions.filter(s => !removed.has(s.symbol)).length + 1;
-      const alloc    = BUDGET / active;
-      const shares   = price > 0 ? Math.floor(alloc / price) : 0;
+      const price     = parseFloat(data.currentPrice ?? '0');
+      const activeList = suggestions.filter(s => !removed.has(s.symbol));
+      const spent      = activeList.reduce((s, h) => s + (customShares[h.symbol] ?? h.shares) * h.currentPrice, 0);
+      const remaining  = Math.max(0, BUDGET - spent);
+      const shares     = price > 0 ? Math.floor(remaining / price) : 0;
       setSuggestions(prev => [...prev, {
         symbol:         sym,
         name:           sym,
@@ -444,7 +450,7 @@ export default function SimulationPage() {
         juryRating:     data.juryAnalysts?.[0]?.rating ?? 'Hold',
         juryNote:       data.analystNote ?? '',
         juryConfidence: data.juryAnalysts?.[0]?.confidence ?? 50,
-        allocationPct:  Math.round(100 / active),
+        allocationPct:  BUDGET > 0 ? Math.round((shares * price) / BUDGET * 100) : 0,
         allocationUsd:  parseFloat((shares * price).toFixed(2)),
         shares,
       }]);

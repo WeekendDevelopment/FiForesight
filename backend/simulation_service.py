@@ -2,7 +2,10 @@
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
+
+import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +104,8 @@ async def _analyze_ticker(
                     )
                     total_inv = sum(1.0 / m if m > 0 else 1.0 for m in maes)
                     hist_weights = [(1.0 / m if m > 0 else 1.0) / total_inv for m in maes]
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("[SIM] %s: InfluxDB weight fetch failed, using realtime weights: %s", symbol, exc)
 
         forecast = await asyncio.to_thread(
             run_forecast_fn,
@@ -221,8 +224,15 @@ async def suggest_portfolio(
     spy_price = 0.0
     try:
         spy_price = await asyncio.to_thread(yf_svc.get_live_price, BENCHMARK_SYMBOL)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("[SIM] get_live_price(SPY) failed: %s — trying fetch_history fallback", exc)
+    if spy_price <= 0:
+        try:
+            spy_df = await asyncio.to_thread(yf_svc.fetch_history, BENCHMARK_SYMBOL, "5d")
+            if not spy_df.empty:
+                spy_price = float(spy_df["Close"].iloc[-1])
+        except Exception as exc:
+            logger.warning("[SIM] SPY fetch_history fallback also failed: %s", exc)
 
     n = len(top)
     alloc_per = budget / n if n else 0
@@ -283,9 +293,6 @@ async def get_portfolio_performance(
     Returns daily cumulative return % for the portfolio and the SPY benchmark.
     """
     try:
-        import yfinance as yf
-        from datetime import datetime, timezone
-
         try:
             dt = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
             start_str = dt.strftime("%Y-%m-%d")
@@ -297,7 +304,8 @@ async def get_portfolio_performance(
 
         async def _fetch(symbol: str) -> None:
             try:
-                ticker = yf.Ticker(symbol)
+                yf_sym = yf_svc._to_yf_symbol(symbol) if hasattr(yf_svc, '_to_yf_symbol') else symbol
+                ticker = yf.Ticker(yf_sym)
                 hist = await asyncio.to_thread(
                     ticker.history, start=start_str, auto_adjust=True
                 )
