@@ -7,6 +7,7 @@ on:
 env:
   GH_TOKEN: ${{ github.token }}
   IMAGE_NAME: ghcr.io/weekenddevelopment/fiforesight
+  EMAIL: ${{ secrets.CERTBOT_EMAIL }}
 permissions:
   contents: write
   id-token: write
@@ -196,6 +197,25 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
 
+  deploy-nginx:
+    needs:
+      - terraform
+    runs-on: ubuntu-latest
+    environment:
+      name: live
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup HTTPS
+        uses: ./.github/actions/setup-https
+        env:
+          VM_IP_ADDRESS: ${{ needs.terraform.outputs.vm_host }}
+          VM_SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          DOMAIN: "fiforesight.duckdns.org"
+          DUCK_DNS_TOKEN: ${{ secrets.DUCK_DNS_TOKEN }}
+          EMAIL: ${{ env.EMAIL }}
+
   deploy-oracle:
     needs:
       - create-release
@@ -203,10 +223,11 @@ jobs:
       - build-backend
       - build-image
       - terraform
+      - deploy-nginx
     runs-on: ubuntu-latest
     environment:
       name: live
-      url: http://fiforesight.duckdns.org
+      url: https://fiforesight.duckdns.org
     steps:
       - name: Checkout code
         uses: actions/checkout@v6

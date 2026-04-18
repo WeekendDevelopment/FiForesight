@@ -10,6 +10,7 @@ permissions:
   pull-requests: write
 env:
   IMAGE_NAME: ghcr.io/weekenddevelopment/fiforesight
+  EMAIL: ${{ secrets.CERTBOT_EMAIL }}
 jobs:
   terraform:
     runs-on: ubuntu-latest
@@ -168,17 +169,37 @@ jobs:
       - name: Cleanup
         if: always()
         run: docker rm -f fi-foresight-test
+  deploy-nginx:
+    needs:
+      - terraform-preview
+    runs-on: ubuntu-latest
+    environment:
+      name: preview
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup HTTPS
+        uses: ./.github/actions/setup-https
+        env:
+          VM_IP_ADDRESS: ${{ needs.terraform-preview.outputs.vm_host }}
+          VM_SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          DOMAIN: "fiforesight-preview.duckdns.org"
+          DUCK_DNS_TOKEN: ${{ secrets.DUCK_DNS_TOKEN }}
+          EMAIL: ${{ env.EMAIL }}
+
   deploy-preview:
     needs:
       - build-image
       - terraform-preview
+      - deploy-nginx
     runs-on: ubuntu-latest
     concurrency:
       group: pr-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     environment:
       name: preview
-      url: http://fiforesight-preview.duckdns.org
+      url: https://fiforesight-preview.duckdns.org
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -213,7 +234,7 @@ jobs:
       - name: Create Comment
         if: github.actor != 'dependabot[bot]'
         run: |
-          gh pr comment $PR_NUM --body "Deployed to preview env 🚀. Preview URL: http://fiforesight-preview.duckdns.org"
+          gh pr comment $PR_NUM --body "Deployed to preview env 🚀. Preview URL: https://fiforesight-preview.duckdns.org"
         env:
           PR_NUM: ${{ github.event.pull_request.number }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

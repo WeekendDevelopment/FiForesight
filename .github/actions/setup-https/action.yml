@@ -1,0 +1,96 @@
+name: Setup HTTPS
+description: "Setup HTTPS and Nginx"
+runs:
+  using: "composite"
+  steps:
+    - name: Copy Nginx config
+      uses: appleboy/scp-action@v1
+      with:
+        host: ${{ env.VM_IP_ADDRESS }}
+        username: ubuntu
+        key: ${{ env.VM_SSH_PRIVATE_KEY }}
+        source: nginx/
+        target: /home/ubuntu/
+
+    - name: Setup iptables, Nginx + Certbot
+      uses: appleboy/ssh-action@v1
+      with:
+        host: ${{ env.VM_IP_ADDRESS }}
+        username: ubuntu
+        key: ${{ env.VM_SSH_PRIVATE_KEY }}
+        script: |
+          set -e
+          
+          DOMAIN="${{ env.DOMAIN }}"
+          EMAIL="${{ env.EMAIL }}"
+          DUCK_DNS_TOKEN="${{ env.DUCK_DNS_TOKEN }}"
+          NGINX_CONF=/etc/nginx/sites-available/fiforesight
+          CERT_PATH=/etc/letsencrypt/live/$DOMAIN/fullchain.pem
+          
+          # ---- iptables — 443 ----
+          if ! sudo iptables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null; then
+            sudo iptables -I INPUT -p tcp --dport 443 -j ACCEPT
+          fi
+          
+          # ---- iptables — remove port 80 if exists----
+          if sudo iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null; then
+            sudo iptables -D INPUT -p tcp --dport 80 -j ACCEPT
+            echo "Removed port 80"
+          else
+            echo "Port 80 not found, nothing to remove"
+          fi
+          
+          if ! dpkg -l iptables-persistent &>/dev/null; then
+            sudo apt-get install -y iptables-persistent
+          fi
+          sudo netfilter-persistent save
+          
+          # ---- Install Nginx + Certbot + DuckDNS plugin ----
+          sudo apt-get update -qq
+          sudo apt-get install -y nginx certbot python3-pip
+          sudo pip3 install certbot-dns-duckdns
+          
+          # ---- Write DuckDNS token config ----
+          sudo mkdir -p /etc/letsencrypt
+          printf 'dns_duckdns_token = %s\n' "$DUCK_DNS_TOKEN" | sudo tee /etc/letsencrypt/duckdns.ini > /dev/null
+          sudo chmod 600 /etc/letsencrypt/duckdns.ini
+          
+          # ---- Deploy Nginx config ----
+          sudo cp /home/ubuntu/nginx/app.conf $NGINX_CONF
+          sudo sed -i "s|YOUR_DOMAIN|$DOMAIN|g" $NGINX_CONF
+          sudo sed -i "s|YOUR_CERT_PATH|/etc/letsencrypt/live/$DOMAIN/fullchain.pem|g" $NGINX_CONF
+          sudo sed -i "s|YOUR_CERT_KEY_PATH|/etc/letsencrypt/live/$DOMAIN/privkey.pem|g" $NGINX_CONF
+          sudo ln -sf $NGINX_CONF /etc/nginx/sites-enabled/fiforesight
+          sudo rm -f /etc/nginx/sites-enabled/default
+          
+          # ---- Issue cert via DNS challenge ----
+          if [ ! -f "$CERT_PATH" ]; then
+            echo "Certificate not found, issuing new cert..."
+            sudo certbot certonly \
+              --authenticator dns-duckdns \
+              --dns-duckdns-credentials /etc/letsencrypt/duckdns.ini \
+              --dns-duckdns-propagation-seconds 60 \
+              -d $DOMAIN \
+              --email $EMAIL \
+              --agree-tos \
+              --no-eff-email \
+              --non-interactive \
+              --deploy-hook "systemctl reload nginx"
+          else
+            echo "Certificate already exists, running renew check..."
+            sudo certbot renew --dry-run
+            sudo certbot renew --deploy-hook "systemctl reload nginx"
+          fi
+          
+          # ---- Start Nginx after cert is in place ----
+          sudo nginx -t
+          sudo systemctl enable nginx
+          sudo systemctl restart nginx
+          
+          # ---- Enable renewal timer ----
+          sudo systemctl enable certbot.timer
+          sudo systemctl start certbot.timer
+          
+          # ---- Logrotate ----
+          sudo cp /home/ubuntu/nginx/logrotate /etc/logrotate.d/nginx
+          sudo logrotate --debug /etc/logrotate.d/nginx

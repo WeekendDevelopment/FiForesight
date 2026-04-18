@@ -38,7 +38,7 @@ jobs:
 
       - name: Run daily training (20 tickers)
         run: |
-          URL="${{ inputs.target_url || vars.TRAIN_URL || 'http://fiforesight.duckdns.org' }}"
+          URL="${{ inputs.target_url || vars.TRAIN_URL || 'https://fiforesight.duckdns.org' }}"
           python .github/scripts/daily_train.py --url "$URL" --delay 8
         env:
           PYTHONUNBUFFERED: "1"
