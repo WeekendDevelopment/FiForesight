@@ -27,21 +27,24 @@ runs:
           # Skip if already installed
           if systemctl is-active --quiet newrelic-infra; then
             echo "New Relic already running, skipping install"
-            # ---- New Relic Nginx integration ----
-            sudo apt-get install -y nri-nginx
-            sudo cp /home/ubuntu/nginx/newrelic-nginx-log.yml /etc/newrelic-infra/logging.d/nginx-log.yml
-            sudo cp /home/ubuntu/nginx/newrelic-nginx.yml /etc/newrelic-infra/integrations.d/nginx-config.yml
-            sudo systemctl restart newrelic-infra
-            exit 0
+          else
+            echo "Installing New Relic"
+            curl -Ls https://download.newrelic.com/install/newrelic-cli/scripts/install.sh | bash
+            sudo NEW_RELIC_API_KEY=${{ env.LINUX_NEW_RELIC_LICENSE_KEY }} NEW_RELIC_ACCOUNT_ID=7918507 NEW_RELIC_REGION=EU /usr/local/bin/newrelic install -y --tag environment:${{ env.APP_ENV }}
           fi
-          
-          curl -Ls https://download.newrelic.com/install/newrelic-cli/scripts/install.sh | bash
-          sudo NEW_RELIC_API_KEY=${{ env.LINUX_NEW_RELIC_LICENSE_KEY }} NEW_RELIC_ACCOUNT_ID=7918507 NEW_RELIC_REGION=EU /usr/local/bin/newrelic install -y --tag environment:${{ env.APP_ENV }}
           
           # ---- New Relic Nginx integration ----
           sudo apt-get install -y nri-nginx
           sudo cp /home/ubuntu/nginx/newrelic-nginx-log.yml /etc/newrelic-infra/logging.d/nginx-log.yml
           sudo cp /home/ubuntu/nginx/newrelic-nginx.yml /etc/newrelic-infra/integrations.d/nginx-config.yml
+          
+          # ---- New Relic display name ----
+          echo "${{ env.NEW_RELIC_APP_NAME }}"
+          if sudo grep -q '^display_name:' /etc/newrelic-infra.yml; then
+            sudo sed -i "s/^display_name:.*$/display_name: ${{ env.NEW_RELIC_APP_NAME }}/" /etc/newrelic-infra.yml
+          else
+            echo "display_name: ${{ env.NEW_RELIC_APP_NAME }}" | sudo tee -a /etc/newrelic-infra.yml
+          fi
           sudo systemctl restart newrelic-infra
 
     - name: SSH and Deploy
