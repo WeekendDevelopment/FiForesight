@@ -37,6 +37,14 @@ runs:
           sudo apt-get install -y nri-nginx
           sudo cp /home/ubuntu/nginx/newrelic-nginx-log.yml /etc/newrelic-infra/logging.d/nginx-log.yml
           sudo cp /home/ubuntu/nginx/newrelic-nginx.yml /etc/newrelic-infra/integrations.d/nginx-config.yml
+          
+          # ---- New Relic display name ----
+          echo "${{ env.NEW_RELIC_APP_NAME }}"
+          if sudo grep -q '^display_name:' /etc/newrelic-infra.yml; then
+            sudo sed -i "s/^display_name:.*$/display_name: ${{ env.NEW_RELIC_APP_NAME }}/" /etc/newrelic-infra.yml
+          else
+            echo "display_name: ${{ env.NEW_RELIC_APP_NAME }}" | sudo tee -a /etc/newrelic-infra.yml
+          fi
           sudo systemctl restart newrelic-infra
 
     - name: SSH and Deploy
