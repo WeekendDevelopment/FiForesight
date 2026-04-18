@@ -22,6 +22,7 @@ from services import (
     ANALYST_PERSONAS,
     SerpService, YFinanceService,
 )
+from simulation_service import suggest_portfolio, get_portfolio_performance
 
 # ---------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -1051,6 +1052,50 @@ async def predict(payload: dict = Body(...)):
         lastUpdated  = now.isoformat(),
         juryAnalysts  = jury,
         modelWeights  = forecast.get("weights", {"prophet": 0.0, "sarima": 0.0, "rf": 0.0}),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Simulation endpoints
+# ---------------------------------------------------------------------------
+
+class SimSuggestRequest(BaseModel):
+    sectors:    List[str]
+    risk_level: str   = "moderate"
+    budget:     float = 100_000.0
+
+
+class SimPerfRequest(BaseModel):
+    holdings:      List[dict]
+    start_date:    str
+    spy_buy_price: float
+    budget:        float = 100_000.0
+
+
+@app.post("/simulation/suggest")
+async def simulation_suggest(req: SimSuggestRequest):
+    result = await suggest_portfolio(
+        sectors=req.sectors,
+        risk_level=req.risk_level,
+        budget=req.budget,
+        yf_svc=yf_svc,
+        run_forecast_fn=run_ensemble_forecast,
+        influx_svc=influx_svc,
+        analyst_jury_svc=analyst_jury_svc,
+    )
+    if "error" in result and not result.get("suggestions"):
+        raise HTTPException(status_code=500, detail=result["error"])
+    return result
+
+
+@app.post("/simulation/performance")
+async def simulation_performance(req: SimPerfRequest):
+    return await get_portfolio_performance(
+        holdings=req.holdings,
+        start_date=req.start_date,
+        spy_buy_price=req.spy_buy_price,
+        budget=req.budget,
+        yf_svc=yf_svc,
     )
 
 

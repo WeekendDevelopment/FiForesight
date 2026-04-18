@@ -667,6 +667,7 @@ class YFinanceService:
             # Flatten MultiIndex columns if present (yfinance ≥0.2 quirk)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
+                df = df.loc[:, ~df.columns.duplicated(keep='first')]
 
             df.index = pd.to_datetime(df.index)
             if df.index.tz is None:
@@ -677,11 +678,12 @@ class YFinanceService:
             keep = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in df.columns]
             df   = df[keep].dropna(subset=["Close"])
 
+            close_series = df['Close'].squeeze()
             logger.info(
                 f"[YFINANCE] ✓ fetch_history — {len(df)} rows for {ticker} | "
                 f"date range: {df.index.min().date()} → {df.index.max().date()} | "
-                f"close: ${float(df['Close'].iloc[0]):.2f} (oldest) → "
-                f"${float(df['Close'].iloc[-1]):.2f} (latest) | "
+                f"close: ${float(close_series.iloc[0]):.2f} (oldest) → "
+                f"${float(close_series.iloc[-1]):.2f} (latest) | "
                 f"columns: {list(df.columns)}"
             )
             return df
@@ -793,7 +795,7 @@ class DataCleaner:
         input_rows = len(df)
         logger.info(
             f"[CLEANER] clean() — input: {input_rows} rows | "
-            f"close range: ${float(df['Close'].min()):.2f} – ${float(df['Close'].max()):.2f}"
+            f"close range: ${float(df['Close'].squeeze().min()):.2f} – ${float(df['Close'].squeeze().max()):.2f}"
         )
 
         df = df.copy()
