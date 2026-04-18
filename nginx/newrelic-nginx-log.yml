@@ -1,0 +1,17 @@
+###############################################################################
+# Log forwarder configuration for Linux nginx access and error logs            #
+# NOTE: nginx installations can vary.  Use the appropriate file:              #
+#       log location that matches your environment / installation             #
+# Source: file                                                                #
+# Available customization parameters: attributes, max_line_kb, pattern        #
+###############################################################################
+
+logs:
+  - name: nginx-access
+    file: /var/log/nginx/access.log
+    attributes:
+      logtype: nginx
+  - name: nginx-error
+    file: /var/log/nginx/error.log
+    attributes:
+      logtype: nginx-error
