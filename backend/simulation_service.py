@@ -155,42 +155,49 @@ async def _bulk_jury(
     risk_level: str,
     analyst_jury_svc: Optional[Any],
 ) -> Dict[str, Dict]:
-    """Single Groq call that rates all top stocks at once."""
+    """Concurrent per-stock Groq calls so one failure never drops the whole batch."""
     if not stocks or not analyst_jury_svc:
         return {}
 
-    lines = []
-    for s in stocks:
+    async def _rate_one(s: Dict) -> tuple:
+        sym    = s["symbol"]
         f      = s.get("forecast", {})
         cur    = s["currentPrice"]
         upside = ((f.get("high", cur) - cur) / cur * 100) if cur > 0 else 0
-        lines.append(
-            f"{s['symbol']} ({s['sector']}): ${cur:.2f}, "
-            f"5d upside +{upside:.1f}%, RSI {s.get('rsi', 50):.0f}, "
-            f"conf={f.get('conf', 'medium')}"
+        prompt = (
+            f"Rate for a {risk_level} investor.\n"
+            f"{sym} ({s['sector']}): ${cur:.2f}, upside {upside:+.1f}%, "
+            f"RSI {s.get('rsi', 50):.0f}, conf={f.get('conf', 'medium')}\n\n"
+            f'Return exactly: {{"symbol":"{sym}",'
+            '"rating":"Strong Buy|Buy|Hold|Sell|Strong Sell",'
+            '"confidence":50,"note":"1 concise sentence"}'
         )
+        try:
+            raw  = await analyst_jury_svc.call_groq(
+                "llama-3.3-70b-versatile",
+                "You are a portfolio advisor. Output only valid JSON, nothing else.",
+                prompt,
+                max_tokens=120,
+            )
+            text = raw.strip()
+            if "```" in text:
+                text = text.split("```")[1].replace("json", "").strip()
+            verdict = json.loads(text)
+            verdict.setdefault("symbol", sym)
+            return sym, verdict
+        except Exception as exc:
+            logger.warning("[SIM] _bulk_jury: %s rating failed: %s", sym, exc)
+            return sym, {"symbol": sym, "rating": "Hold", "confidence": 50, "note": ""}
 
-    prompt = (
-        f"Portfolio advisor evaluating for a {risk_level} investor.\n\n"
-        + "\n".join(lines)
-        + '\n\nReturn a JSON array only. Each item: '
-          '{"symbol":"XXX","rating":"Strong Buy|Buy|Hold|Sell|Strong Sell",'
-          '"confidence":50,"note":"1 concise sentence"}'
-    )
-    try:
-        raw = await analyst_jury_svc.call_groq(
-            "llama-3.3-70b-versatile",
-            "You are a portfolio advisor. Output only a valid JSON array, nothing else.",
-            prompt,
-        )
-        text = raw.strip()
-        if "```" in text:
-            text = text.split("```")[1].replace("json", "").strip()
-        verdicts = json.loads(text)
-        return {v["symbol"]: v for v in verdicts if "symbol" in v}
-    except Exception as exc:
-        logger.error("[SIM] _bulk_jury failed: %s", exc)
-        return {}
+    results = await asyncio.gather(*[_rate_one(s) for s in stocks], return_exceptions=True)
+    verdicts: Dict[str, Dict] = {}
+    for item in results:
+        if isinstance(item, Exception):
+            logger.error("[SIM] _bulk_jury: unexpected gather error: %s", item)
+        else:
+            sym, verdict = item
+            verdicts[sym] = verdict
+    return verdicts
 
 
 async def suggest_portfolio(
