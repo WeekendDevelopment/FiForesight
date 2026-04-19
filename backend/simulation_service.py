@@ -77,6 +77,9 @@ async def _analyze_ticker(
 
         ohlcv_cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in df.columns]
         df_clean   = df[ohlcv_cols].dropna()
+        if len(df_clean) < 20:
+            logger.warning("[SIM] %s: insufficient data after cleaning (%d rows)", symbol, len(df_clean))
+            return None
 
         closes  = df_clean["Close"].tolist()
         opens   = df_clean["Open"].tolist()   if "Open"   in df_clean.columns else None
@@ -328,7 +331,7 @@ async def get_portfolio_performance(
         # Actual invested cost (shares × buyPrice, summed across holdings)
         initial_cost = sum(h["shares"] * h["buyPrice"] for h in holdings)
         if initial_cost <= 0:
-            initial_cost = budget
+            initial_cost = max(budget, 1e-6)
 
         # SPY benchmark: same dollars invested in SPY at spy_buy_price
         spy_ref_shares = initial_cost / spy_buy_price if spy_buy_price > 0 else 0

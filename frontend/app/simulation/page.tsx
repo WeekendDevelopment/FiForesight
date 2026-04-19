@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import {
-  Box, Container, Typography, Button, Card, CardContent,
+  Box, Container, Typography, Button,
   Grid, CircularProgress, ThemeProvider, createTheme,
   CssBaseline, Paper, Chip, Stack, IconButton, TextField,
   Avatar, LinearProgress, Divider, Alert,
@@ -11,7 +11,7 @@ import {
 } from '@mui/material';
 import {
   ArrowLeft, Trash2, BarChart2, Trophy, RefreshCw,
-  DollarSign, Target, Zap, Brain,
+  Target, Brain,
 } from 'lucide-react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,

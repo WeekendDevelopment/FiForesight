@@ -795,7 +795,7 @@ class DataCleaner:
         input_rows = len(df)
         logger.info(
             f"[CLEANER] clean() — input: {input_rows} rows | "
-            f"close range: ${float(df['Close'].squeeze().min()):.2f} – ${float(df['Close'].squeeze().max()):.2f}"
+            f"close range: ${float(df['Close'].min()):.2f} – ${float(df['Close'].max()):.2f}"
         )
 
         df = df.copy()

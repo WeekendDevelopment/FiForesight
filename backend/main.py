@@ -1067,8 +1067,8 @@ class SimSuggestRequest(BaseModel):
 
 class SimHolding(BaseModel):
     symbol:        str
-    name:          str   = ""
-    shares:        int
+    name:          Optional[str] = None
+    shares:        int   = Field(gt=0)
     buyPrice:      float = Field(gt=0)
     allocationUsd: float = 0.0
 
