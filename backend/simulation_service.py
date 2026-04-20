@@ -297,10 +297,12 @@ async def get_portfolio_performance(
     spy_buy_price: float,
     budget: float,
     yf_svc: Any,
+    interval: str = "1d",
 ) -> Dict[str, Any]:
     """
-    Fetch price history from start_date → today for all holdings + SPY.
-    Returns daily cumulative return % for the portfolio and the SPY benchmark.
+    Fetch price history from start_date → now for all holdings + SPY.
+    interval: yfinance interval string — '1m','5m','15m','1h','1d' etc.
+    Returns timestamped cumulative return % for portfolio and SPY benchmark.
     """
     try:
         try:
@@ -312,20 +314,26 @@ async def get_portfolio_performance(
         all_symbols = list({h["symbol"] for h in holdings} | {BENCHMARK_SYMBOL})
         price_data: Dict[str, Dict[str, float]] = {}
 
+        def _fmt_key(idx: Any) -> str:
+            """Format timestamp to string key based on interval."""
+            if interval == "1d":
+                return str(idx.date())
+            return idx.strftime("%Y-%m-%d %H:%M")
+
         async def _fetch(symbol: str) -> None:
             try:
                 yf_sym = yf_svc._to_yf_symbol(symbol) if hasattr(yf_svc, '_to_yf_symbol') else symbol
                 ticker = yf.Ticker(yf_sym)
                 hist = await asyncio.to_thread(
-                    ticker.history, start=start_str, auto_adjust=True
+                    ticker.history, start=start_str, interval=interval, auto_adjust=True
                 )
                 if not hist.empty:
                     price_data[symbol] = {
-                        str(idx.date()): round(float(row["Close"]), 4)
+                        _fmt_key(idx): round(float(row["Close"]), 4)
                         for idx, row in hist.iterrows()
                     }
             except Exception as exc:
-                logger.warning("[SIM] history fetch %s: %s", symbol, exc)
+                logger.warning("[SIM] history fetch %s (%s): %s", symbol, interval, exc)
 
         await asyncio.gather(*[_fetch(s) for s in all_symbols])
 
@@ -390,6 +398,7 @@ async def get_portfolio_performance(
             "portfolioReturn":       port_returns[-1] if port_returns else 0.0,
             "spyReturn":             spy_returns[-1]  if spy_returns  else 0.0,
             "holdings":              holdings_pnl,
+            "interval":              interval,
         }
     except Exception as exc:
         logger.error("[SIM] get_portfolio_performance failed: %s", exc)

@@ -9,7 +9,7 @@ import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, Body, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from config import Config, SanitizeHttpxFilter
 from models import (
@@ -1078,6 +1078,25 @@ class SimPerfRequest(BaseModel):
     start_date:    str
     spy_buy_price: float = Field(ge=0)
     budget:        float = Field(default=100_000.0, gt=0)
+    interval:      str   = "1d"
+
+    @field_validator("start_date")
+    @classmethod
+    def validate_start_date(cls, v: str) -> str:
+        from datetime import datetime
+        try:
+            datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(f"start_date must be a valid ISO date string, got: {v!r}") from exc
+        return v
+
+    @field_validator("interval")
+    @classmethod
+    def validate_interval(cls, v: str) -> str:
+        allowed = {"1m", "2m", "5m", "15m", "30m", "60m", "1h", "1d"}
+        if v not in allowed:
+            raise ValueError(f"interval must be one of {allowed}, got {v!r}")
+        return v
 
 
 @app.post("/simulation/suggest")
@@ -1104,6 +1123,7 @@ async def simulation_performance(req: SimPerfRequest):
         spy_buy_price=req.spy_buy_price,
         budget=req.budget,
         yf_svc=yf_svc,
+        interval=req.interval,
     )
 
 

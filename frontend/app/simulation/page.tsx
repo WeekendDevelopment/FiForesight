@@ -31,6 +31,16 @@ const darkTheme = createTheme({
     warning:    { main: '#f59e0b' },
   },
   typography: { fontFamily: '"Inter", "Roboto", sans-serif' },
+  components: {
+    MuiCssBaseline: {
+      styleOverrides: `
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.3; }
+        }
+      `,
+    },
+  },
 });
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -314,7 +324,9 @@ export default function SimulationPage() {
   const [perfLoading, setPerfLoading]       = useState(false);
   const [error, setError]                   = useState('');
   const [customShares, setCustomShares]     = useState<Record<string, number>>({});
-  const msgTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [chartInterval, setChartInterval]   = useState<'1m' | '5m' | '1h' | '1d'>('1h');
+  const msgTimer     = useRef<ReturnType<typeof setInterval> | null>(null);
+  const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Restore simulation from localStorage on mount
   useEffect(() => {
@@ -339,13 +351,22 @@ export default function SimulationPage() {
     return () => { if (msgTimer.current) clearInterval(msgTimer.current); };
   }, [phase]);
 
-  // Fetch performance when entering race phase
+  // Fetch performance when entering race phase or interval changes
   useEffect(() => {
-    if (phase === 'race' && simulation) fetchPerf(simulation);
+    if (phase === 'race' && simulation) fetchPerf(simulation, chartInterval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase]);
+  }, [phase, chartInterval]);
 
-  async function fetchPerf(sim: SimulationState) {
+  // Auto-refresh every 60s for intraday intervals
+  useEffect(() => {
+    if (refreshTimer.current) clearInterval(refreshTimer.current);
+    if (phase !== 'race' || !simulation || chartInterval === '1d') return;
+    refreshTimer.current = setInterval(() => fetchPerf(simulation, chartInterval), 60_000);
+    return () => { if (refreshTimer.current) clearInterval(refreshTimer.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, simulation, chartInterval]);
+
+  async function fetchPerf(sim: SimulationState, iv = chartInterval) {
     setPerfLoading(true);
     try {
       const { data } = await axios.post('/api/simulation/performance', {
@@ -353,6 +374,7 @@ export default function SimulationPage() {
         start_date:    sim.startDate,
         spy_buy_price: sim.spyBuyPrice,
         budget:        sim.budget,
+        interval:      iv,
       });
       setPerfData(data);
     } catch (e) { console.error('[SimPerf] performance fetch failed:', e); }
@@ -747,12 +769,25 @@ export default function SimulationPage() {
     const daysSince   = Math.floor((Date.now() - new Date(sim.startDate).getTime()) / 86_400_000);
     const initialCost = sim.holdings.reduce((s, h) => s + h.shares * h.buyPrice, 0);
 
-    const chartData = (perfData?.dates ?? []).reduce<{ date: string; portfolio: number; spy: number }[]>((acc, d, i) => {
+    const isIntraday  = chartInterval !== '1d';
+    const dates       = perfData?.dates ?? [];
+    const spansDays   = dates.length > 1 && dates[0]?.slice(0, 10) !== dates[dates.length - 1]?.slice(0, 10);
+
+    const fmtLabel = (d: string) => {
+      if (!isIntraday) return d.slice(5);               // "MM-DD"
+      const [datePart, timePart] = d.split(' ');
+      const time = timePart?.slice(0, 5) ?? '';         // "HH:MM"
+      return spansDays ? `${datePart.slice(5)} ${time}` : time;
+    };
+
+    const chartData = dates.reduce<{ date: string; full: string; portfolio: number; spy: number }[]>((acc, d, i) => {
       const p = perfData!.portfolioReturns[i];
       const s = perfData!.spyReturns[i];
-      if (p !== undefined && s !== undefined) acc.push({ date: d.slice(5), portfolio: p, spy: s });
+      if (p !== undefined && s !== undefined) acc.push({ date: fmtLabel(d), full: d, portfolio: p, spy: s });
       return acc;
     }, []);
+
+    const xTickEvery = chartData.length <= 12 ? 0 : Math.floor(chartData.length / 8);
 
     const riskLabel = RISK_OPTIONS.find(r => r.key === sim.riskLevel)?.label ?? sim.riskLevel;
     const holdingsRows: HoldingPnl[] = perfData?.holdings ?? sim.holdings.map(h => ({
@@ -774,11 +809,11 @@ export default function SimulationPage() {
           <Stack direction="row" spacing={1} alignItems="center">
             <IconButton
               size="small"
-              onClick={() => fetchPerf(sim)}
+              onClick={() => fetchPerf(sim, chartInterval)}
               disabled={perfLoading}
               sx={{ border: '1px solid rgba(255,255,255,0.1)' }}
             >
-              <RefreshCw size={15} />
+              <RefreshCw size={15} className={perfLoading ? 'animate-spin' : ''} />
             </IconButton>
             <Button
               size="small" variant="outlined" onClick={handleReset}
@@ -827,35 +862,78 @@ export default function SimulationPage() {
 
         {/* Race chart */}
         <Paper sx={{ p: 2.5, mb: 3, border: '1px solid rgba(255,255,255,0.07)' }}>
-          <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 2 }}>
-            Cumulative Return (%)
-          </Typography>
+          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+            <Stack direction="row" alignItems="center" spacing={1.5}>
+              <Typography variant="subtitle1" fontWeight={700}>Cumulative Return (%)</Typography>
+              {chartInterval !== '1d' && (
+                <Box sx={{
+                  display: 'flex', alignItems: 'center', gap: 0.5,
+                  px: 1, py: 0.25, borderRadius: 1,
+                  bgcolor: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.3)',
+                }}>
+                  <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#10b981', animation: 'pulse 2s infinite' }} />
+                  <Typography variant="caption" sx={{ color: '#10b981', fontSize: 10 }}>LIVE · 60s</Typography>
+                </Box>
+              )}
+            </Stack>
+            <Stack direction="row" spacing={0.5}>
+              {(['1m', '5m', '1h', '1d'] as const).map(iv => (
+                <Button
+                  key={iv}
+                  size="small"
+                  variant={chartInterval === iv ? 'contained' : 'outlined'}
+                  onClick={() => setChartInterval(iv)}
+                  disabled={perfLoading}
+                  sx={{
+                    minWidth: 38, px: 0.75, py: 0.25, fontSize: 11, fontWeight: 700,
+                    ...(chartInterval === iv
+                      ? { background: 'rgba(0,242,255,0.18)', color: 'primary.main', border: '1px solid rgba(0,242,255,0.5)' }
+                      : { borderColor: 'rgba(255,255,255,0.12)', color: 'text.secondary' }),
+                  }}
+                >
+                  {iv.toUpperCase()}
+                </Button>
+              ))}
+            </Stack>
+          </Stack>
           {perfLoading ? (
-            <Box sx={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Box sx={{ height: 280, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <CircularProgress sx={{ color: 'primary.main' }} />
             </Box>
           ) : chartData.length === 0 ? (
             <Box sx={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 1 }}>
               <BarChart2 size={32} color="#334155" />
               <Typography color="text.secondary" variant="body2">
-                {daysSince === 0
-                  ? 'Race just started — check back after the next trading session.'
-                  : 'No performance data available yet.'}
+                {chartInterval === '1m' || chartInterval === '5m'
+                  ? 'No intraday data yet — markets may be closed or data is still loading.'
+                  : daysSince === 0
+                    ? 'Race just started — try 1H view or check back after the next trading session.'
+                    : 'No performance data available yet.'}
               </Typography>
             </Box>
           ) : (
-            <ResponsiveContainer width="100%" height={260}>
+            <ResponsiveContainer width="100%" height={280}>
               <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 11 }} tickLine={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fill: '#64748b', fontSize: 11 }}
+                  tickLine={false}
+                  interval={xTickEvery}
+                />
                 <YAxis
                   tick={{ fill: '#64748b', fontSize: 11 }} tickLine={false}
                   tickFormatter={v => `${(v as number).toFixed(1)}%`}
+                  width={52}
                 />
                 <Tooltip
                   contentStyle={{ background: '#0d1117', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8 }}
+                  labelFormatter={(label, payload) => {
+                    const full = (payload?.[0]?.payload as { full?: string })?.full ?? label;
+                    return <span style={{ color: '#94a3b8', fontSize: 11 }}>{full}</span>;
+                  }}
                   formatter={(v: number, name: string) => [
-                    `${v.toFixed(2)}%`,
+                    `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`,
                     name === 'portfolio' ? 'Your Portfolio' : 'S&P 500',
                   ]}
                 />
@@ -864,8 +942,8 @@ export default function SimulationPage() {
                   formatter={v => v === 'portfolio' ? 'Your Portfolio' : 'S&P 500 (Benchmark)'}
                   wrapperStyle={{ color: '#94a3b8', fontSize: 12 }}
                 />
-                <Line type="monotone" dataKey="portfolio" stroke="#00f2ff" strokeWidth={2.5} dot={false} name="portfolio" />
-                <Line type="monotone" dataKey="spy"       stroke="#7c4dff" strokeWidth={2}   dot={false} name="spy" />
+                <Line type="monotone" dataKey="portfolio" stroke="#00f2ff" strokeWidth={2.5} dot={chartData.length < 30} activeDot={{ r: 4 }} name="portfolio" />
+                <Line type="monotone" dataKey="spy"       stroke="#7c4dff" strokeWidth={2}   dot={chartData.length < 30} activeDot={{ r: 4 }} name="spy" />
               </LineChart>
             </ResponsiveContainer>
           )}
