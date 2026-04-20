@@ -986,6 +986,67 @@ class SerpService:
 
 
 # ---------------------------------------------------------------------------
+# Sentiment Service  —  VADER-based news headline scoring
+# ---------------------------------------------------------------------------
+
+try:
+    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer as _VADER
+    _VADER_AVAILABLE = True
+except ImportError:
+    _VADER = None  # type: ignore
+    _VADER_AVAILABLE = False
+    logging.getLogger(__name__).warning(
+        "[SENTIMENT] vaderSentiment not installed — run: pip install vaderSentiment"
+    )
+
+
+class SentimentService:
+    """
+    VADER-based sentiment scoring for news headlines.
+    VADER (Valence Aware Dictionary and sEntiment Reasoner) is purpose-built
+    for short financial/social text and requires no external API or model download.
+
+    score_headlines() returns:
+      compound      : float [-1, 1]  — aggregate sentiment
+      label         : str            — 'Bullish' | 'Bearish' | 'Neutral'
+      scores        : list[dict]     — per-headline scores
+      headline_count: int
+    """
+
+    def __init__(self):
+        self._analyzer = _VADER() if _VADER_AVAILABLE else None
+        if self._analyzer:
+            logger.info("[SENTIMENT] ✓ VADER SentimentIntensityAnalyzer ready")
+        else:
+            logger.warning("[SENTIMENT] VADER unavailable — sentiment scoring disabled")
+
+    def score_headlines(self, headlines: List[str]) -> dict:
+        empty = {"compound": 0.0, "label": "Neutral", "scores": [], "headline_count": 0}
+        if not self._analyzer or not headlines:
+            return empty
+
+        scores = []
+        for h in headlines:
+            vs = self._analyzer.polarity_scores(h)
+            scores.append({"text": h[:120], "compound": round(vs["compound"], 4)})
+
+        compounds = [s["compound"] for s in scores]
+        avg = sum(compounds) / len(compounds)
+        label = "Bullish" if avg >= 0.05 else "Bearish" if avg <= -0.05 else "Neutral"
+
+        logger.info(
+            f"[SENTIMENT] ✓ scored {len(scores)} headlines — "
+            f"compound={avg:.4f} ({label})"
+        )
+        return {
+            "compound":       round(avg, 4),
+            "label":          label,
+            "scores":         scores,
+            "headline_count": len(scores),
+        }
+
+
+# ---------------------------------------------------------------------------
 # Analyst Jury  —  3 personas, each pinned to a different model & provider
 #
 #   LLAMA-4-SCOUT → Groq meta-llama/llama-4-scout-17b-16e-instruct (free tier) — Macro & Risk lens

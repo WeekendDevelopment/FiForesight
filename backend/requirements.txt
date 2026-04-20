@@ -10,3 +10,10 @@ prophet
 scikit-learn
 yfinance
 newrelic
+# Sentiment analysis
+vaderSentiment
+# LangGraph jury orchestration
+langgraph
+langchain-core
+# MCP server
+fastmcp
