@@ -19,16 +19,16 @@ import { CacheProvider } from '@emotion/react';
 export default function EmotionRegistry({ children }: { children: React.ReactNode }) {
   const [{ cache, flush }] = useState(() => {
     const c = createCache({ key: 'css' });
-    c.compat = true;
     const prevInsert = c.insert.bind(c);
     let inserted: string[] = [];
-    c.insert = (...args: Parameters<typeof prevInsert>) => {
-      const [, serialized] = args;
+
+    c.insert = function(selector, serialized, sheet, shouldCache) {
       if (c.inserted[serialized.name] === undefined) {
         inserted.push(serialized.name);
       }
-      return prevInsert(...args);
+      return prevInsert(selector, serialized, sheet, shouldCache);
     };
+
     return {
       cache: c,
       flush: () => {
@@ -42,12 +42,17 @@ export default function EmotionRegistry({ children }: { children: React.ReactNod
   useServerInsertedHTML(() => {
     const names = flush();
     if (names.length === 0) return null;
-    const styles = names.map((n) => cache.inserted[n]).join('');
+    // cache.inserted values are `string | true`; true means already injected
+    // globally and has no serialized CSS string to emit.
+    const styles = names
+      .map((n) => cache.inserted[n])
+      .filter((s): s is string => typeof s === 'string')
+      .join('');
+    if (!styles) return null;
     return (
       <style
         key={cache.key}
         data-emotion={`${cache.key} ${names.join(' ')}`}
-        // eslint-disable-next-line react/no-danger
         dangerouslySetInnerHTML={{ __html: styles }}
       />
     );
