@@ -2,7 +2,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 import yfinance as yf
@@ -314,10 +314,14 @@ async def get_portfolio_performance(
     try:
         try:
             dt = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-            # yfinance history(start=) only accepts "YYYY-MM-DD" date strings or
-            # naive datetimes — timezone-offset ISO strings raise "unconverted data
-            # remains" errors in yfinance's internal strptime parser.
-            start_str = dt.strftime("%Y-%m-%d")
+            if interval == "1d":
+                start_str = dt.strftime("%Y-%m-%d")
+            else:
+                # For intraday intervals yfinance rejects tz-offset ISO strings
+                # ("unconverted data remains"). Normalize to UTC then strip tzinfo
+                # to produce a naive datetime that yfinance accepts while keeping
+                # the exact buy timestamp (not truncating to midnight).
+                start_str = dt.astimezone(timezone.utc).replace(tzinfo=None)
         except Exception:
             start_str = start_date[:10]
 
