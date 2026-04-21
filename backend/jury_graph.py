@@ -14,7 +14,7 @@ All three analyst nodes fire concurrently via LangGraph's parallel fan-out.
 """
 
 import logging
-from typing import Annotated, Dict, List, Optional, TypedDict
+from typing import Annotated, Dict, List, TypedDict
 
 from langgraph.graph import StateGraph, START, END
 
