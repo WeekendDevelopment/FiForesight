@@ -364,19 +364,26 @@ async def get_portfolio_performance(
 
         # Forward-fill: carry last known price instead of snapping back to
         # buyPrice on every missing timestamp (avoids distorted intraday curves).
-        last_prices: Dict[str, float] = {h["symbol"]: h["buyPrice"] for h in holdings}
+        # Start empty so each holding falls back to its own buyPrice via .get()
+        # — pre-seeding by symbol would collapse duplicate-symbol lots onto one
+        # buyPrice, corrupting the cost basis of whichever lot was written last.
+        last_prices: Dict[str, float] = {}
         last_spy_price = spy_buy_price
 
         for date in all_dates:
             for h in holdings:
-                px = price_data.get(h["symbol"], {}).get(date)
+                sym = h["symbol"]
+                px = price_data.get(sym, {}).get(date)
                 if px is not None:
-                    last_prices[h["symbol"]] = px
+                    last_prices[sym] = px
             spy_px = spy_prices.get(date)
             if spy_px is not None:
                 last_spy_price = spy_px
 
-            port_val = sum(h["shares"] * last_prices[h["symbol"]] for h in holdings)
+            port_val = sum(
+                h["shares"] * last_prices.get(h["symbol"], h["buyPrice"])
+                for h in holdings
+            )
             spy_val  = spy_ref_shares * last_spy_price
 
             port_values.append(round(port_val, 2))

@@ -317,8 +317,24 @@ async def _run_analyst_jury(
     # Each analyst is an independent node; failures are isolated per-node.
     # Swap .ainvoke() → .stream() here in future for SSE streaming.
     # ------------------------------------------------------------------
-    verdicts = await run_jury_graph(analyst_jury_svc, ANALYST_PERSONAS, ctx)
-    return verdicts
+    try:
+        return await run_jury_graph(analyst_jury_svc, ANALYST_PERSONAS, ctx)
+    except Exception as exc:
+        logger.error("[JURY-GRAPH] invocation failed: %s", exc, exc_info=True)
+        return [
+            {
+                "id":          persona["id"],
+                "avatar":      persona["avatar"],
+                "title":       persona["title"],
+                "model_label": persona["model_label"],
+                "color":       persona["color"],
+                "rating":      "Hold",
+                "note":        "Analysis unavailable.",
+                "confidence":  25,
+                "model":       "error",
+            }
+            for persona in ANALYST_PERSONAS
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -1111,7 +1127,11 @@ class SimPerfRequest(BaseModel):
             dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
         except ValueError as exc:
             raise ValueError(f"start_date must be a valid ISO date string, got: {v!r}") from exc
-        if dt > datetime.now(dt.tzinfo or timezone.utc):
+        # Normalize naive datetimes (e.g. "2026-04-20" has no tzinfo) to UTC
+        # before comparing — mixing naive and aware raises TypeError in Python.
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if dt > datetime.now(timezone.utc):
             raise ValueError("start_date must not be in the future")
         return v
 
