@@ -13,7 +13,6 @@ Graph shape (parallel fan-out):
 All three analyst nodes fire concurrently via LangGraph's parallel fan-out.
 """
 
-import asyncio
 import logging
 from typing import Annotated, Dict, List, Optional, TypedDict
 
