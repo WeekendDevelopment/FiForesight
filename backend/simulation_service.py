@@ -70,7 +70,14 @@ async def _analyze_ticker(
 ) -> Optional[Dict]:
     """Fetch OHLCV data and run ensemble ML forecast for one ticker."""
     try:
-        df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "3mo")
+        # Use Ticker.history() directly rather than yf.download() to avoid the
+        # global state in yfinance's multitasking module, which cross-contaminates
+        # DataFrames when multiple tickers are downloaded concurrently.
+        yf_sym = yf_svc._to_yf_symbol(symbol) if hasattr(yf_svc, "_to_yf_symbol") else symbol
+        ticker_obj = yf.Ticker(yf_sym)
+        df = await asyncio.to_thread(
+            ticker_obj.history, period="3mo", interval="1d", auto_adjust=True
+        )
         if df is None or df.empty or len(df) < 20:
             logger.warning("[SIM] %s: insufficient data", symbol)
             return None
@@ -307,13 +314,10 @@ async def get_portfolio_performance(
     try:
         try:
             dt = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-            # Preserve time component for intraday intervals so yfinance
-            # starts at the correct buy timestamp, not midnight.
-            start_str = (
-                dt.strftime("%Y-%m-%d")
-                if interval == "1d"
-                else dt.isoformat()
-            )
+            # yfinance history(start=) only accepts "YYYY-MM-DD" date strings or
+            # naive datetimes — timezone-offset ISO strings raise "unconverted data
+            # remains" errors in yfinance's internal strptime parser.
+            start_str = dt.strftime("%Y-%m-%d")
         except Exception:
             start_str = start_date[:10]
 
