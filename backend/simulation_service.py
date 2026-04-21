@@ -2,7 +2,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
 import yfinance as yf
@@ -317,11 +317,11 @@ async def get_portfolio_performance(
             if interval == "1d":
                 start_str = dt.strftime("%Y-%m-%d")
             else:
-                # For intraday intervals yfinance rejects tz-offset ISO strings
-                # ("unconverted data remains"). Normalize to UTC then strip tzinfo
-                # to produce a naive datetime that yfinance accepts while keeping
-                # the exact buy timestamp (not truncating to midnight).
-                start_str = dt.astimezone(timezone.utc).replace(tzinfo=None)
+                # Use the calendar date of the start (in ET) so intraday fetches
+                # always capture the full trading session — passing an exact
+                # after-hours timestamp would return no candles for that day.
+                et = timezone(timedelta(hours=-4))  # EDT (UTC-4)
+                start_str = dt.astimezone(et).strftime("%Y-%m-%d")
         except Exception:
             start_str = start_date[:10]
 
