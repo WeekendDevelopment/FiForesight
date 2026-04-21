@@ -163,7 +163,7 @@ async def run_jury_graph(
         verdicts.append(v)
 
     logger.info(
-        f"[JURY-GRAPH] ✓ Complete — "
+        "[JURY-GRAPH] ✓ Complete — "
         + ", ".join(f"{v['id']}={v['rating']}({v['confidence']}%)" for v in verdicts)
     )
     return verdicts
