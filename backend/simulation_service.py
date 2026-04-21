@@ -307,7 +307,13 @@ async def get_portfolio_performance(
     try:
         try:
             dt = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-            start_str = dt.strftime("%Y-%m-%d")
+            # Preserve time component for intraday intervals so yfinance
+            # starts at the correct buy timestamp, not midnight.
+            start_str = (
+                dt.strftime("%Y-%m-%d")
+                if interval == "1d"
+                else dt.isoformat()
+            )
         except Exception:
             start_str = start_date[:10]
 
@@ -356,13 +362,22 @@ async def get_portfolio_performance(
         port_returns: List[float] = []
         spy_returns:  List[float] = []
 
+        # Forward-fill: carry last known price instead of snapping back to
+        # buyPrice on every missing timestamp (avoids distorted intraday curves).
+        last_prices: Dict[str, float] = {h["symbol"]: h["buyPrice"] for h in holdings}
+        last_spy_price = spy_buy_price
+
         for date in all_dates:
-            port_val = sum(
-                h["shares"] * price_data.get(h["symbol"], {}).get(date, h["buyPrice"])
-                for h in holdings
-            )
-            spy_px  = spy_prices.get(date, spy_buy_price)
-            spy_val = spy_ref_shares * spy_px
+            for h in holdings:
+                px = price_data.get(h["symbol"], {}).get(date)
+                if px is not None:
+                    last_prices[h["symbol"]] = px
+            spy_px = spy_prices.get(date)
+            if spy_px is not None:
+                last_spy_price = spy_px
+
+            port_val = sum(h["shares"] * last_prices[h["symbol"]] for h in holdings)
+            spy_val  = spy_ref_shares * last_spy_price
 
             port_values.append(round(port_val, 2))
             spy_values.append(round(spy_val, 2))
