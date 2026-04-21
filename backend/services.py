@@ -667,6 +667,7 @@ class YFinanceService:
             # Flatten MultiIndex columns if present (yfinance ≥0.2 quirk)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
+                df = df.loc[:, ~df.columns.duplicated(keep='first')]
 
             df.index = pd.to_datetime(df.index)
             if df.index.tz is None:
@@ -677,11 +678,12 @@ class YFinanceService:
             keep = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in df.columns]
             df   = df[keep].dropna(subset=["Close"])
 
+            close_col = df['Close']
             logger.info(
                 f"[YFINANCE] ✓ fetch_history — {len(df)} rows for {ticker} | "
                 f"date range: {df.index.min().date()} → {df.index.max().date()} | "
-                f"close: ${float(df['Close'].iloc[0]):.2f} (oldest) → "
-                f"${float(df['Close'].iloc[-1]):.2f} (latest) | "
+                f"close: ${float(close_col.iloc[0]):.2f} (oldest) → "
+                f"${float(close_col.iloc[-1]):.2f} (latest) | "
                 f"columns: {list(df.columns)}"
             )
             return df
@@ -1137,6 +1139,12 @@ class AnalystJuryService:
     # ------------------------------------------------------------------
     # Internal: provider-specific wrapper
     # ------------------------------------------------------------------
+
+    async def call_groq(
+        self, model: str, system: str, user: str, max_tokens: int = 320
+    ) -> str:
+        """Public entry point for a single Groq chat completion."""
+        return await self._call_groq(model, system, user, max_tokens)
 
     async def _call_groq(
         self, model: str, system: str, user: str, max_tokens: int = 320

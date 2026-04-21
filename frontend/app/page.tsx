@@ -666,6 +666,27 @@ export default function QuantumDashboard() {
             </Box>
 
             <Stack direction="row" spacing={1} alignItems="center">
+              {/* Portfolio Race link */}
+              <Button
+                component="a"
+                href="/simulation"
+                size="small"
+                variant="outlined"
+                sx={{
+                  borderColor: `${primaryColor}55`,
+                  color: primaryColor,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  px: 1.5,
+                  py: 0.5,
+                  borderRadius: 2,
+                  whiteSpace: 'nowrap',
+                  '&:hover': { borderColor: primaryColor, background: `${primaryColor}12` },
+                }}
+              >
+                🏁 Portfolio Race
+              </Button>
+
               {/* Theme toggle */}
               <IconButton
                 onClick={() => setThemeMode(m => m === 'dark' ? 'light' : 'dark')}
