@@ -93,3 +93,4 @@ runs:
           
           # ---- Logrotate ----
           sudo cp /home/ubuntu/nginx/logrotate /etc/logrotate.d/nginx
+          sudo logrotate --debug /etc/logrotate.d/nginx
