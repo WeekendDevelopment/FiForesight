@@ -12,6 +12,15 @@ runs:
         source: nginx/
         target: /home/ubuntu/
 
+    - name: Update DuckDNS record
+      shell: bash
+      run: |
+        SUBDOMAIN="${{ env.DOMAIN }}"
+        SUBDOMAIN="${SUBDOMAIN%.duckdns.org}"
+        RESP=$(curl -fsSL "https://www.duckdns.org/update?domains=${SUBDOMAIN}&token=${{ env.DUCK_DNS_TOKEN }}&ip=${{ env.VM_IP_ADDRESS }}")
+        echo "DuckDNS update response: $RESP"
+        if [ "$RESP" != "OK" ]; then echo "DuckDNS update failed"; exit 1; fi
+
     - name: Setup iptables, Nginx + Certbot
       uses: appleboy/ssh-action@v1
       with:
@@ -20,7 +29,7 @@ runs:
         key: ${{ env.VM_SSH_PRIVATE_KEY }}
         script: |
           set -e
-          
+
           DOMAIN="${{ env.DOMAIN }}"
           EMAIL="${{ env.EMAIL }}"
           DUCK_DNS_TOKEN="${{ env.DUCK_DNS_TOKEN }}"
@@ -77,7 +86,7 @@ runs:
             sudo certbot certonly \
               --authenticator dns-duckdns \
               --dns-duckdns-credentials /etc/letsencrypt/duckdns.ini \
-              --dns-duckdns-propagation-seconds 60 \
+              --dns-duckdns-propagation-seconds 120 \
               -d $DOMAIN \
               --email $EMAIL \
               --agree-tos \
