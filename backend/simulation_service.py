@@ -169,48 +169,76 @@ async def _build_candidate_pool(
     max_candidates: int = 15,
 ) -> tuple[List[str], str]:
     """
-    Tier-1 (dynamic): pull ETF top-holdings — time-appropriate, cache-backed.
-    Tier-2 (static):  fall back to SECTOR_POOL if all ETF fetches fail.
-    Returns (candidates, source_label) where source_label is 'etf' or 'static'.
+    Tier-1 (dynamic): per-sector ETF top-holdings — time-appropriate, cache-backed.
+    Tier-2 (static):  per-sector SECTOR_POOL fallback for sectors whose ETF
+                      discovery returns nothing. This avoids silently dropping a
+                      requested sector when only one sector's ETFs fail.
+    Returns (candidates, source_label) where source_label is 'etf', 'static',
+    or 'mixed' when some sectors resolved dynamically and others fell back.
     """
-    # Collect unique ETFs across requested sectors, respecting risk level
-    etfs: List[str] = []
+    # Collect per-sector ETF lists, deduped but order-preserving.
+    sector_etfs: Dict[str, List[str]] = {}
     for sector in sectors:
         sector_map = SECTOR_ETF_MAP.get(sector, {})
-        for etf in sector_map.get(risk_level, sector_map.get("moderate", [])):
-            if etf not in etfs:
-                etfs.append(etf)
+        sector_etfs[sector] = list(sector_map.get(risk_level, sector_map.get("moderate", [])))
 
-    if etfs:
-        # Fetch all ETF holdings concurrently — semaphore inside keeps it safe
-        holdings_results = await asyncio.gather(
-            *[_fetch_etf_holdings(e) for e in etfs], return_exceptions=True
+    # Fetch all unique ETFs once, then stitch back per-sector.
+    unique_etfs: List[str] = []
+    for etfs in sector_etfs.values():
+        for etf in etfs:
+            if etf not in unique_etfs:
+                unique_etfs.append(etf)
+
+    etf_holdings: Dict[str, List[str]] = {}
+    if unique_etfs:
+        results = await asyncio.gather(
+            *[_fetch_etf_holdings(e) for e in unique_etfs], return_exceptions=True
         )
+        for etf, result in zip(unique_etfs, results):
+            etf_holdings[etf] = result if isinstance(result, list) else []
 
-        candidates: List[str] = []
-        for result in holdings_results:
-            if isinstance(result, list):
-                for sym in result:
-                    if sym not in candidates:
-                        candidates.append(sym)
+    candidates: List[str] = []
+    etf_resolved_sectors = 0
+    static_fallback_sectors = 0
 
-        if candidates:
-            logger.info(
-                "[SIM] Dynamic pool: %d candidates from ETF(s) %s",
-                len(candidates), etfs,
-            )
-            return candidates[:max_candidates], "etf"
-
-    # Tier-2: static fallback
-    logger.warning("[SIM] ETF discovery empty — falling back to static SECTOR_POOL")
-    static: List[str] = []
     for sector in sectors:
-        pool = SECTOR_POOL.get(sector, {})
-        for t in pool.get(risk_level, pool.get("moderate", [])):
-            if t not in static:
-                static.append(t)
+        sector_candidates: List[str] = []
+        for etf in sector_etfs.get(sector, []):
+            for sym in etf_holdings.get(etf, []):
+                if sym not in sector_candidates:
+                    sector_candidates.append(sym)
 
-    return (static[:max_candidates] or SECTOR_POOL["Technology"]["moderate"]), "static"
+        if sector_candidates:
+            etf_resolved_sectors += 1
+        else:
+            # Per-sector static fallback — don't drop this sector on ETF failure.
+            logger.warning(
+                "[SIM] ETF discovery empty for sector %r — using static pool", sector,
+            )
+            static_fallback_sectors += 1
+            pool = SECTOR_POOL.get(sector, {})
+            sector_candidates = list(pool.get(risk_level, pool.get("moderate", [])))
+
+        for sym in sector_candidates:
+            if sym not in candidates:
+                candidates.append(sym)
+
+    if not candidates:
+        candidates = list(SECTOR_POOL["Technology"]["moderate"])
+        return candidates[:max_candidates], "static"
+
+    if static_fallback_sectors == 0:
+        source = "etf"
+    elif etf_resolved_sectors == 0:
+        source = "static"
+    else:
+        source = "mixed"
+
+    logger.info(
+        "[SIM] Candidate pool: %d symbols (etf_sectors=%d, static_sectors=%d, source=%s)",
+        len(candidates), etf_resolved_sectors, static_fallback_sectors, source,
+    )
+    return candidates[:max_candidates], source
 
 
 # ── RSI helper ────────────────────────────────────────────────────────────────
@@ -523,12 +551,32 @@ async def get_portfolio_performance(
         # start, so it returns data from market open even if the simulation was
         # started mid-session.  Trim to the actual simulation start timestamp so
         # the chart always begins at the moment the user clicked "Start Race".
+        sim_start_hm: Optional[str] = None
         if interval != "1d":
             try:
                 sim_start_hm = dt.astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M")
-                all_dates = [d for d in all_dates if d >= sim_start_hm]
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug(
+                    "[SIM] intraday start conversion failed; keeping full series: %s",
+                    exc,
+                )
+                sim_start_hm = None
+
+        # Carry-forward seed: the most recent pre-start bar (if any) becomes the
+        # initial last-known price, so the first plotted point uses a real quote
+        # rather than snapping back to buyPrice / spy_buy_price on the left edge.
+        last_prices: Dict[str, float] = {}
+        last_spy_price = spy_buy_price
+        if sim_start_hm is not None:
+            for h in holdings:
+                sym = h["symbol"]
+                pre_start = [d for d in price_data.get(sym, {}) if d < sim_start_hm]
+                if pre_start:
+                    last_prices[sym] = price_data[sym][max(pre_start)]
+            spy_pre_start = [d for d in spy_prices if d < sim_start_hm]
+            if spy_pre_start:
+                last_spy_price = spy_prices[max(spy_pre_start)]
+            all_dates = [d for d in all_dates if d >= sim_start_hm]
 
         if not all_dates:
             return _empty_perf(budget)
@@ -543,11 +591,6 @@ async def get_portfolio_performance(
         spy_values:  List[float] = []
         port_returns: List[float] = []
         spy_returns:  List[float] = []
-
-        # Forward-fill: carry last known price instead of snapping back to
-        # buyPrice on every missing timestamp (avoids distorted intraday curves).
-        last_prices: Dict[str, float] = {}
-        last_spy_price = spy_buy_price
 
         for date in all_dates:
             for h in holdings:

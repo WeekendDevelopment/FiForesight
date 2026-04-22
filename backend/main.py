@@ -1115,7 +1115,7 @@ class SimHolding(BaseModel):
 class SimPerfRequest(BaseModel):
     holdings:      List[SimHolding]
     start_date:    str
-    spy_buy_price: float = Field(ge=0)
+    spy_buy_price: float = Field(gt=0)
     budget:        float = Field(default=100_000.0, gt=0)
     interval:      str   = "1d"
 
@@ -1184,8 +1184,27 @@ class SimStateSaveRequest(BaseModel):
 
 @app.post("/simulation/state")
 async def simulation_state_save(req: SimStateSaveRequest):
+    # Validate env / sim_id at the route boundary so bad input → 400 (not 500).
+    try:
+        influx_svc._validate_sim_env(req.env)
+        influx_svc._validate_sim_id(req.sim_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # Canonicalize the state payload id — the record is keyed by sim_id, so the
+    # embedded state.id must agree (otherwise the UI will resume/delete a
+    # different id than the one persisted).
+    state = dict(req.state)
+    state_id = state.get("id")
+    if state_id not in (None, req.sim_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"state.id ({state_id!r}) must match sim_id ({req.sim_id!r})",
+        )
+    state["id"] = req.sim_id
+
     ok = await asyncio.to_thread(
-        influx_svc.write_simulation_state, req.sim_id, req.env, req.state
+        influx_svc.write_simulation_state, req.sim_id, req.env, state
     )
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to persist simulation state")
@@ -1194,12 +1213,21 @@ async def simulation_state_save(req: SimStateSaveRequest):
 
 @app.get("/simulation/state")
 async def simulation_state_list(env: str = Query(...)):
+    try:
+        influx_svc._validate_sim_env(env)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     sims = await asyncio.to_thread(influx_svc.query_simulation_states, env)
     return {"simulations": sims}
 
 
 @app.delete("/simulation/state/{sim_id}")
 async def simulation_state_delete(sim_id: str, env: str = Query(...)):
+    try:
+        influx_svc._validate_sim_env(env)
+        influx_svc._validate_sim_id(sim_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     ok = await asyncio.to_thread(influx_svc.delete_simulation_state, sim_id, env)
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to delete simulation state")

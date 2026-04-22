@@ -337,13 +337,42 @@ export default function SimulationPage() {
   const [simsLoading, setSimsLoading]       = useState(false);
   const msgTimer     = useRef<ReturnType<typeof setInterval> | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Per-sim-id pending save promise, so resets can await in-flight saves
+  // before deleting (prevents the save from "resurrecting" a deleted sim).
+  const pendingSaves = useRef<Map<string, Promise<unknown>>>(new Map());
+  // Ids the user has explicitly deleted — late-resolving saves check this
+  // before re-adding to savedSims.
+  const deletedSims  = useRef<Set<string>>(new Set());
 
-  // On mount: migrate away from localStorage, load saved sims from DB
+  // On mount: migrate any legacy localStorage save to the DB, then load sims.
   useEffect(() => {
-    try { localStorage.removeItem(LEGACY_STORAGE_KEY); } catch { /* noop */ }
-    loadSavedSims();
+    void migrateLegacyAndLoad();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function migrateLegacyAndLoad() {
+    let legacyRaw: string | null = null;
+    try { legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY); } catch { /* noop */ }
+
+    if (legacyRaw) {
+      try {
+        const legacy = JSON.parse(legacyRaw) as SimulationState;
+        if (legacy && typeof legacy.id === 'string') {
+          await axios.post('/api/simulation/state', {
+            sim_id: legacy.id,
+            env:    SIM_ENV,
+            state:  legacy,
+          });
+          // Only clear once the DB write succeeded.
+          try { localStorage.removeItem(LEGACY_STORAGE_KEY); } catch { /* noop */ }
+        }
+      } catch (e) {
+        // Keep the legacy value — user can still recover on a future load.
+        console.warn('[Simulation] legacy save migration failed; retaining localStorage copy:', e);
+      }
+    }
+    await loadSavedSims();
+  }
 
   async function loadSavedSims() {
     setSimsLoading(true);
@@ -386,10 +415,16 @@ export default function SimulationPage() {
     try {
       const activeHoldings = sim.holdings.filter(h => h.shares > 0);
       if (!activeHoldings.length) return;
+      if (!(sim.spyBuyPrice > 0)) {
+        // Refuse to manufacture a fake benchmark basis — ask the user to restart.
+        setPerfData(null);
+        setError('Benchmark price unavailable. Please reset and restart the race.');
+        return;
+      }
       const { data } = await axios.post('/api/simulation/performance', {
         holdings:      activeHoldings,
         start_date:    sim.startDate,
-        spy_buy_price: sim.spyBuyPrice > 0 ? sim.spyBuyPrice : 1,
+        spy_buy_price: sim.spyBuyPrice,
         budget:        sim.budget,
         interval:      iv,
       });
@@ -452,19 +487,33 @@ export default function SimulationPage() {
       spyBuyPrice: benchmark?.currentPrice ?? 0,
       spyShares:   benchmark && benchmark.currentPrice > 0 ? Math.floor(totalInvested / benchmark.currentPrice) : 0,
     };
-    // Persist to DB (non-blocking — simulation starts regardless)
-    axios.post('/api/simulation/state', { sim_id: sim.id, env: SIM_ENV, state: sim })
-      .then(() => setSavedSims(prev => [sim, ...prev.filter(s => s.id !== sim.id)]))
-      .catch(() => { /* silent — user still gets the sim */ });
+    // Persist to DB (non-blocking — simulation starts regardless). Track the
+    // in-flight promise so a subsequent reset can await it before deleting.
+    const savePromise = axios
+      .post('/api/simulation/state', { sim_id: sim.id, env: SIM_ENV, state: sim })
+      .then(() => {
+        // Guard: if the user has already reset this sim, don't resurrect it.
+        if (deletedSims.current.has(sim.id)) return;
+        setSavedSims(prev => [sim, ...prev.filter(s => s.id !== sim.id)]);
+      })
+      .catch(() => { /* silent — user still gets the sim */ })
+      .finally(() => { pendingSaves.current.delete(sim.id); });
+    pendingSaves.current.set(sim.id, savePromise);
     setSimulation(sim);
     setPhase('race');
   }
 
   function handleReset() {
     if (simulation) {
-      axios.delete(`/api/simulation/state/${simulation.id}?env=${SIM_ENV}`)
-        .then(() => setSavedSims(prev => prev.filter(s => s.id !== simulation.id)))
-        .catch(() => { /* silent */ });
+      const simId = simulation.id;
+      // Mark deleted synchronously so an in-flight save can't re-add it.
+      deletedSims.current.add(simId);
+      const pending = pendingSaves.current.get(simId) ?? Promise.resolve();
+      void pending.then(() =>
+        axios.delete(`/api/simulation/state/${simId}?env=${SIM_ENV}`)
+          .then(() => setSavedSims(prev => prev.filter(s => s.id !== simId)))
+          .catch(() => { /* silent */ })
+      );
     }
     setSimulation(null);
     setPerfData(null);
@@ -567,7 +616,11 @@ export default function SimulationPage() {
                     </Button>
                     <Button size="small" variant="text" color="error" sx={{ fontSize: 11 }}
                       onClick={() => {
-                        axios.delete(`/api/simulation/state/${sim.id}?env=${SIM_ENV}`).catch(() => {});
+                        deletedSims.current.add(sim.id);
+                        const pending = pendingSaves.current.get(sim.id) ?? Promise.resolve();
+                        void pending.then(() =>
+                          axios.delete(`/api/simulation/state/${sim.id}?env=${SIM_ENV}`).catch(() => {})
+                        );
                         setSavedSims(prev => prev.filter(s => s.id !== sim.id));
                       }}
                     >

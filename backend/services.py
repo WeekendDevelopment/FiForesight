@@ -669,8 +669,11 @@ from(bucket: "{Config.INFLUXDB_BUCKET}")
                     try:
                         state = json.loads(record.get_value())
                         results.append(state)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug(
+                            "[INFLUXDB] skipping unparseable simulation_state record: %s",
+                            exc,
+                        )
             return results
         except Exception as exc:
             logger.error("[INFLUXDB] query_simulation_states failed: %s", exc)
