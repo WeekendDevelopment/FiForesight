@@ -1107,7 +1107,7 @@ class SimSuggestRequest(BaseModel):
 class SimHolding(BaseModel):
     symbol:        str
     name:          Optional[str] = None
-    shares:        int   = Field(gt=0)
+    shares:        int   = Field(ge=0)
     buyPrice:      float = Field(gt=0)
     allocationUsd: float = 0.0
 
@@ -1115,7 +1115,7 @@ class SimHolding(BaseModel):
 class SimPerfRequest(BaseModel):
     holdings:      List[SimHolding]
     start_date:    str
-    spy_buy_price: float = Field(gt=0)
+    spy_buy_price: float = Field(ge=0)
     budget:        float = Field(default=100_000.0, gt=0)
     interval:      str   = "1d"
 

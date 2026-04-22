@@ -384,10 +384,12 @@ export default function SimulationPage() {
   async function fetchPerf(sim: SimulationState, iv = chartInterval) {
     setPerfLoading(true);
     try {
+      const activeHoldings = sim.holdings.filter(h => h.shares > 0);
+      if (!activeHoldings.length) return;
       const { data } = await axios.post('/api/simulation/performance', {
-        holdings:      sim.holdings,
+        holdings:      activeHoldings,
         start_date:    sim.startDate,
-        spy_buy_price: sim.spyBuyPrice,
+        spy_buy_price: sim.spyBuyPrice > 0 ? sim.spyBuyPrice : 1,
         budget:        sim.budget,
         interval:      iv,
       });
