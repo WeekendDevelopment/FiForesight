@@ -20,9 +20,10 @@ from models import (
 from services import (
     DataCleaner, AnalystJuryService, ForecastStore, InfluxService,
     ANALYST_PERSONAS,
-    SerpService, YFinanceService,
+    SerpService, YFinanceService, SentimentService,
 )
 from simulation_service import suggest_portfolio, get_portfolio_performance
+from jury_graph import run_jury_graph
 
 # ---------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -52,6 +53,7 @@ forecast_store   = ForecastStore(influx_svc)
 serp_svc         = SerpService()
 yf_svc           = YFinanceService()
 analyst_jury_svc = AnalystJuryService()
+sentiment_svc    = SentimentService()
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +77,7 @@ class PredictionResponse(BaseModel):
     lastUpdated:  str
     juryAnalysts:  List[dict]
     modelWeights:  dict
+    sentiment:     dict
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +174,9 @@ async def _run_analyst_jury(
     sr_levels: dict,
     *,
     news_task=None,
+    news_headlines: Optional[List[str]] = None,
     track_record: str = "",
+    sentiment: Optional[dict] = None,
 ) -> List[dict]:
     """
     Run all 3 analyst personas concurrently via AnalystJuryService.
@@ -244,14 +249,17 @@ async def _run_analyst_jury(
         if info.get("dividend_yield") not in (None, "N/A") else "N/A"
     )
 
-    # News headlines — opportunistic: only if serp_task already finished
+    # News headlines — prefer pre-resolved list, fall back to opportunistic task check
     news_block = ""
-    if news_task is not None and news_task.done() and not news_task.cancelled():
+    if news_headlines:
+        lines = [f"  - {h}" for h in news_headlines[:4]]
+        news_block = "Recent news:\n" + "\n".join(lines) + "\n"
+    elif news_task is not None and news_task.done() and not news_task.cancelled():
         try:
-            headlines = news_task.result().get("news_results", [])[:4]
-            if headlines:
+            raw_headlines = news_task.result().get("news_results", [])[:4]
+            if raw_headlines:
                 lines = []
-                for h in headlines:
+                for h in raw_headlines:
                     src = (
                         h.get("source", {}).get("name", "")
                         if isinstance(h.get("source"), dict)
@@ -278,6 +286,13 @@ async def _run_analyst_jury(
     sma_line   = f"{sma50_str} | {sma200_str}"
 
 
+    sentiment_line = ""
+    if sentiment and sentiment.get("headline_count", 0) > 0:
+        sentiment_line = (
+            f"News Sentiment (VADER, {sentiment['headline_count']} headlines): "
+            f"compound={sentiment['compound']:+.3f} [{sentiment['label']}]\n"
+        )
+
     ctx = (
         f"Symbol: {symbol} | Price: ${price:.2f} | RSI: {rsi:.1f} | Sector: {sec_str}\n"
         f"Fundamentals: PE={pe_str} | Cap={cap_str} | Div={div_str} | 52w={rng_str}\n"
@@ -292,24 +307,22 @@ async def _run_analyst_jury(
         f"{sma_line}\n"
         f"Volume: {vol_line}\n"
         f"Support: {sup_str} | Resistance: {res_str}\n"
+        f"{sentiment_line}"
         f"{news_block}"
         + (f"{track_record}\n" if track_record else "")
     )
 
     # ------------------------------------------------------------------
-    # Dispatch all personas concurrently — AnalystJuryService routes
-    # to Groq (LLAMA-70B, QWEN-32B) or xAI (XAI-GROK) internally
+    # Dispatch all personas via LangGraph jury graph (parallel fan-out).
+    # Each analyst is an independent node; failures are isolated per-node.
+    # Swap .ainvoke() → .stream() here in future for SSE streaming.
     # ------------------------------------------------------------------
-    results = await asyncio.gather(
-        *[analyst_jury_svc.get_analyst_verdict(persona, ctx) for persona in ANALYST_PERSONAS],
-        return_exceptions=True,
-    )
-
-    verdicts = []
-    for r, persona in zip(results, ANALYST_PERSONAS):
-        if isinstance(r, Exception):
-            logger.warning(f"Analyst {persona['id']} failed: {r}")
-            verdicts.append({
+    try:
+        return await run_jury_graph(analyst_jury_svc, ANALYST_PERSONAS, ctx)
+    except Exception as exc:
+        logger.error("[JURY-GRAPH] invocation failed: %s", exc, exc_info=True)
+        return [
+            {
                 "id":          persona["id"],
                 "avatar":      persona["avatar"],
                 "title":       persona["title"],
@@ -317,13 +330,11 @@ async def _run_analyst_jury(
                 "color":       persona["color"],
                 "rating":      "Hold",
                 "note":        "Analysis unavailable.",
-                "confidence":  30,
+                "confidence":  25,
                 "model":       "error",
-            })
-        else:
-            verdicts.append(r)
-
-    return verdicts
+            }
+            for persona in ANALYST_PERSONAS
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -893,7 +904,7 @@ async def predict(payload: dict = Body(...)):
     sma200    = calculate_sma_series(closes, 200)
     logger.info(f"[STEP-4b] ✓ All indicator series computed ({len(closes)} points each)")
 
-    # ── Step 4c. Fire news fetch concurrently ────────────────────────────────
+    # ── Step 4c. Fire news fetch concurrently with S/R computation ──────────
     logger.info("[STEP-4c] Launching SerpAPI news task concurrently (non-blocking) ...")
     serp_task = asyncio.create_task(serp_svc.fetch_data(symbol))
 
@@ -904,41 +915,15 @@ async def predict(payload: dict = Body(...)):
     )
     sr_levels = calculate_support_resistance(closes, highs=highs, lows=lows)
 
-    # ── Step 5. AI analyst note + jury (concurrent) ──────────────────────────
-    logger.info(
-        f"[STEP-5] Dispatching AI header note (Groq llama-3.3-70b) + "
-        f"analyst jury ({len(ANALYST_PERSONAS)} personas) concurrently ..."
-    )
-    logger.info(
-        f"[STEP-5] Data sent to AI layer — symbol={symbol}, RSI={rsi:.2f}, "
-        f"forecast_high=${forecast['high']:.2f}, forecast_low=${forecast['low']:.2f}, "
-        f"conf={forecast['conf']}, ann_vol={forecast.get('stats', {}).get('ann_volatility_pct', 'N/A')}%"
-    )
-    note, jury = await asyncio.gather(
-        _ai_note(symbol, closes, rsi, forecast),
-        _run_analyst_jury(
-            symbol, closes, rsi, forecast,
-            forecast.get("stats", {}),
-            info, macd_data, bb_data, sma50, sma200,
-            historical_prices, sr_levels,
-            news_task=serp_task,
-            track_record=track_record,
-        ),
-    )
-    logger.info(
-        f"[STEP-5] ✓ AI layer complete — "
-        f"note={len(note)} chars | jury={len(jury)} verdicts"
-    )
-    for v in jury:
-        logger.info(
-            f"[STEP-5] [JURY/{v['id']}] rating={v['rating']}, "
-            f"confidence={v['confidence']}%, model={v['model']}"
-        )
-
-    # ── Step 6. News + trending via SerpAPI ──────────────────────────────────
-    logger.info("[STEP-6] Awaiting SerpAPI news task result ...")
-    news: list     = []
-    trending: list = []
+    # ── Step 4e. Resolve news + score VADER sentiment ─────────────────────────
+    # Await serp_task here (it has been running since 4c) so that real sentiment
+    # is available to the analyst jury at step 5.  VADER is CPU-only and fast
+    # (<5 ms for 8 headlines) so there is negligible latency cost.
+    logger.info("[STEP-4e] Awaiting SerpAPI + scoring VADER sentiment ...")
+    serp_data: dict = {"news_results": [], "markets": {}}
+    news: list      = []
+    trending: list  = []
+    sentiment: dict = {"compound": 0.0, "label": "Neutral", "scores": [], "headline_count": 0}
     try:
         serp_data = await serp_task
         news = [
@@ -966,11 +951,56 @@ async def predict(payload: dict = Body(...)):
                         "category": category,
                     })
         logger.info(
-            f"[STEP-6] ✓ SerpAPI — news={len(news)} articles, "
+            f"[STEP-4e] ✓ SerpAPI — news={len(news)} articles, "
             f"trending={len(trending)} tickers"
         )
+        headlines = [n["title"] for n in news if n.get("title")]
+        sentiment = await asyncio.to_thread(sentiment_svc.score_headlines, headlines)
+        logger.info(
+            f"[STEP-4e] ✓ VADER sentiment — compound={sentiment['compound']:.4f} "
+            f"({sentiment['label']}), headlines_scored={sentiment['headline_count']}"
+        )
     except Exception as e:
-        logger.warning(f"[STEP-6] SerpAPI fetch failed: {e}")
+        logger.warning(f"[STEP-4e] SerpAPI/sentiment failed: {e}")
+
+    # ── Step 5. AI analyst note + jury (concurrent) ──────────────────────────
+    logger.info(
+        f"[STEP-5] Dispatching AI header note (Groq llama-3.3-70b) + "
+        f"analyst jury ({len(ANALYST_PERSONAS)} personas) concurrently ..."
+    )
+    logger.info(
+        f"[STEP-5] Data sent to AI layer — symbol={symbol}, RSI={rsi:.2f}, "
+        f"forecast_high=${forecast['high']:.2f}, forecast_low=${forecast['low']:.2f}, "
+        f"conf={forecast['conf']}, ann_vol={forecast.get('stats', {}).get('ann_volatility_pct', 'N/A')}%"
+    )
+    note, jury = await asyncio.gather(
+        _ai_note(symbol, closes, rsi, forecast),
+        _run_analyst_jury(
+            symbol, closes, rsi, forecast,
+            forecast.get("stats", {}),
+            info, macd_data, bb_data, sma50, sma200,
+            historical_prices, sr_levels,
+            news_headlines=[n["title"] for n in news if n.get("title")],
+            track_record=track_record,
+            sentiment=sentiment,
+        ),
+    )
+    logger.info(
+        f"[STEP-5] ✓ AI layer complete — "
+        f"note={len(note)} chars | jury={len(jury)} verdicts"
+    )
+    for v in jury:
+        logger.info(
+            f"[STEP-5] [JURY/{v['id']}] rating={v['rating']}, "
+            f"confidence={v['confidence']}%, model={v['model']}"
+        )
+
+    # ── Step 6. (News/trending already resolved at 4e — nothing to await) ────
+    logger.info(
+        f"[STEP-6] News/trending already resolved — "
+        f"news={len(news)}, trending={len(trending)}, "
+        f"sentiment={sentiment['label']} ({sentiment['compound']:+.3f})"
+    )
 
     # ── Step 7. Background price snapshot ────────────────────────────────────
     logger.info(
@@ -1052,6 +1082,7 @@ async def predict(payload: dict = Body(...)):
         lastUpdated  = now.isoformat(),
         juryAnalysts  = jury,
         modelWeights  = forecast.get("weights", {"prophet": 0.0, "sarima": 0.0, "rf": 0.0}),
+        sentiment    = sentiment,
     )
 
 
@@ -1062,7 +1093,15 @@ async def predict(payload: dict = Body(...)):
 class SimSuggestRequest(BaseModel):
     sectors:    List[str]
     risk_level: str   = "moderate"
-    budget:     float = 100_000.0
+    budget:     float = Field(default=100_000.0, gt=0)
+
+    @field_validator("risk_level")
+    @classmethod
+    def validate_risk_level(cls, v: str) -> str:
+        allowed = {"conservative", "moderate", "aggressive"}
+        if v not in allowed:
+            raise ValueError(f"risk_level must be one of {allowed}, got {v!r}")
+        return v
 
 
 class SimHolding(BaseModel):
@@ -1076,18 +1115,24 @@ class SimHolding(BaseModel):
 class SimPerfRequest(BaseModel):
     holdings:      List[SimHolding]
     start_date:    str
-    spy_buy_price: float = Field(ge=0)
+    spy_buy_price: float = Field(gt=0)
     budget:        float = Field(default=100_000.0, gt=0)
     interval:      str   = "1d"
 
     @field_validator("start_date")
     @classmethod
     def validate_start_date(cls, v: str) -> str:
-        from datetime import datetime
+        from datetime import datetime, timezone
         try:
-            datetime.fromisoformat(v.replace("Z", "+00:00"))
+            dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
         except ValueError as exc:
             raise ValueError(f"start_date must be a valid ISO date string, got: {v!r}") from exc
+        # Normalize naive datetimes (e.g. "2026-04-20" has no tzinfo) to UTC
+        # before comparing — mixing naive and aware raises TypeError in Python.
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if dt > datetime.now(timezone.utc):
+            raise ValueError("start_date must not be in the future")
         return v
 
     @field_validator("interval")

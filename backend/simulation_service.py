@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any, Callable, Dict, List, Optional
 
 import yfinance as yf
@@ -70,7 +71,14 @@ async def _analyze_ticker(
 ) -> Optional[Dict]:
     """Fetch OHLCV data and run ensemble ML forecast for one ticker."""
     try:
-        df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "3mo")
+        # Use Ticker.history() directly rather than yf.download() to avoid the
+        # global state in yfinance's multitasking module, which cross-contaminates
+        # DataFrames when multiple tickers are downloaded concurrently.
+        yf_sym = yf_svc._to_yf_symbol(symbol) if hasattr(yf_svc, "_to_yf_symbol") else symbol
+        ticker_obj = yf.Ticker(yf_sym)
+        df = await asyncio.to_thread(
+            ticker_obj.history, period="3mo", interval="1d", auto_adjust=True
+        )
         if df is None or df.empty or len(df) < 20:
             logger.warning("[SIM] %s: insufficient data", symbol)
             return None
@@ -307,7 +315,14 @@ async def get_portfolio_performance(
     try:
         try:
             dt = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-            start_str = dt.strftime("%Y-%m-%d")
+            if interval == "1d":
+                start_str = dt.strftime("%Y-%m-%d")
+            else:
+                # Scope: NASDAQ-listed stocks only, benchmarked against SPY (S&P 500).
+                # ET (America/New_York) is correct for all supported symbols.
+                # If global exchange support is added later, compute tz per-symbol
+                # using the ticker suffix (.NS → Asia/Kolkata, .L → Europe/London, etc.)
+                start_str = dt.astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
         except Exception:
             start_str = start_date[:10]
 
@@ -356,13 +371,29 @@ async def get_portfolio_performance(
         port_returns: List[float] = []
         spy_returns:  List[float] = []
 
+        # Forward-fill: carry last known price instead of snapping back to
+        # buyPrice on every missing timestamp (avoids distorted intraday curves).
+        # Start empty so each holding falls back to its own buyPrice via .get()
+        # — pre-seeding by symbol would collapse duplicate-symbol lots onto one
+        # buyPrice, corrupting the cost basis of whichever lot was written last.
+        last_prices: Dict[str, float] = {}
+        last_spy_price = spy_buy_price
+
         for date in all_dates:
+            for h in holdings:
+                sym = h["symbol"]
+                px = price_data.get(sym, {}).get(date)
+                if px is not None:
+                    last_prices[sym] = px
+            spy_px = spy_prices.get(date)
+            if spy_px is not None:
+                last_spy_price = spy_px
+
             port_val = sum(
-                h["shares"] * price_data.get(h["symbol"], {}).get(date, h["buyPrice"])
+                h["shares"] * last_prices.get(h["symbol"], h["buyPrice"])
                 for h in holdings
             )
-            spy_px  = spy_prices.get(date, spy_buy_price)
-            spy_val = spy_ref_shares * spy_px
+            spy_val  = spy_ref_shares * last_spy_price
 
             port_values.append(round(port_val, 2))
             spy_values.append(round(spy_val, 2))
