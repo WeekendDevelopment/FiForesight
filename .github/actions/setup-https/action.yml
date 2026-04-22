@@ -45,10 +45,18 @@ runs:
           fi
           sudo netfilter-persistent save
           
-          # ---- Install Nginx + Certbot + DuckDNS plugin ----
+          # ---- Install Nginx ----
           sudo apt-get update -qq
-          sudo apt-get install -y nginx certbot python3-pip
-          sudo pip3 install certbot-dns-duckdns
+          sudo apt-get install -y nginx snapd
+
+          # ---- Install Certbot + DuckDNS plugin via snap (apt certbot removed in Ubuntu 22.04+) ----
+          sudo snap install core
+          sudo snap refresh core
+          sudo snap install --classic certbot
+          sudo ln -sf /snap/bin/certbot /usr/bin/certbot
+          sudo snap set certbot trust-plugin-with-root=ok
+          sudo snap install certbot-dns-duckdns
+          sudo snap connect certbot:plugin certbot-dns-duckdns
           
           # ---- Write DuckDNS token config ----
           sudo mkdir -p /etc/letsencrypt
@@ -86,10 +94,6 @@ runs:
           sudo nginx -t
           sudo systemctl enable nginx
           sudo systemctl restart nginx
-          
-          # ---- Enable renewal timer ----
-          sudo systemctl enable certbot.timer
-          sudo systemctl start certbot.timer
           
           # ---- Logrotate ----
           sudo cp /home/ubuntu/nginx/logrotate /etc/logrotate.d/nginx
