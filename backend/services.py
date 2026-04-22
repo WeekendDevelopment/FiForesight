@@ -1,5 +1,6 @@
 # backend/services.py
 import re
+import json
 import logging
 import httpx
 import pandas as pd
@@ -31,7 +32,9 @@ logger = logging.getLogger(__name__)
 # Input validation — prevents Flux/InfluxQL injection via user-supplied tags
 # ---------------------------------------------------------------------------
 
-_SAFE_TAG_RE = re.compile(r"^[A-Za-z0-9._:\-]+$")
+_SAFE_TAG_RE  = re.compile(r"^[A-Za-z0-9._:\-]+$")
+_VALID_SIM_ENV = frozenset({"local", "preview", "live"})
+_UUID_RE       = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
 def _validate_tag(value: str, field: str = "tag") -> str:
@@ -606,6 +609,94 @@ class ForecastStore:
                 logger.warning(f"[RL] query_ensemble_mae error for {symbol}/{model}: {e}")
         logger.info(f"[RL] query_ensemble_mae — {symbol}: {result}")
         return result
+
+    # ── Simulation state persistence ─────────────────────────────────────────
+    # Each simulation is stored as a separate time-series (env + sim_id tags).
+    # Soft-delete: write an empty-string tombstone so `last()` filters it out.
+    # One InfluxDB point per save/delete — negligible storage footprint.
+
+    @staticmethod
+    def _validate_sim_env(env: str) -> str:
+        if env not in _VALID_SIM_ENV:
+            raise ValueError(f"Invalid simulation env: {env!r}")
+        return env
+
+    @staticmethod
+    def _validate_sim_id(sim_id: str) -> str:
+        if not _UUID_RE.match(sim_id.lower()):
+            raise ValueError(f"sim_id must be a UUID v4, got: {sim_id!r}")
+        return sim_id.lower()
+
+    def write_simulation_state(self, sim_id: str, env: str, state: dict) -> bool:
+        try:
+            env    = self._validate_sim_env(env)
+            sim_id = self._validate_sim_id(sim_id)
+            point  = (
+                Point("simulation_state")
+                .tag("env",    env)
+                .tag("sim_id", sim_id)
+                .field("state_json", json.dumps(state))
+            )
+            self.write_api.write(
+                bucket=Config.INFLUXDB_BUCKET,
+                org=Config.INFLUXDB_ORG,
+                record=point,
+            )
+            logger.info("[INFLUXDB] simulation_state saved: sim_id=%s env=%s", sim_id, env)
+            return True
+        except Exception as exc:
+            logger.error("[INFLUXDB] write_simulation_state failed: %s", exc)
+            return False
+
+    def query_simulation_states(self, env: str) -> List[dict]:
+        """Return all live (non-deleted) simulations for the given env, newest first."""
+        try:
+            env = self._validate_sim_env(env)
+            query = f"""
+from(bucket: "{Config.INFLUXDB_BUCKET}")
+  |> range(start: -365d)
+  |> filter(fn: (r) => r._measurement == "simulation_state")
+  |> filter(fn: (r) => r.env == "{env}")
+  |> filter(fn: (r) => r._field == "state_json")
+  |> last()
+  |> filter(fn: (r) => r._value != "")
+  |> sort(columns: ["_time"], desc: true)
+"""
+            tables = self.query_api.query(query, org=Config.INFLUXDB_ORG)
+            results: List[dict] = []
+            for table in tables:
+                for record in table.records:
+                    try:
+                        state = json.loads(record.get_value())
+                        results.append(state)
+                    except Exception:
+                        pass
+            return results
+        except Exception as exc:
+            logger.error("[INFLUXDB] query_simulation_states failed: %s", exc)
+            return []
+
+    def delete_simulation_state(self, sim_id: str, env: str) -> bool:
+        """Soft-delete: write an empty-string tombstone so `last()` filters it out."""
+        try:
+            env    = self._validate_sim_env(env)
+            sim_id = self._validate_sim_id(sim_id)
+            point  = (
+                Point("simulation_state")
+                .tag("env",    env)
+                .tag("sim_id", sim_id)
+                .field("state_json", "")
+            )
+            self.write_api.write(
+                bucket=Config.INFLUXDB_BUCKET,
+                org=Config.INFLUXDB_ORG,
+                record=point,
+            )
+            logger.info("[INFLUXDB] simulation_state deleted: sim_id=%s env=%s", sim_id, env)
+            return True
+        except Exception as exc:
+            logger.error("[INFLUXDB] delete_simulation_state failed: %s", exc)
+            return False
 
 
 # ---------------------------------------------------------------------------

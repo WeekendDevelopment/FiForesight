@@ -138,7 +138,15 @@ const ANALYZING_MSGS = [
   'Building your personalized portfolio...',
 ];
 
-const STORAGE_KEY = 'fiforesight_simulation';
+// Legacy localStorage key — cleared on mount during migration to DB storage
+const LEGACY_STORAGE_KEY = 'fiforesight_simulation';
+
+// Environment is baked in at build time via NEXT_PUBLIC_APP_ENV.
+// local = dev machine, preview = staging deploy, live = production.
+const SIM_ENV: string = (() => {
+  const e = process.env.NEXT_PUBLIC_APP_ENV;
+  return e === 'live' ? 'live' : e === 'preview' ? 'preview' : 'local';
+})();
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -325,24 +333,31 @@ export default function SimulationPage() {
   const [error, setError]                   = useState('');
   const [customShares, setCustomShares]     = useState<Record<string, number>>({});
   const [chartInterval, setChartInterval]   = useState<'1m' | '5m' | '1h' | '1d'>('1h');
+  const [savedSims, setSavedSims]           = useState<SimulationState[]>([]);
+  const [simsLoading, setSimsLoading]       = useState(false);
   const msgTimer     = useRef<ReturnType<typeof setInterval> | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Restore simulation from localStorage on mount
+  // On mount: migrate away from localStorage, load saved sims from DB
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as SimulationState;
-        if (parsed?.id && parsed?.holdings?.length && parsed?.startDate) {
-          setSimulation(parsed);
-          setPhase('race');
-        } else {
-          localStorage.removeItem(STORAGE_KEY);
-        }
-      }
-    } catch { localStorage.removeItem(STORAGE_KEY); }
+    try { localStorage.removeItem(LEGACY_STORAGE_KEY); } catch { /* noop */ }
+    loadSavedSims();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function loadSavedSims() {
+    setSimsLoading(true);
+    try {
+      const { data } = await axios.get<{ simulations: SimulationState[] }>(
+        `/api/simulation/state?env=${SIM_ENV}`
+      );
+      setSavedSims(data.simulations ?? []);
+    } catch {
+      setSavedSims([]);
+    } finally {
+      setSimsLoading(false);
+    }
+  }
 
   // Cycle analysis progress messages
   useEffect(() => {
@@ -435,13 +450,20 @@ export default function SimulationPage() {
       spyBuyPrice: benchmark?.currentPrice ?? 0,
       spyShares:   benchmark && benchmark.currentPrice > 0 ? Math.floor(totalInvested / benchmark.currentPrice) : 0,
     };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(sim));
+    // Persist to DB (non-blocking — simulation starts regardless)
+    axios.post('/api/simulation/state', { sim_id: sim.id, env: SIM_ENV, state: sim })
+      .then(() => setSavedSims(prev => [sim, ...prev.filter(s => s.id !== sim.id)]))
+      .catch(() => { /* silent — user still gets the sim */ });
     setSimulation(sim);
     setPhase('race');
   }
 
   function handleReset() {
-    localStorage.removeItem(STORAGE_KEY);
+    if (simulation) {
+      axios.delete(`/api/simulation/state/${simulation.id}?env=${SIM_ENV}`)
+        .then(() => setSavedSims(prev => prev.filter(s => s.id !== simulation.id)))
+        .catch(() => { /* silent */ });
+    }
     setSimulation(null);
     setPerfData(null);
     setSuggestions([]);
@@ -499,6 +521,62 @@ export default function SimulationPage() {
   function Welcome() {
     return (
       <Box sx={{ textAlign: 'center', py: 8 }}>
+
+        {/* Saved simulations list — env-scoped, DB-backed */}
+        {simsLoading && (
+          <LinearProgress sx={{ mb: 3, borderRadius: 1 }} />
+        )}
+        {!simsLoading && savedSims.length > 0 && (
+          <Paper sx={{
+            mb: 4, p: 2, border: '1px solid rgba(0,242,255,0.2)',
+            background: 'rgba(0,242,255,0.04)', textAlign: 'left',
+          }}>
+            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5 }}>
+              <Typography variant="subtitle2" fontWeight={700} color="primary.main">
+                Saved simulations ({SIM_ENV})
+              </Typography>
+              <Chip label={SIM_ENV} size="small" sx={{
+                background: SIM_ENV === 'live' ? 'rgba(16,185,129,0.15)' :
+                            SIM_ENV === 'preview' ? 'rgba(245,158,11,0.15)' : 'rgba(0,242,255,0.12)',
+                color: SIM_ENV === 'live' ? '#10b981' : SIM_ENV === 'preview' ? '#f59e0b' : '#00f2ff',
+                fontSize: 11, fontWeight: 700,
+              }} />
+            </Stack>
+            <Stack spacing={1}>
+              {savedSims.map(sim => (
+                <Stack key={sim.id} direction="row" alignItems="center"
+                  justifyContent="space-between" flexWrap="wrap" gap={1}
+                  sx={{ p: 1.2, borderRadius: 1, border: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' }}
+                >
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography variant="body2" fontWeight={600} noWrap>
+                      {sim.riskLevel.charAt(0).toUpperCase() + sim.riskLevel.slice(1)} · {sim.sectors.join(', ')}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Started {new Date(sim.startDate).toLocaleString()} · ${sim.budget.toLocaleString()} budget
+                    </Typography>
+                  </Box>
+                  <Stack direction="row" spacing={0.5}>
+                    <Button size="small" variant="outlined"
+                      onClick={() => { setSimulation(sim); setPhase('race'); }}
+                      sx={{ borderColor: 'primary.main', color: 'primary.main', fontWeight: 700, fontSize: 11 }}
+                    >
+                      Resume
+                    </Button>
+                    <Button size="small" variant="text" color="error" sx={{ fontSize: 11 }}
+                      onClick={() => {
+                        axios.delete(`/api/simulation/state/${sim.id}?env=${SIM_ENV}`).catch(() => {});
+                        setSavedSims(prev => prev.filter(s => s.id !== sim.id));
+                      }}
+                    >
+                      Delete
+                    </Button>
+                  </Stack>
+                </Stack>
+              ))}
+            </Stack>
+          </Paper>
+        )}
         <Typography variant="h3" sx={{
           fontWeight: 800, mb: 1.5,
           background: 'linear-gradient(90deg,#00f2ff,#7c4dff)',

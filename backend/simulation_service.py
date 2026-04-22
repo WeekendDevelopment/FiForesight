@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Any, Callable, Dict, List, Optional
@@ -10,7 +11,59 @@ import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
-# Curated ticker pool by sector and risk level
+# ── Rate-limit guard ──────────────────────────────────────────────────────────
+# Caps concurrent yfinance HTTP calls. Prevents Yahoo Finance 429s when many
+# tickers or ETFs are fetched in parallel during simulation setup.
+_YF_SEM: Optional[asyncio.Semaphore] = None
+
+
+def _yf_sem() -> asyncio.Semaphore:
+    """Lazy singleton — must be called inside a running event loop."""
+    global _YF_SEM
+    if _YF_SEM is None:
+        _YF_SEM = asyncio.Semaphore(5)
+    return _YF_SEM
+
+
+# ── Dynamic universe: sector ETFs by risk level ───────────────────────────────
+# ETF compositions reflect real market state at query time — top holdings
+# change as constituents are added/removed, so this stays current without
+# manual curation.  Conservative = large-cap stable; Aggressive = thematic/growth.
+SECTOR_ETF_MAP: Dict[str, Dict[str, List[str]]] = {
+    "Technology": {
+        "conservative": ["XLK"],
+        "moderate":     ["XLK", "VGT"],
+        "aggressive":   ["ARKW", "WCLD"],
+    },
+    "Healthcare": {
+        "conservative": ["XLV"],
+        "moderate":     ["XLV", "VHT"],
+        "aggressive":   ["ARKG"],
+    },
+    "Finance": {
+        "conservative": ["XLF"],
+        "moderate":     ["XLF", "KBE"],
+        "aggressive":   ["KBWB", "FINX"],
+    },
+    "Energy": {
+        "conservative": ["XLE"],
+        "moderate":     ["XLE", "ICLN"],
+        "aggressive":   ["XOP", "TAN"],
+    },
+    "Consumer": {
+        "conservative": ["XLP"],
+        "moderate":     ["XLY", "VCR"],
+        "aggressive":   ["FDIS", "IBUY"],
+    },
+    "Industrial": {
+        "conservative": ["XLI"],
+        "moderate":     ["XLI", "VIS"],
+        "aggressive":   ["ROKT", "DRIV"],
+    },
+}
+
+# ── Static fallback pool ──────────────────────────────────────────────────────
+# Used only when all ETF holdings fetches fail (network down, API change, etc.)
 SECTOR_POOL: Dict[str, Dict[str, List[str]]] = {
     "Technology": {
         "conservative": ["MSFT", "AAPL", "GOOGL"],
@@ -46,6 +99,121 @@ SECTOR_POOL: Dict[str, Dict[str, List[str]]] = {
 
 BENCHMARK_SYMBOL = "SPY"
 
+# 24-hour in-memory cache for ETF top-holdings.
+# A single process restart clears it; that's fine — one cold fetch per day per ETF.
+_ETF_HOLDINGS_CACHE: Dict[str, tuple] = {}  # etf_symbol -> ([tickers], fetched_unix_ts)
+_ETF_CACHE_TTL = 86_400  # seconds
+
+
+# ── ETF holdings fetcher ──────────────────────────────────────────────────────
+
+async def _fetch_etf_holdings(etf_symbol: str) -> List[str]:
+    """
+    Return the top holding tickers for an ETF, cached 24 h.
+    Tries two yfinance strategies before giving up gracefully.
+    """
+    cached = _ETF_HOLDINGS_CACHE.get(etf_symbol)
+    if cached and (time.time() - cached[1]) < _ETF_CACHE_TTL:
+        logger.debug("[SIM] ETF cache hit: %s (%d symbols)", etf_symbol, len(cached[0]))
+        return cached[0]
+
+    symbols: List[str] = []
+    try:
+        async with _yf_sem():
+            ticker = yf.Ticker(etf_symbol)
+
+            # Strategy 1: funds_data.top_holdings (yfinance >= 0.2.31)
+            try:
+                fd = await asyncio.to_thread(lambda: ticker.funds_data)
+                if fd is not None:
+                    df = await asyncio.to_thread(lambda: fd.top_holdings)
+                    if df is not None and not df.empty:
+                        col = next((c for c in ("Symbol", "symbol") if c in df.columns), None)
+                        symbols = df[col].dropna().tolist() if col else df.index.tolist()
+            except Exception as exc:
+                logger.debug("[SIM] %s funds_data failed: %s", etf_symbol, exc)
+
+            # Strategy 2: get_holdings()
+            if not symbols:
+                try:
+                    df2 = await asyncio.to_thread(ticker.get_holdings)
+                    if df2 is not None and not df2.empty:
+                        col = next((c for c in ("Symbol", "symbol") if c in df2.columns), None)
+                        symbols = df2[col].dropna().tolist() if col else df2.index.tolist()
+                except Exception as exc:
+                    logger.debug("[SIM] %s get_holdings failed: %s", etf_symbol, exc)
+
+    except Exception as exc:
+        logger.warning("[SIM] _fetch_etf_holdings(%s) outer error: %s", etf_symbol, exc)
+
+    symbols = [
+        str(s).upper().strip()
+        for s in symbols
+        if s and str(s).strip() not in ("", "nan")
+    ][:20]
+
+    if symbols:
+        _ETF_HOLDINGS_CACHE[etf_symbol] = (symbols, time.time())
+        logger.info("[SIM] ETF %s → %d holdings cached", etf_symbol, len(symbols))
+    else:
+        logger.warning("[SIM] ETF %s: no holdings resolved, will use static fallback", etf_symbol)
+
+    return symbols
+
+
+# ── Candidate pool builder ────────────────────────────────────────────────────
+
+async def _build_candidate_pool(
+    sectors: List[str],
+    risk_level: str,
+    max_candidates: int = 15,
+) -> tuple[List[str], str]:
+    """
+    Tier-1 (dynamic): pull ETF top-holdings — time-appropriate, cache-backed.
+    Tier-2 (static):  fall back to SECTOR_POOL if all ETF fetches fail.
+    Returns (candidates, source_label) where source_label is 'etf' or 'static'.
+    """
+    # Collect unique ETFs across requested sectors, respecting risk level
+    etfs: List[str] = []
+    for sector in sectors:
+        sector_map = SECTOR_ETF_MAP.get(sector, {})
+        for etf in sector_map.get(risk_level, sector_map.get("moderate", [])):
+            if etf not in etfs:
+                etfs.append(etf)
+
+    if etfs:
+        # Fetch all ETF holdings concurrently — semaphore inside keeps it safe
+        holdings_results = await asyncio.gather(
+            *[_fetch_etf_holdings(e) for e in etfs], return_exceptions=True
+        )
+
+        candidates: List[str] = []
+        for result in holdings_results:
+            if isinstance(result, list):
+                for sym in result:
+                    if sym not in candidates:
+                        candidates.append(sym)
+
+        if candidates:
+            logger.info(
+                "[SIM] Dynamic pool: %d candidates from ETF(s) %s",
+                len(candidates), etfs,
+            )
+            return candidates[:max_candidates], "etf"
+
+    # Tier-2: static fallback
+    logger.warning("[SIM] ETF discovery empty — falling back to static SECTOR_POOL")
+    static: List[str] = []
+    for sector in sectors:
+        pool = SECTOR_POOL.get(sector, {})
+        for t in pool.get(risk_level, pool.get("moderate", [])):
+            if t not in static:
+                static.append(t)
+
+    return (static[:max_candidates] or SECTOR_POOL["Technology"]["moderate"]), "static"
+
+
+# ── RSI helper ────────────────────────────────────────────────────────────────
 
 def _calc_rsi(closes: List[float], period: int = 14) -> float:
     if len(closes) < period + 1:
@@ -71,14 +239,12 @@ async def _analyze_ticker(
 ) -> Optional[Dict]:
     """Fetch OHLCV data and run ensemble ML forecast for one ticker."""
     try:
-        # Use Ticker.history() directly rather than yf.download() to avoid the
-        # global state in yfinance's multitasking module, which cross-contaminates
-        # DataFrames when multiple tickers are downloaded concurrently.
         yf_sym = yf_svc._to_yf_symbol(symbol) if hasattr(yf_svc, "_to_yf_symbol") else symbol
         ticker_obj = yf.Ticker(yf_sym)
-        df = await asyncio.to_thread(
-            ticker_obj.history, period="3mo", interval="1d", auto_adjust=True
-        )
+        async with _yf_sem():
+            df = await asyncio.to_thread(
+                ticker_obj.history, period="3mo", interval="1d", auto_adjust=True
+            )
         if df is None or df.empty or len(df) < 20:
             logger.warning("[SIM] %s: insufficient data", symbol)
             return None
@@ -95,7 +261,8 @@ async def _analyze_ticker(
         lows    = df_clean["Low"].tolist()    if "Low"    in df_clean.columns else None
         volumes = df_clean["Volume"].tolist() if "Volume" in df_clean.columns else None
 
-        info = await asyncio.to_thread(yf_svc.fetch_info, symbol)
+        async with _yf_sem():
+            info = await asyncio.to_thread(yf_svc.fetch_info, symbol)
 
         hist_weights = None
         sample_count = 0
@@ -116,7 +283,7 @@ async def _analyze_ticker(
                     total_inv = sum(1.0 / m if m > 0 else 1.0 for m in maes)
                     hist_weights = [(1.0 / m if m > 0 else 1.0) / total_inv for m in maes]
             except Exception as exc:
-                logger.warning("[SIM] %s: InfluxDB weight fetch failed, using realtime weights: %s", symbol, exc)
+                logger.warning("[SIM] %s: InfluxDB weight fetch failed: %s", symbol, exc)
 
         forecast = await asyncio.to_thread(
             run_forecast_fn,
@@ -218,15 +385,11 @@ async def suggest_portfolio(
     analyst_jury_svc: Optional[Any],
 ) -> Dict[str, Any]:
     """Analyze sector candidates → rank → return portfolio suggestions."""
-    candidates: List[str] = []
-    for sector in sectors:
-        pool = SECTOR_POOL.get(sector, {})
-        for t in pool.get(risk_level, pool.get("moderate", [])):
-            if t not in candidates:
-                candidates.append(t)
-    candidates = candidates[:12] or SECTOR_POOL["Technology"]["moderate"]
-
-    logger.info("[SIM] Analyzing %d candidates: %s", len(candidates), candidates)
+    candidates, source = await _build_candidate_pool(sectors, risk_level)
+    logger.info(
+        "[SIM] source=%s  risk=%s  sectors=%s  candidates(%d)=%s",
+        source, risk_level, sectors, len(candidates), candidates,
+    )
 
     results = await asyncio.gather(
         *[_analyze_ticker(t, yf_svc, run_forecast_fn, influx_svc) for t in candidates]
@@ -234,7 +397,7 @@ async def suggest_portfolio(
     valid = [r for r in results if r is not None]
 
     if not valid:
-        return {"error": "Could not analyze any candidates", "suggestions": []}
+        return {"error": "Could not analyze any candidates", "suggestions": [], "candidateSource": source}
 
     top = sorted(valid, key=lambda s: _score(s, risk_level), reverse=True)[:6]
     verdicts = await _bulk_jury(top, risk_level, analyst_jury_svc)
@@ -285,7 +448,7 @@ async def suggest_portfolio(
     spy_shares = int(budget / spy_price) if spy_price > 0 else 0
 
     return {
-        "suggestions": suggestions,
+        "suggestions":    suggestions,
         "benchmark": {
             "symbol":        BENCHMARK_SYMBOL,
             "name":          "S&P 500 ETF (SPY)",
@@ -293,9 +456,10 @@ async def suggest_portfolio(
             "allocationUsd": round(spy_shares * spy_price, 2),
             "shares":        spy_shares,
         },
-        "riskLevel": risk_level,
-        "sectors":   sectors,
-        "budget":    budget,
+        "riskLevel":       risk_level,
+        "sectors":         sectors,
+        "budget":          budget,
+        "candidateSource": source,
     }
 
 
@@ -330,7 +494,6 @@ async def get_portfolio_performance(
         price_data: Dict[str, Dict[str, float]] = {}
 
         def _fmt_key(idx: Any) -> str:
-            """Format timestamp to string key based on interval."""
             if interval == "1d":
                 return str(idx.date())
             return idx.strftime("%Y-%m-%d %H:%M")
@@ -339,9 +502,10 @@ async def get_portfolio_performance(
             try:
                 yf_sym = yf_svc._to_yf_symbol(symbol) if hasattr(yf_svc, '_to_yf_symbol') else symbol
                 ticker = yf.Ticker(yf_sym)
-                hist = await asyncio.to_thread(
-                    ticker.history, start=start_str, interval=interval, auto_adjust=True
-                )
+                async with _yf_sem():
+                    hist = await asyncio.to_thread(
+                        ticker.history, start=start_str, interval=interval, auto_adjust=True
+                    )
                 if not hist.empty:
                     price_data[symbol] = {
                         _fmt_key(idx): round(float(row["Close"]), 4)
@@ -355,15 +519,24 @@ async def get_portfolio_performance(
         spy_prices = price_data.get(BENCHMARK_SYMBOL, {})
         all_dates  = sorted(set().union(*[set(p.keys()) for p in price_data.values()]))
 
+        # For intraday intervals yfinance only accepts a date (not datetime) as
+        # start, so it returns data from market open even if the simulation was
+        # started mid-session.  Trim to the actual simulation start timestamp so
+        # the chart always begins at the moment the user clicked "Start Race".
+        if interval != "1d":
+            try:
+                sim_start_hm = dt.astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M")
+                all_dates = [d for d in all_dates if d >= sim_start_hm]
+            except Exception:
+                pass
+
         if not all_dates:
             return _empty_perf(budget)
 
-        # Actual invested cost (shares × buyPrice, summed across holdings)
         initial_cost = sum(h["shares"] * h["buyPrice"] for h in holdings)
         if initial_cost <= 0:
             initial_cost = max(budget, 1e-6)
 
-        # SPY benchmark: same dollars invested in SPY at spy_buy_price
         spy_ref_shares = initial_cost / spy_buy_price if spy_buy_price > 0 else 0
 
         port_values: List[float] = []
@@ -373,9 +546,6 @@ async def get_portfolio_performance(
 
         # Forward-fill: carry last known price instead of snapping back to
         # buyPrice on every missing timestamp (avoids distorted intraday curves).
-        # Start empty so each holding falls back to its own buyPrice via .get()
-        # — pre-seeding by symbol would collapse duplicate-symbol lots onto one
-        # buyPrice, corrupting the cost basis of whichever lot was written last.
         last_prices: Dict[str, float] = {}
         last_spy_price = spy_buy_price
 

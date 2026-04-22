@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, HTTPException, Body, Request
+from fastapi import FastAPI, HTTPException, Body, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -1170,6 +1170,40 @@ async def simulation_performance(req: SimPerfRequest):
         yf_svc=yf_svc,
         interval=req.interval,
     )
+
+
+# ---------------------------------------------------------------------------
+# Simulation state endpoints  (env-scoped, InfluxDB-backed)
+# ---------------------------------------------------------------------------
+
+class SimStateSaveRequest(BaseModel):
+    sim_id: str
+    env:    str
+    state:  dict
+
+
+@app.post("/simulation/state")
+async def simulation_state_save(req: SimStateSaveRequest):
+    ok = await asyncio.to_thread(
+        influx_svc.write_simulation_state, req.sim_id, req.env, req.state
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to persist simulation state")
+    return {"saved": True}
+
+
+@app.get("/simulation/state")
+async def simulation_state_list(env: str = Query(...)):
+    sims = await asyncio.to_thread(influx_svc.query_simulation_states, env)
+    return {"simulations": sims}
+
+
+@app.delete("/simulation/state/{sim_id}")
+async def simulation_state_delete(sim_id: str, env: str = Query(...)):
+    ok = await asyncio.to_thread(influx_svc.delete_simulation_state, sim_id, env)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to delete simulation state")
+    return {"deleted": True}
 
 
 if __name__ == "__main__":
