@@ -2,7 +2,8 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any, Callable, Dict, List, Optional
 
 import yfinance as yf
@@ -317,11 +318,11 @@ async def get_portfolio_performance(
             if interval == "1d":
                 start_str = dt.strftime("%Y-%m-%d")
             else:
-                # Use the calendar date of the start (in ET) so intraday fetches
-                # always capture the full trading session — passing an exact
-                # after-hours timestamp would return no candles for that day.
-                et = timezone(timedelta(hours=-4))  # EDT (UTC-4)
-                start_str = dt.astimezone(et).strftime("%Y-%m-%d")
+                # Scope: NASDAQ-listed stocks only, benchmarked against SPY (S&P 500).
+                # ET (America/New_York) is correct for all supported symbols.
+                # If global exchange support is added later, compute tz per-symbol
+                # using the ticker suffix (.NS → Asia/Kolkata, .L → Europe/London, etc.)
+                start_str = dt.astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
         except Exception:
             start_str = start_date[:10]
 
