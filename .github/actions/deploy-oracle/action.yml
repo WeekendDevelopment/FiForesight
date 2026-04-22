@@ -6,7 +6,7 @@ runs:
     - name: Update IP in DNS Entry
       shell: bash
       run: |
-        curl https://www.duckdns.org/update?domains=${{ env.DOMAIN }}&token=${{ env.DUCK_DNS_TOKEN }}&ip=${{ env.VM_IP_ADDRESS }}&verbose=true
+        curl "https://www.duckdns.org/update?domains=${{ env.DOMAIN }}&token=${{ env.DUCK_DNS_TOKEN }}&ip=${{ env.VM_IP_ADDRESS }}&verbose=true"
 
     - name: Copy Nginx config
       uses: appleboy/scp-action@v1
@@ -53,6 +53,7 @@ runs:
         host: ${{ env.VM_IP_ADDRESS }}
         username: ubuntu
         key: ${{ env.VM_SSH_PRIVATE_KEY }}
+        command_timeout: "30m"
         script: |
           # Lowercase the image name for compatibility
           IMAGE_LOWER=$(echo "${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
