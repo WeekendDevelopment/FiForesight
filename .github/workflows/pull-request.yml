@@ -179,22 +179,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Wait for SSH
-        env:
-          VM_IP: ${{ needs.terraform-preview.outputs.vm_host }}
-        run: |
-          echo "Waiting for SSH on $VM_IP..."
-          for i in $(seq 1 24); do
-            if nc -z -w5 "$VM_IP" 22; then
-              echo "SSH is up"
-              exit 0
-            fi
-            echo "Attempt $i/24 — retrying in 10s..."
-            sleep 10
-          done
-          echo "SSH did not become available after 4 minutes"
-          exit 1
-
       - name: Setup HTTPS
         uses: ./.github/actions/setup-https
         env:
@@ -219,27 +203,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-
-      - name: Wait for Docker
-        env:
-          VM_IP: ${{ needs.terraform-preview.outputs.vm_host }}
-          VM_SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
-        run: |
-          echo "$VM_SSH_PRIVATE_KEY" > /tmp/deploy_key
-          chmod 600 /tmp/deploy_key
-          echo "Waiting for Docker on $VM_IP..."
-          for i in $(seq 1 36); do
-            if ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no -o ConnectTimeout=5 ubuntu@"$VM_IP" "docker info" &>/dev/null; then
-              echo "Docker is ready"
-              rm /tmp/deploy_key
-              exit 0
-            fi
-            echo "Attempt $i/36 — retrying in 10s..."
-            sleep 10
-          done
-          rm /tmp/deploy_key
-          echo "Docker did not become available after 6 minutes"
-          exit 1
 
       - name: Deploy to Oracle
         if: github.actor != 'dependabot[bot]'
