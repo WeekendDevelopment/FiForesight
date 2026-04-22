@@ -179,6 +179,22 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Wait for SSH
+        env:
+          VM_IP: ${{ needs.terraform-preview.outputs.vm_host }}
+        run: |
+          echo "Waiting for SSH on $VM_IP..."
+          for i in $(seq 1 24); do
+            if nc -z -w5 "$VM_IP" 22; then
+              echo "SSH is up"
+              exit 0
+            fi
+            echo "Attempt $i/24 — retrying in 10s..."
+            sleep 10
+          done
+          echo "SSH did not become available after 4 minutes"
+          exit 1
+
       - name: Setup HTTPS
         uses: ./.github/actions/setup-https
         env:
