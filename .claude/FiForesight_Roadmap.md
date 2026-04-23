@@ -13,7 +13,7 @@ Improve the ensemble forecasting engine with advanced technical indicators, mode
 |------|-------|--------|
 | FIFO-7 | Advanced Technical Indicators (RSI, MACD, BB, SMA50/200, Support/Resistance) | Done |
 | FIFO-8 | Ensemble Model Improvements (hyperparameter tuning, dynamic weighting, new models) | To Do |
-| FIFO-9 | Historical Forecast Tracking (accuracy metrics, model performance over time) | To Do |
+| FIFO-9 | Historical Forecast Tracking (accuracy metrics, model performance over time) | Done |
 
 ---
 
