@@ -75,3 +75,9 @@ runs:
       with:
         secret-name: NEW_RELIC_LICENSE_KEY
         secret-value: "${{ env.NEW_RELIC_LICENSE_KEY }}"
+
+    - name: Create UPSTASH_REDIS_URL secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: UPSTASH_REDIS_URL
+        secret-value: "${{ env.UPSTASH_REDIS_URL }}"

@@ -10,7 +10,16 @@ terraform {
       source  = "oracle/oci"
       version = ">= 4.0.0"
     }
+    upstash = {
+      source = "upstash/upstash"
+      version = "2.1.0"
+    }
   }
+}
+
+provider "upstash" {
+  email    = var.upstash_email
+  api_key  = var.upstash_api_key
 }
 
 provider "oci" {
