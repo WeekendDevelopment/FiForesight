@@ -40,3 +40,14 @@ variable "availability_domain_index" {
   type        = number
   default     = 0
 }
+
+variable "upstash_email" {
+  description = "Upstash email"
+  type        = string
+}
+
+variable "upstash_api_key" {
+  description = "Upstash API key"
+  type        = string
+  sensitive   = true
+}
