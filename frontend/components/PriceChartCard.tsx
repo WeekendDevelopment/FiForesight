@@ -8,7 +8,7 @@ import {
 import { Info, ChevronDown, ChevronUp } from 'lucide-react';
 import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  LineChart, Line, ReferenceLine, ComposedChart, Area, Legend,
+  Line, ReferenceLine, ComposedChart, Area, Legend,
   BarChart, Bar, Cell,
 } from 'recharts';
 import dynamic from 'next/dynamic';
@@ -386,7 +386,7 @@ export default function PriceChartCard({
                     }}
                   />
 
-                  {prediction.modelStats?.sma_20 > 0 && (
+                  {prediction.modelStats?.sma_20 != null && prediction.modelStats.sma_20 > 0 && (
                     <ReferenceLine y={prediction.modelStats.sma_20} stroke="#f59e0b" strokeDasharray="4 4" strokeOpacity={0.5}
                       label={{ value: `SMA20 $${prediction.modelStats.sma_20}`, fill: '#f59e0b', fontSize: 9, position: 'insideTopRight' }}
                     />

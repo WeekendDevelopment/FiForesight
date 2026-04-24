@@ -82,8 +82,8 @@ export function useIndicatorSignals(
         if (!avgVol || !lastVol) return null;
         const ratio      = lastVol / avgVol;
         const priceTrend = chartStats?.isUp;
-        if (ratio >= 1.5 && priceTrend)  return { text: `Vol ${ratio.toFixed(1)}× above avg on up-day → strong bullish conviction`, color: green };
-        if (ratio >= 1.5 && !priceTrend) return { text: `Vol ${ratio.toFixed(1)}× above avg on down-day → strong bearish distribution`, color: red };
+        if (ratio >= 1.5 && priceTrend === true)  return { text: `Vol ${ratio.toFixed(1)}× above avg on up-day → strong bullish conviction`, color: green };
+        if (ratio >= 1.5 && priceTrend === false) return { text: `Vol ${ratio.toFixed(1)}× above avg on down-day → strong bearish distribution`, color: red };
         if (ratio < 0.6) return { text: `Vol ${ratio.toFixed(1)}× below avg → low conviction move, may reverse`, color: amber };
         return { text: `Volume near average — normal trading conditions`, color: blue };
       })(),
@@ -97,12 +97,14 @@ export function useIndicatorSignals(
       support: (() => {
         if (!supports.length) return null;
         const nearest = supports.reduce((a, b) => Math.abs(a - price) < Math.abs(b - price) ? a : b);
+        if (!nearest || !price) return null;
         const distPct = ((price - nearest) / nearest * 100).toFixed(1);
         return { text: `Nearest support $${nearest} — price is ${distPct}% above. Bounce zone if tested.`, color: green };
       })(),
       resistance: (() => {
         if (!resistances.length) return null;
         const nearest = resistances.reduce((a, b) => Math.abs(a - price) < Math.abs(b - price) ? a : b);
+        if (!nearest || !price) return null;
         const distPct = ((nearest - price) / price * 100).toFixed(1);
         return { text: `Nearest resistance $${nearest} — ${distPct}% above current price. Sell pressure zone.`, color: red };
       })(),
