@@ -1,7 +1,8 @@
 resource "upstash_redis_database" "redis" {
-  database_name = "fiforesight-redis"
-  region        = "eu-west-2"
-  tls           = true
+  database_name  = "fiforesight-redis"
+  primary_region = "eu-west-2"
+  tls            = true
+  region         = "global"
 }
 
 output "redis_endpoint" {
