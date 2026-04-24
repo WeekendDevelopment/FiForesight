@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Box, Card, CardContent, Chip, Collapse, Stack, Typography,
   ToggleButton, ToggleButtonGroup, Button,
@@ -41,6 +41,26 @@ export default function PriceChartCard({
 }: Props) {
   const [legendOpen, setLegendOpen] = useState(false);
   const chartBoxRef = useRef<HTMLDivElement>(null);
+  const [clipBox, setClipBox] = useState<{ l: number; t: number; w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    if (chartMode !== 'candle') return;
+    const el = chartBoxRef.current;
+    if (!el) return;
+    const measure = () => {
+      const rect = el.querySelector('clipPath rect');
+      if (!rect) return;
+      setClipBox({
+        l: +rect.getAttribute('x')!,
+        t: +rect.getAttribute('y')!,
+        w: +rect.getAttribute('width')!,
+        h: +rect.getAttribute('height')!,
+      });
+    };
+    measure();
+    const id = setTimeout(measure, 50);
+    return () => clearTimeout(id);
+  }, [chartMode, prediction]);
 
   const chartData = useMemo(() => {
     const hist = prediction.history.map(h => ({
@@ -408,11 +428,10 @@ export default function PriceChartCard({
 
               {/* Candlestick SVG overlay */}
               {chartMode === 'candle' && chartDomain[0] !== 'auto' && (() => {
-                const clipRect = chartBoxRef.current?.querySelector('clipPath rect');
-                const plotL = clipRect ? +clipRect.getAttribute('x')! : 0;
-                const plotT = clipRect ? +clipRect.getAttribute('y')! : 0;
-                const plotW = clipRect ? +clipRect.getAttribute('width')! : 0;
-                const plotH = clipRect ? +clipRect.getAttribute('height')! : 0;
+                const plotL = clipBox?.l ?? 0;
+                const plotT = clipBox?.t ?? 0;
+                const plotW = clipBox?.w ?? 0;
+                const plotH = clipBox?.h ?? 0;
                 if (!plotW || !plotH) return null;
                 const [dMin, dMax] = chartDomain as [number, number];
                 const pRange  = dMax - dMin;
