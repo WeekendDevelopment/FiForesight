@@ -1,7 +1,7 @@
 # FiForesight Roadmap
 
 > Source of truth for planned work. Aligned with Jira project **FIFO** on Atlassian.
-> Last synced: 2026-04-10
+> Last synced: 2026-04-23
 
 ---
 
@@ -13,7 +13,7 @@ Improve the ensemble forecasting engine with advanced technical indicators, mode
 |------|-------|--------|
 | FIFO-7 | Advanced Technical Indicators (RSI, MACD, BB, SMA50/200, Support/Resistance) | Done |
 | FIFO-8 | Ensemble Model Improvements (hyperparameter tuning, dynamic weighting, new models) | To Do |
-| FIFO-9 | Historical Forecast Tracking (accuracy metrics, model performance over time) | To Do |
+| FIFO-9 | Historical Forecast Tracking (accuracy metrics, model performance over time) | Done |
 
 ---
 
@@ -23,8 +23,8 @@ Build a complete news and sentiment analysis pipeline: SerpAPI news integration,
 
 | Jira | Story | Status |
 |------|-------|--------|
-| FIFO-20 | SerpAPI News Integration | To Do |
-| FIFO-21 | Sentiment Analysis Pipeline (FinBERT/VADER) | To Do |
+| FIFO-20 | SerpAPI News Integration | Done |
+| FIFO-21 | Sentiment Analysis Pipeline (VADER — `SentimentService` in services.py) | Done |
 | FIFO-22 | AI Analyst Notes (Gemini) | To Do |
 
 ---
@@ -35,11 +35,11 @@ Harden infrastructure, improve CI/CD pipeline, and add observability. Covers HTT
 
 | Jira | Story | Status |
 |------|-------|--------|
-| FIFO-36 | HTTPS & Security Hardening | To Do |
+| FIFO-36 | HTTPS & Security Hardening | Done |
 | FIFO-37 | CI/CD Pipeline Improvements | To Do |
 | FIFO-38 | Monitoring & Observability | To Do |
 
-**Already shipped (not in Jira):** New Relic APM integration, GitHub Actions CI/CD (PR preview + prod deploy), Docker multi-stage builds, Koyeb + Oracle Cloud deploys.
+**Already shipped (not in Jira):** New Relic APM integration, GitHub Actions CI/CD (PR preview + prod deploy), Docker multi-stage builds, Koyeb + Oracle Cloud deploys, nginx structured JSON logging + stub_status.
 
 ---
 
@@ -65,7 +65,7 @@ Refactor the monolithic page.tsx (~78KB) into modular components, add accessibil
 | FIFO-59 | Accessibility (a11y) Compliance | To Do |
 | FIFO-60 | Performance Optimization & Analytics | To Do |
 
-**Already shipped (not in Jira):** Dark/light theme, loading skeletons, ticker autocomplete, candlestick chart mode, RSI/MACD/BB/SMA chart overlays.
+**Already shipped (not in Jira):** Dark/light theme, loading skeletons, ticker autocomplete, candlestick chart mode, RSI/MACD/BB/SMA chart overlays, TradingView chart toggle, trending sparklines panel, portfolio simulation page.
 
 ---
 
