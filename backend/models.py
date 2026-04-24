@@ -5,6 +5,7 @@ import numpy as np
 from datetime import datetime, timedelta, timezone
 
 from typing import List, Dict, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import newrelic.agent
 
@@ -718,30 +719,43 @@ def run_ensemble_forecast(
         f"MODELS_AVAILABLE=True, price_points={len(closes)} ≥ 20"
     )
 
-    # ── Run all three models ──────────────────────────────────────────────────
+    # ── Run all three models concurrently ────────────────────────────────────
     p_fc = s_fc = r_fc = None
     errors: List[str] = []
 
-    logger.info("[PROPHET] ──────────────────── Initiating ────────────────────")
-    try:
-        p_fc = _prophet_forecast(closes, FORECAST_DAYS, volumes=volumes, hl_ranges=hl_ranges)
-    except Exception as e:
-        errors.append(f"Prophet: {e}")
-        logger.warning(f"[PROPHET] ✗ FAILED: {e} — Prophet weight=0.0 in ensemble")
+    logger.info("[ENSEMBLE] Running Prophet + SARIMAX + RF concurrently ...")
 
-    logger.info("[SARIMA]  ──────────────────── Initiating ────────────────────")
-    try:
-        s_fc = _sarima_forecast(closes, FORECAST_DAYS, volumes=volumes, hl_ranges=hl_ranges)
-    except Exception as e:
-        errors.append(f"SARIMA: {e}")
-        logger.warning(f"[SARIMA]  ✗ FAILED: {e} — SARIMA weight=0.0 in ensemble")
+    def _run_prophet():
+        return _prophet_forecast(closes, FORECAST_DAYS, volumes=volumes, hl_ranges=hl_ranges)
 
-    logger.info("[RF]      ──────────────────── Initiating ────────────────────")
-    try:
-        r_fc = _rf_forecast(closes, FORECAST_DAYS, opens=opens, highs=highs, lows=lows, volumes=volumes)
-    except Exception as e:
-        errors.append(f"RF: {e}")
-        logger.warning(f"[RF]      ✗ FAILED: {e} — RF weight=0.0 in ensemble")
+    def _run_sarima():
+        return _sarima_forecast(closes, FORECAST_DAYS, volumes=volumes, hl_ranges=hl_ranges)
+
+    def _run_rf():
+        return _rf_forecast(closes, FORECAST_DAYS, opens=opens, highs=highs, lows=lows, volumes=volumes)
+
+    model_fns = [
+        ("Prophet", _run_prophet),
+        ("SARIMA",  _run_sarima),
+        ("RF",      _run_rf),
+    ]
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        future_map = {pool.submit(fn): name for name, fn in model_fns}
+        results = {}
+        for fut in as_completed(future_map):
+            name = future_map[fut]
+            try:
+                results[name] = fut.result()
+                logger.info(f"[{name}] ✓ complete")
+            except Exception as e:
+                results[name] = None
+                errors.append(f"{name}: {e}")
+                logger.warning(f"[{name}] ✗ FAILED: {e} — weight=0.0 in ensemble")
+
+    p_fc = results.get("Prophet")
+    s_fc = results.get("SARIMA")
+    r_fc = results.get("RF")
 
     available = [fc for fc in [p_fc, s_fc, r_fc] if fc is not None]
     n_success = len(available)
