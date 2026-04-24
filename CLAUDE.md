@@ -155,7 +155,7 @@ Simulation flow:
 
 See `.claude/FiForesight_Roadmap.md` for full task list. Jira project: **FIFO** on Atlassian.
 
-**7 Epics** (4 stories Done, 16 To Do):
+**7 Epics** (6 stories Done, 14 To Do):
 - **FIFO-5 ML & Forecasting** — Advanced indicators done (FIFO-7), ensemble improvements + forecast tracking pending
 - **FIFO-6 News & Sentiment** — SerpAPI news integration done, VADER sentiment done (FIFO-21), AI analyst notes pending (FIFO-22)
 - **FIFO-32 Infrastructure & DevOps** — HTTPS done (FIFO-36), CI/CD improvements + monitoring pending
