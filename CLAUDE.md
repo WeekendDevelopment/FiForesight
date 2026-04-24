@@ -147,7 +147,7 @@ Simulation flow:
 - **Backend**: Python snake_case, type hints, logging. `asyncio.to_thread()` for blocking calls.
 - **Frontend**: TypeScript, camelCase, React functional components + hooks, MUI for UI.
 - **Error handling**: Backend services fail gracefully (logged, non-fatal). Global 500 handler returns traceback in dev.
-- **API Proxy**: All frontend→backend calls go through `/api/predict` Next.js route (CORS safety).
+- **API Proxy**: Frontend→backend calls go through Next.js API proxy routes under `/api/*` (e.g., `/api/predict`, `/api/simulation/*`) for CORS safety.
 
 ---
 
