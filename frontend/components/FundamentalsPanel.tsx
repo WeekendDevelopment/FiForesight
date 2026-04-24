@@ -55,10 +55,15 @@ export default function FundamentalsPanel({ prediction, rsiInfo, isDark, primary
                      : primaryColor,
               },
               { label: '52W RANGE',  val: prediction.metrics.range_52w  },
-              { label: 'ANN. VOL',   val: `${prediction.modelStats?.ann_volatility_pct ?? '—'}%` },
+              {
+                label: 'ANN. VOL',
+                val: prediction.modelStats?.ann_volatility_pct != null
+                  ? `${prediction.modelStats.ann_volatility_pct}%`
+                  : '—',
+              },
               {
                 label: 'TREND SLOPE',
-                val: prediction.modelStats?.trend_slope
+                val: prediction.modelStats?.trend_slope != null
                   ? `${prediction.modelStats.trend_slope > 0 ? '▲' : '▼'} ${Math.abs(prediction.modelStats.trend_slope).toFixed(3)}/day`
                   : '—',
                 color: prediction.modelStats?.trend_slope == null ? undefined
@@ -68,7 +73,7 @@ export default function FundamentalsPanel({ prediction, rsiInfo, isDark, primary
               },
               {
                 label: 'VS SMA20',
-                val: prediction.modelStats?.price_vs_sma20_pct !== undefined
+                val: prediction.modelStats?.price_vs_sma20_pct != null
                   ? `${prediction.modelStats.price_vs_sma20_pct > 0 ? '+' : ''}${prediction.modelStats.price_vs_sma20_pct.toFixed(2)}%`
                   : '—',
                 color: prediction.modelStats?.price_vs_sma20_pct == null ? undefined
