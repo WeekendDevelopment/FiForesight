@@ -60,56 +60,70 @@ export default function PriceChartCard({
     measure();
     const id = setTimeout(measure, 50);
     return () => clearTimeout(id);
-  }, [chartMode, prediction]);
+  }, [chartMode, prediction, chartEngine]);
 
   const chartData = useMemo(() => {
-    const hist = prediction.history.map(h => ({
-      date:      h.date,
-      price:     h.price,
-      bb_upper:  h.bb_upper  ?? undefined,
-      bb_middle: h.bb_middle ?? undefined,
-      bb_lower:  h.bb_lower  ?? undefined,
-      sma50:     h.sma50     ?? undefined,
-      sma200:    h.sma200    ?? undefined,
-      predicted: undefined as number | undefined,
-      foreHigh:  undefined as number | undefined,
-      foreLow:   undefined as number | undefined,
-    }));
+    const hist = prediction.history.map(h => {
+      const bbU = h.bb_upper ?? undefined;
+      const bbL = h.bb_lower ?? undefined;
+      return {
+        date:      h.date,
+        price:     h.price,
+        bb_upper:  bbU,
+        bb_middle: h.bb_middle ?? undefined,
+        bb_lower:  bbL,
+        bb_band:   bbU != null && bbL != null ? bbU - bbL : undefined,
+        sma50:     h.sma50  ?? undefined,
+        sma200:    h.sma200 ?? undefined,
+        predicted: undefined as number | undefined,
+        foreHigh:  undefined as number | undefined,
+        foreLow:   undefined as number | undefined,
+        fore_band: undefined as number | undefined,
+      };
+    });
     const fore = (prediction.forecastDays || []).map(f => ({
       date:      f.date,
       price:     undefined as number | undefined,
-      bb_upper:  undefined, bb_middle: undefined, bb_lower: undefined,
+      bb_upper:  undefined, bb_middle: undefined, bb_lower: undefined, bb_band: undefined,
       sma50:     undefined, sma200:    undefined,
       predicted: f.predicted,
       foreHigh:  f.high,
       foreLow:   f.low,
+      fore_band: f.high != null && f.low != null ? f.high - f.low : undefined,
     }));
     return [...hist, ...fore];
   }, [prediction]);
 
   const candleChartData = useMemo(() => {
-    const hist = prediction.history.map(h => ({
-      date:      h.date,
-      open:      h.open  ?? h.price,
-      high:      h.high  ?? h.price,
-      low:       h.low   ?? h.price,
-      close:     h.price,
-      bb_upper:  h.bb_upper  ?? undefined,
-      bb_middle: h.bb_middle ?? undefined,
-      bb_lower:  h.bb_lower  ?? undefined,
-      sma50:     h.sma50     ?? undefined,
-      sma200:    h.sma200    ?? undefined,
-      predicted: undefined as number | undefined,
-      foreHigh:  undefined as number | undefined,
-      foreLow:   undefined as number | undefined,
-    }));
+    const hist = prediction.history.map(h => {
+      const bbU = h.bb_upper ?? undefined;
+      const bbL = h.bb_lower ?? undefined;
+      return {
+        date:      h.date,
+        open:      h.open  ?? h.price,
+        high:      h.high  ?? h.price,
+        low:       h.low   ?? h.price,
+        close:     h.price,
+        bb_upper:  bbU,
+        bb_middle: h.bb_middle ?? undefined,
+        bb_lower:  bbL,
+        bb_band:   bbU != null && bbL != null ? bbU - bbL : undefined,
+        sma50:     h.sma50  ?? undefined,
+        sma200:    h.sma200 ?? undefined,
+        predicted: undefined as number | undefined,
+        foreHigh:  undefined as number | undefined,
+        foreLow:   undefined as number | undefined,
+        fore_band: undefined as number | undefined,
+      };
+    });
     const fore = (prediction.forecastDays || []).map(f => ({
       date: f.date, open: undefined as number | undefined,
       high: undefined as number | undefined, low: undefined as number | undefined,
       close: undefined as number | undefined,
-      bb_upper: undefined, bb_middle: undefined, bb_lower: undefined,
+      bb_upper: undefined, bb_middle: undefined, bb_lower: undefined, bb_band: undefined,
       sma50: undefined, sma200: undefined,
       predicted: f.predicted, foreHigh: f.high, foreLow: f.low,
+      fore_band: f.high != null && f.low != null ? f.high - f.low : undefined,
     }));
     return [...hist, ...fore];
   }, [prediction]);
@@ -151,8 +165,15 @@ export default function PriceChartCard({
     const min = Math.min(...allVals);
     const max = Math.max(...allVals);
     const pad = (max - min) * 0.12 || max * 0.02;
-    return [Math.floor(min - pad), Math.ceil(max + pad)];
+    return [min - pad, max + pad];
   }, [chartData, candleChartData, chartMode, indicators]);
+
+  const SERIES_LABEL_MAP: Record<string, string> = {
+    price: 'Close', close: 'Close (OHLC)', predicted: 'Forecast',
+    foreHigh: 'Fore. High', foreLow: 'Fore. Low',
+    bb_upper: 'BB Upper', bb_middle: 'BB Mid', bb_lower: 'BB Lower',
+    sma50: 'SMA 50', sma200: 'SMA 200',
+  };
 
   const toggleSx = {
     '& .MuiToggleButton-root': {
@@ -360,30 +381,22 @@ export default function PriceChartCard({
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.1)" vertical={false} />
                   <XAxis dataKey="date" stroke="rgba(128,128,128,0.2)" tick={{ fill: 'rgba(128,128,128,0.5)', fontSize: 10 }} tickLine={false} axisLine={false} />
                   <YAxis domain={chartDomain} stroke="rgba(128,128,128,0.2)" tick={{ fill: 'rgba(128,128,128,0.5)', fontSize: 10 }} tickLine={false} axisLine={false} width={65}
-                    tickFormatter={(v: number) => v >= 1000 ? `$${(v/1000).toFixed(1)}k` : `$${v.toFixed(0)}`}
+                    tickFormatter={(v: number) => v >= 1000 ? `$${(v/1000).toFixed(1)}k` : v >= 1 ? `$${v.toFixed(1)}` : `$${v.toFixed(4)}`}
                   />
                   <Tooltip
                     contentStyle={{ background: isDark ? '#0d1520' : '#fff', border: `1px solid ${primaryColor}4d`, borderRadius: 10, fontSize: 12 }}
                     formatter={(value: any, name: string) => {
+                      if (name === 'bb_band' || name === 'fore_band') return null;
                       const v = Number(value);
-                      const map: Record<string, string> = {
-                        price: 'Close', close: 'Close (OHLC)', predicted: 'Forecast', foreHigh: 'Fore. High', foreLow: 'Fore. Low',
-                        bb_upper: 'BB Upper', bb_middle: 'BB Mid', bb_lower: 'BB Lower',
-                        sma50: 'SMA 50', sma200: 'SMA 200',
-                      };
-                      return [`$${v.toFixed(2)}`, map[name] ?? name];
+                      const fmt = v >= 1000 ? `$${(v / 1000).toFixed(1)}k`
+                                : v >= 1    ? `$${v.toFixed(2)}`
+                                :             `$${v.toFixed(4)}`;
+                      return [fmt, SERIES_LABEL_MAP[name] ?? name];
                     }}
                     labelStyle={{ opacity: 0.5, fontSize: 11 }}
                   />
                   <Legend wrapperStyle={{ fontSize: '0.65rem', opacity: 0.6, paddingTop: 8 }}
-                    formatter={(value) => {
-                      const map: Record<string, string> = {
-                        price: 'Close', close: 'Close (OHLC)', predicted: 'Forecast', foreHigh: 'Fore. High', foreLow: 'Fore. Low',
-                        bb_upper: 'BB Upper', bb_middle: 'BB Mid', bb_lower: 'BB Lower',
-                        sma50: 'SMA 50', sma200: 'SMA 200',
-                      };
-                      return map[value] ?? value;
-                    }}
+                    formatter={(value) => SERIES_LABEL_MAP[value] ?? value}
                   />
 
                   {Number.isFinite(prediction.modelStats?.sma_20) && (
@@ -405,9 +418,11 @@ export default function PriceChartCard({
                   ))}
 
                   {indicators.includes('bb') && <>
-                    <Area type="monotone" dataKey="bb_upper"  stroke={primaryColor} strokeWidth={1} strokeDasharray="3 2" strokeOpacity={0.5} fill="url(#bbGrad)" baseLine="bb_lower" dot={false} connectNulls isAnimationActive={false} />
+                    {/* Stacked areas fill only between bb_lower and bb_upper */}
+                    <Area type="monotone" dataKey="bb_lower" stackId="bb" stroke={primaryColor} strokeWidth={1} strokeDasharray="3 2" strokeOpacity={0.5} fill="transparent" dot={false} connectNulls isAnimationActive={false} legendType="none" />
+                    <Area type="monotone" dataKey="bb_band"  stackId="bb" stroke="none" strokeWidth={0} fill="url(#bbGrad)" dot={false} connectNulls isAnimationActive={false} legendType="none" />
+                    <Line  type="monotone" dataKey="bb_upper"  stroke={primaryColor} strokeWidth={1} strokeDasharray="3 2" strokeOpacity={0.5} dot={false} connectNulls isAnimationActive={false} />
                     <Line  type="monotone" dataKey="bb_middle" stroke={primaryColor} strokeWidth={1} strokeDasharray="5 3" strokeOpacity={0.4} dot={false} connectNulls isAnimationActive={false} />
-                    <Area type="monotone" dataKey="bb_lower"  stroke={primaryColor} strokeWidth={1} strokeDasharray="3 2" strokeOpacity={0.5} fill="transparent" dot={false} connectNulls isAnimationActive={false} />
                   </>}
 
                   {indicators.includes('sma') && <>
@@ -419,8 +434,10 @@ export default function PriceChartCard({
                     <Area type="monotone" dataKey="price" stroke={trendColor} strokeWidth={2.5} fill="url(#histGrad)" dot={false} connectNulls={false} activeDot={{ r: 4, strokeWidth: 0 }} isAnimationActive={false} />
                   )}
 
-                  <Area type="monotone" dataKey="foreHigh" stroke="rgba(188,19,254,0.5)" strokeWidth={1.5} strokeDasharray="5 3" fill="url(#foreGrad)" baseLine="foreLow" dot={false} connectNulls={false} isAnimationActive={false} />
-                  <Area type="monotone" dataKey="foreLow"  stroke="rgba(188,19,254,0.3)" strokeWidth={1}   strokeDasharray="5 3" fill="transparent"    dot={false} connectNulls={false} isAnimationActive={false} />
+                  {/* Stacked areas fill only between foreLow and foreHigh */}
+                  <Area type="monotone" dataKey="foreLow"   stackId="fore" stroke="rgba(188,19,254,0.3)" strokeWidth={1}   strokeDasharray="5 3" fill="transparent"    dot={false} connectNulls={false} isAnimationActive={false} legendType="none" />
+                  <Area type="monotone" dataKey="fore_band" stackId="fore" stroke="none" strokeWidth={0} fill="url(#foreGrad)" dot={false} connectNulls={false} isAnimationActive={false} legendType="none" />
+                  <Line  type="monotone" dataKey="foreHigh" stroke="rgba(188,19,254,0.5)" strokeWidth={1.5} strokeDasharray="5 3" dot={false} connectNulls={false} isAnimationActive={false} />
                   <Line type="monotone" dataKey="predicted" stroke="#bc13fe" strokeWidth={2} strokeDasharray="6 3"
                     dot={{ r: 4, fill: '#bc13fe', strokeWidth: 0 }} connectNulls={false} isAnimationActive={false} />
                 </ComposedChart>

@@ -71,7 +71,10 @@ export default function FundamentalsPanel({ prediction, rsiInfo, isDark, primary
                 val: prediction.modelStats?.price_vs_sma20_pct !== undefined
                   ? `${prediction.modelStats.price_vs_sma20_pct > 0 ? '+' : ''}${prediction.modelStats.price_vs_sma20_pct.toFixed(2)}%`
                   : '—',
-                color: (prediction.modelStats?.price_vs_sma20_pct ?? 0) > 0 ? (isDark ? '#00ffa3' : '#16a34a') : (isDark ? '#ff0055' : '#dc2626'),
+                color: prediction.modelStats?.price_vs_sma20_pct == null ? undefined
+                     : prediction.modelStats.price_vs_sma20_pct > 0  ? (isDark ? '#00ffa3' : '#16a34a')
+                     : prediction.modelStats.price_vs_sma20_pct < 0  ? (isDark ? '#ff0055' : '#dc2626')
+                     : undefined,
               },
               { label: 'DIVIDEND', val: prediction.metrics.yield },
             ].map(item => (
