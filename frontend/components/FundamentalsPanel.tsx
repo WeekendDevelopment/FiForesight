@@ -61,7 +61,10 @@ export default function FundamentalsPanel({ prediction, rsiInfo, isDark, primary
                 val: prediction.modelStats?.trend_slope
                   ? `${prediction.modelStats.trend_slope > 0 ? '▲' : '▼'} ${Math.abs(prediction.modelStats.trend_slope).toFixed(3)}/day`
                   : '—',
-                color: prediction.modelStats?.trend_slope > 0 ? (isDark ? '#00ffa3' : '#16a34a') : (isDark ? '#ff0055' : '#dc2626'),
+                color: prediction.modelStats?.trend_slope == null ? undefined
+                     : prediction.modelStats.trend_slope > 0 ? (isDark ? '#00ffa3' : '#16a34a')
+                     : prediction.modelStats.trend_slope < 0 ? (isDark ? '#ff0055' : '#dc2626')
+                     : undefined,
               },
               {
                 label: 'VS SMA20',

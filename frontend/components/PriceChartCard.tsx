@@ -386,7 +386,7 @@ export default function PriceChartCard({
                     }}
                   />
 
-                  {prediction.modelStats?.sma_20 != null && prediction.modelStats.sma_20 > 0 && (
+                  {Number.isFinite(prediction.modelStats?.sma_20) && (
                     <ReferenceLine y={prediction.modelStats.sma_20} stroke="#f59e0b" strokeDasharray="4 4" strokeOpacity={0.5}
                       label={{ value: `SMA20 $${prediction.modelStats.sma_20}`, fill: '#f59e0b', fontSize: 9, position: 'insideTopRight' }}
                     />
@@ -405,7 +405,7 @@ export default function PriceChartCard({
                   ))}
 
                   {indicators.includes('bb') && <>
-                    <Area type="monotone" dataKey="bb_upper"  stroke={primaryColor} strokeWidth={1} strokeDasharray="3 2" strokeOpacity={0.5} fill="url(#bbGrad)" dot={false} connectNulls isAnimationActive={false} />
+                    <Area type="monotone" dataKey="bb_upper"  stroke={primaryColor} strokeWidth={1} strokeDasharray="3 2" strokeOpacity={0.5} fill="url(#bbGrad)" baseLine="bb_lower" dot={false} connectNulls isAnimationActive={false} />
                     <Line  type="monotone" dataKey="bb_middle" stroke={primaryColor} strokeWidth={1} strokeDasharray="5 3" strokeOpacity={0.4} dot={false} connectNulls isAnimationActive={false} />
                     <Area type="monotone" dataKey="bb_lower"  stroke={primaryColor} strokeWidth={1} strokeDasharray="3 2" strokeOpacity={0.5} fill="transparent" dot={false} connectNulls isAnimationActive={false} />
                   </>}
@@ -419,7 +419,7 @@ export default function PriceChartCard({
                     <Area type="monotone" dataKey="price" stroke={trendColor} strokeWidth={2.5} fill="url(#histGrad)" dot={false} connectNulls={false} activeDot={{ r: 4, strokeWidth: 0 }} isAnimationActive={false} />
                   )}
 
-                  <Area type="monotone" dataKey="foreHigh" stroke="rgba(188,19,254,0.5)" strokeWidth={1.5} strokeDasharray="5 3" fill="url(#foreGrad)" dot={false} connectNulls={false} isAnimationActive={false} />
+                  <Area type="monotone" dataKey="foreHigh" stroke="rgba(188,19,254,0.5)" strokeWidth={1.5} strokeDasharray="5 3" fill="url(#foreGrad)" baseLine="foreLow" dot={false} connectNulls={false} isAnimationActive={false} />
                   <Area type="monotone" dataKey="foreLow"  stroke="rgba(188,19,254,0.3)" strokeWidth={1}   strokeDasharray="5 3" fill="transparent"    dot={false} connectNulls={false} isAnimationActive={false} />
                   <Line type="monotone" dataKey="predicted" stroke="#bc13fe" strokeWidth={2} strokeDasharray="6 3"
                     dot={{ r: 4, fill: '#bc13fe', strokeWidth: 0 }} connectNulls={false} isAnimationActive={false} />
