@@ -49,7 +49,7 @@ export default function FundamentalsPanel({ prediction, rsiInfo, isDark, primary
               { label: 'P/E RATIO',  val: prediction.metrics.pe_ratio   },
               {
                 label: 'RSI',
-                val: `${prediction.rsi} (${rsiInfo?.label})`,
+                val: rsiInfo ? `${prediction.rsi} (${rsiInfo.label})` : `${prediction.rsi}`,
                 color: rsiInfo?.color === 'error'   ? (isDark ? '#ff0055' : '#dc2626')
                      : rsiInfo?.color === 'success' ? (isDark ? '#00ffa3' : '#16a34a')
                      : primaryColor,
@@ -64,7 +64,7 @@ export default function FundamentalsPanel({ prediction, rsiInfo, isDark, primary
               {
                 label: 'TREND SLOPE',
                 val: prediction.modelStats?.trend_slope != null
-                  ? `${prediction.modelStats.trend_slope > 0 ? '▲' : '▼'} ${Math.abs(prediction.modelStats.trend_slope).toFixed(3)}/day`
+                  ? `${prediction.modelStats.trend_slope > 0 ? '▲' : prediction.modelStats.trend_slope < 0 ? '▼' : '—'} ${Math.abs(prediction.modelStats.trend_slope).toFixed(3)}/day`
                   : '—',
                 color: prediction.modelStats?.trend_slope == null ? undefined
                      : prediction.modelStats.trend_slope > 0 ? (isDark ? '#00ffa3' : '#16a34a')
