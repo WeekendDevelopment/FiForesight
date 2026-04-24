@@ -33,11 +33,14 @@ export function useIndicatorSignals(
     const h = prediction.history;
     const macdPrev  = h.length >= 2 ? (h[h.length - 2]?.macd        ?? null) : null;
     const sigPrev   = h.length >= 2 ? (h[h.length - 2]?.macd_signal ?? null) : null;
+    const histPrev  = h.length >= 2 ? (h[h.length - 2]?.macd_hist   ?? null) : null;
     const macdNow   = last?.macd        ?? null;
     const sigNow    = last?.macd_signal ?? null;
     const histNow   = last?.macd_hist   ?? null;
 
-    const vols   = prediction.history.slice(-21, -1).map(p => p.volume ?? 0);
+    const vols   = prediction.history.slice(-21, -1)
+      .filter(p => p.volume != null && Number.isFinite(p.volume))
+      .map(p => p.volume as number);
     const avgVol = vols.length ? vols.reduce((a, b) => a + b, 0) / vols.length : 0;
     const lastVol = last?.volume ?? 0;
 
@@ -65,8 +68,18 @@ export function useIndicatorSignals(
         const justCrossedDown = macdPrev != null && sigPrev != null && macdPrev > sigPrev && macdNow <= sigNow;
         if (justCrossedUp)   return { text: 'Bullish crossover — MACD just crossed above signal line', color: green };
         if (justCrossedDown) return { text: 'Bearish crossover — MACD just crossed below signal line', color: red };
-        if (macdNow > sigNow && (histNow ?? 0) > 0) return { text: 'MACD above signal & histogram growing → bullish momentum', color: green };
-        if (macdNow < sigNow && (histNow ?? 0) < 0) return { text: 'MACD below signal & histogram shrinking → bearish momentum', color: red };
+        if (macdNow > sigNow) {
+          const growing = histNow != null && histPrev != null && histNow > histPrev;
+          return growing
+            ? { text: 'MACD above signal & histogram growing → bullish momentum', color: green }
+            : { text: 'MACD above signal → bullish bias', color: green };
+        }
+        if (macdNow < sigNow) {
+          const shrinking = histNow != null && histPrev != null && histNow < histPrev;
+          return shrinking
+            ? { text: 'MACD below signal & histogram shrinking → bearish momentum', color: red }
+            : { text: 'MACD below signal → bearish bias', color: red };
+        }
         return { text: 'Consolidating — no strong directional signal', color: amber };
       })(),
       rsi: (() => {
