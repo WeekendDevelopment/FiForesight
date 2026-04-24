@@ -705,7 +705,7 @@ async def _predict_inner(payload: dict) -> PredictionResponse:
     #   • InfluxDB write_ohlcv_batch writes the last 29d for downstream analytics
     #   • InfluxDB write_price (Step 7) still tracks intraday live-price history
     # Steps 1 + 3 in parallel — both are independent yfinance calls
-    logger.info(f"[STEP-1+3] Fetching 2y OHLCV history + fundamentals concurrently ...")
+    logger.info("[STEP-1+3] Fetching 2y OHLCV history + fundamentals concurrently ...")
     df, info = await asyncio.gather(
         asyncio.to_thread(yf_svc.fetch_history, symbol, "2y"),
         asyncio.to_thread(yf_svc.fetch_info, symbol),
@@ -925,7 +925,7 @@ async def _predict_inner(payload: dict) -> PredictionResponse:
         logger.info(f"[STEP-4c] News cache HIT for {symbol}")
         serp_task = None  # sentinel — no task needed
     else:
-        logger.info(f"[STEP-4c] News cache MISS — launching SerpAPI task")
+        logger.info("[STEP-4c] News cache MISS — launching SerpAPI task")
         serp_task = asyncio.create_task(serp_svc.fetch_data(symbol))
 
     # ── Support/resistance — now uses intraday highs/lows ────────────────────
