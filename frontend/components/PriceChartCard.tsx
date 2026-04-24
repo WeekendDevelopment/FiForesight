@@ -8,7 +8,7 @@ import {
 import { Info, ChevronDown, ChevronUp } from 'lucide-react';
 import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  LineChart, Line, ReferenceLine, ComposedChart, Area, Legend,
+  Line, ReferenceLine, ComposedChart, Area, Legend,
   BarChart, Bar, Cell,
 } from 'recharts';
 import dynamic from 'next/dynamic';
