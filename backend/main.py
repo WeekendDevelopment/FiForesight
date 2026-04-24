@@ -923,7 +923,6 @@ async def _predict_inner(payload: dict) -> PredictionResponse:
     cached_news_payload = await cache_get(news_cache_key)
     if cached_news_payload is not None:
         logger.info(f"[STEP-4c] News cache HIT for {symbol}")
-        serp_task = None  # sentinel — no task needed
     else:
         logger.info("[STEP-4c] News cache MISS — launching SerpAPI task")
         serp_task = asyncio.create_task(serp_svc.fetch_data(symbol))
