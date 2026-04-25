@@ -1,5 +1,6 @@
 # backend/main.py
 import asyncio
+import hashlib
 import logging
 import traceback
 from datetime import datetime, timedelta, timezone, date
@@ -7,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, HTTPException, Body, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -24,6 +25,7 @@ from services import (
 )
 from simulation_service import suggest_portfolio, get_portfolio_performance
 from jury_graph import run_jury_graph
+from redis_cache import cache_get, cache_set
 
 # ---------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -55,10 +57,31 @@ yf_svc           = YFinanceService()
 analyst_jury_svc = AnalystJuryService()
 sentiment_svc    = SentimentService()
 
+# Atomic in-progress guard — prevents duplicate resolve_past_forecasts for same ticker
+_in_progress: set[str] = set()
+_in_progress_lock: asyncio.Lock = asyncio.Lock()
+
+
+async def _resolve_with_lock(symbol: str) -> None:
+    async with _in_progress_lock:
+        if symbol in _in_progress:
+            logger.info(f"[RL] resolve_past_forecasts already running for {symbol} — skipping duplicate")
+            return
+        _in_progress.add(symbol)
+    try:
+        await resolve_past_forecasts(symbol)
+    finally:
+        async with _in_progress_lock:
+            _in_progress.discard(symbol)
+
 
 # ---------------------------------------------------------------------------
 # Response schema
 # ---------------------------------------------------------------------------
+
+class PredictRequest(BaseModel):
+    data: str = "SPY"
+
 
 class PredictionResponse(BaseModel):
     symbol:       str
@@ -673,9 +696,8 @@ async def debug():
     return results
 
 
-@app.post("/predict", response_model=PredictionResponse)
-async def predict(payload: dict = Body(...)):
-    symbol = payload.get("data", "SPY").upper()
+async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
+    symbol = payload.data.upper()
     now    = datetime.now(timezone.utc)
 
     logger.info("[REQUEST] ════════════════════════════════════════════")
@@ -692,8 +714,23 @@ async def predict(payload: dict = Body(...)):
     #     (avoids redundant batch writes on repeated requests within 20h)
     #   • InfluxDB write_ohlcv_batch writes the last 29d for downstream analytics
     #   • InfluxDB write_price (Step 7) still tracks intraday live-price history
-    logger.info(f"[STEP-1] Fetching 2y OHLCV history from yfinance for {symbol} ...")
-    df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "2y")
+    # Steps 1 + 3 in parallel — both are independent yfinance calls
+    logger.info("[STEP-1+3] Fetching 2y OHLCV history + fundamentals concurrently ...")
+    _gather_results = await asyncio.gather(
+        asyncio.to_thread(yf_svc.fetch_history, symbol, "2y"),
+        asyncio.to_thread(yf_svc.fetch_info, symbol),
+        return_exceptions=True,
+    )
+    df = _gather_results[0]
+    if isinstance(df, Exception):
+        logger.error(f"[STEP-1] fetch_history failed for {symbol}: {df}")
+        raise HTTPException(status_code=404, detail=f"No data found for {symbol}.")
+    _info_result = _gather_results[1]
+    if isinstance(_info_result, Exception):
+        logger.error(f"[STEP-3] fetch_info failed for {symbol}: {_info_result} — using empty fundamentals")
+        info: dict = {}
+    else:
+        info: dict = _info_result
 
     if df.empty:
         logger.error(f"[STEP-1] yfinance returned empty df for {symbol} — returning 404")
@@ -769,9 +806,7 @@ async def predict(payload: dict = Body(...)):
             f"using last historical close: ${live_price:.2f}"
         )
 
-    # ── Step 3. Fundamentals ─────────────────────────────────────────────────
-    logger.info(f"[STEP-3] Fetching fundamentals for {symbol} ...")
-    info = await asyncio.to_thread(yf_svc.fetch_info, symbol)
+    # ── Step 3. Fundamentals (info already fetched concurrently at Step 1+3) ──
     metrics = {
         "market_cap": _fmt_market_cap(info.get("market_cap")),
         "pe_ratio":   str(info.get("pe_ratio", "N/A")),
@@ -862,7 +897,8 @@ async def predict(payload: dict = Body(...)):
         "with full OHLCV context ..."
         + (f" | RL blending active ({rl_sample_count} samples)" if rl_sample_count > 0 else "")
     )
-    forecast = run_ensemble_forecast(
+    forecast = await asyncio.to_thread(
+        run_ensemble_forecast,
         closes, symbol,
         opens=opens, highs=highs, lows=lows, volumes=volumes,
         historical_weights=historical_weights,
@@ -891,7 +927,7 @@ async def predict(payload: dict = Body(...)):
         d1_high,
         d1_low,
     ), name="RL-WRITE")
-    _safe_background(resolve_past_forecasts(symbol), name="RL-RESOLVE")
+    _safe_background(_resolve_with_lock(symbol), name="RL-RESOLVE")
 
     # ── Step 4b. Technical indicators (close-based — correct by definition) ──
     logger.info(
@@ -905,8 +941,13 @@ async def predict(payload: dict = Body(...)):
     logger.info(f"[STEP-4b] ✓ All indicator series computed ({len(closes)} points each)")
 
     # ── Step 4c. Fire news fetch concurrently with S/R computation ──────────
-    logger.info("[STEP-4c] Launching SerpAPI news task concurrently (non-blocking) ...")
-    serp_task = asyncio.create_task(serp_svc.fetch_data(symbol))
+    news_cache_key = f"news:{symbol.upper()}"
+    cached_news_payload = await cache_get(news_cache_key)
+    if cached_news_payload is not None:
+        logger.info(f"[STEP-4c] News cache HIT for {symbol}")
+    else:
+        logger.info("[STEP-4c] News cache MISS — launching SerpAPI task")
+        serp_task = asyncio.create_task(serp_svc.fetch_data(symbol))
 
     # ── Support/resistance — now uses intraday highs/lows ────────────────────
     logger.info(
@@ -916,52 +957,56 @@ async def predict(payload: dict = Body(...)):
     sr_levels = calculate_support_resistance(closes, highs=highs, lows=lows)
 
     # ── Step 4e. Resolve news + score VADER sentiment ─────────────────────────
-    # Await serp_task here (it has been running since 4c) so that real sentiment
-    # is available to the analyst jury at step 5.  VADER is CPU-only and fast
-    # (<5 ms for 8 headlines) so there is negligible latency cost.
-    logger.info("[STEP-4e] Awaiting SerpAPI + scoring VADER sentiment ...")
-    serp_data: dict = {"news_results": [], "markets": {}}
     news: list      = []
     trending: list  = []
     sentiment: dict = {"compound": 0.0, "label": "Neutral", "scores": [], "headline_count": 0}
-    try:
-        serp_data = await serp_task
-        news = [
-            {
-                "title":     n.get("title",  ""),
-                "link":      n.get("link",   ""),
-                "source":    (
-                    n.get("source", {}).get("name", "")
-                    if isinstance(n.get("source"), dict)
-                    else str(n.get("source", ""))
-                ),
-                "thumbnail": n.get("thumbnail", ""),
-                "date":      n.get("date",   ""),
-            }
-            for n in serp_data.get("news_results", [])[:8]
-        ]
-        for category, items in serp_data.get("markets", {}).items():
-            if isinstance(items, list):
-                for t in items[:3]:
-                    trending.append({
-                        "symbol":   t.get("symbol") or t.get("name", "N/A"),
-                        "name":     t.get("name",  ""),
-                        "price":    str(t.get("price", "N/A")),
-                        "change":   str(t.get("price_change_percentage", "0%")),
-                        "category": category,
-                    })
-        logger.info(
-            f"[STEP-4e] ✓ SerpAPI — news={len(news)} articles, "
-            f"trending={len(trending)} tickers"
-        )
-        headlines = [n["title"] for n in news if n.get("title")]
-        sentiment = await asyncio.to_thread(sentiment_svc.score_headlines, headlines)
-        logger.info(
-            f"[STEP-4e] ✓ VADER sentiment — compound={sentiment['compound']:.4f} "
-            f"({sentiment['label']}), headlines_scored={sentiment['headline_count']}"
-        )
-    except Exception as e:
-        logger.warning(f"[STEP-4e] SerpAPI/sentiment failed: {e}")
+    if cached_news_payload is not None:
+        news      = cached_news_payload.get("news", [])
+        trending  = cached_news_payload.get("trending", [])
+        sentiment = cached_news_payload.get("sentiment", {"compound": 0.0, "label": "Neutral", "count": 0})
+        logger.info(f"[STEP-4e] Using cached news/sentiment for {symbol}")
+    else:
+        logger.info("[STEP-4e] Awaiting SerpAPI + scoring VADER sentiment ...")
+        serp_data: dict = {"news_results": [], "markets": {}}
+        try:
+            serp_data = await serp_task
+            news = [
+                {
+                    "title":     n.get("title",  ""),
+                    "link":      n.get("link",   ""),
+                    "source":    (
+                        n.get("source", {}).get("name", "")
+                        if isinstance(n.get("source"), dict)
+                        else str(n.get("source", ""))
+                    ),
+                    "thumbnail": n.get("thumbnail", ""),
+                    "date":      n.get("date",   ""),
+                }
+                for n in serp_data.get("news_results", [])[:8]
+            ]
+            for category, items in serp_data.get("markets", {}).items():
+                if isinstance(items, list):
+                    for t in items[:3]:
+                        trending.append({
+                            "symbol":   t.get("symbol") or t.get("name", "N/A"),
+                            "name":     t.get("name",  ""),
+                            "price":    str(t.get("price", "N/A")),
+                            "change":   str(t.get("price_change_percentage", "0%")),
+                            "category": category,
+                        })
+            logger.info(
+                f"[STEP-4e] ✓ SerpAPI — news={len(news)} articles, "
+                f"trending={len(trending)} tickers"
+            )
+            headlines = [n["title"] for n in news if n.get("title")]
+            sentiment = await asyncio.to_thread(sentiment_svc.score_headlines, headlines)
+            logger.info(
+                f"[STEP-4e] ✓ VADER sentiment — compound={sentiment['compound']:.4f} "
+                f"({sentiment['label']}), headlines_scored={sentiment['headline_count']}"
+            )
+            await cache_set(news_cache_key, {"news": news, "trending": trending, "sentiment": sentiment}, ttl_seconds=1800)
+        except Exception as e:
+            logger.warning(f"[STEP-4e] SerpAPI/sentiment failed: {e}")
 
     # ── Step 5. AI analyst note + jury (concurrent) ──────────────────────────
     logger.info(
@@ -973,18 +1018,31 @@ async def predict(payload: dict = Body(...)):
         f"forecast_high=${forecast['high']:.2f}, forecast_low=${forecast['low']:.2f}, "
         f"conf={forecast['conf']}, ann_vol={forecast.get('stats', {}).get('ann_volatility_pct', 'N/A')}%"
     )
-    note, jury = await asyncio.gather(
-        _ai_note(symbol, closes, rsi, forecast),
-        _run_analyst_jury(
-            symbol, closes, rsi, forecast,
-            forecast.get("stats", {}),
-            info, macd_data, bb_data, sma50, sma200,
-            historical_prices, sr_levels,
-            news_headlines=[n["title"] for n in news if n.get("title")],
-            track_record=track_record,
-            sentiment=sentiment,
-        ),
-    )
+    _jury_fp = hashlib.md5(
+        f"{rsi:.1f}|{forecast['high']:.2f}|{forecast['low']:.2f}|{closes[-1]:.2f}|{sentiment.get('label', '')}".encode()
+    ).hexdigest()[:12]
+    jury_cache_key = f"jury:{symbol.upper()}:{_jury_fp}"
+    cached_jury = await cache_get(jury_cache_key)
+    if cached_jury is not None:
+        logger.info(f"[STEP-5] Jury cache HIT for {symbol} — skipping Groq jury calls")
+        note = await _ai_note(symbol, closes, rsi, forecast)
+        jury = cached_jury
+    else:
+        logger.info(f"[STEP-5] Jury cache MISS for {symbol} — running full jury")
+        note, jury = await asyncio.gather(
+            _ai_note(symbol, closes, rsi, forecast),
+            _run_analyst_jury(
+                symbol, closes, rsi, forecast,
+                forecast.get("stats", {}),
+                info, macd_data, bb_data, sma50, sma200,
+                historical_prices, sr_levels,
+                news_headlines=[n["title"] for n in news if n.get("title")],
+                track_record=track_record,
+                sentiment=sentiment,
+            ),
+        )
+        if jury:
+            await cache_set(jury_cache_key, jury, ttl_seconds=1200)  # 20 min
     logger.info(
         f"[STEP-5] ✓ AI layer complete — "
         f"note={len(note)} chars | jury={len(jury)} verdicts"
@@ -1084,6 +1142,15 @@ async def predict(payload: dict = Body(...)):
         modelWeights  = forecast.get("weights", {"prophet": 0.0, "sarima": 0.0, "rf": 0.0}),
         sentiment    = sentiment,
     )
+
+
+@app.post("/predict", response_model=PredictionResponse)
+async def predict(payload: PredictRequest):
+    try:
+        return await asyncio.wait_for(_predict_inner(payload), timeout=50.0)
+    except asyncio.TimeoutError:
+        logger.error("[PREDICT] Request timed out after 50s")
+        raise HTTPException(status_code=503, detail="Analysis timed out — please try again.")
 
 
 # ---------------------------------------------------------------------------
