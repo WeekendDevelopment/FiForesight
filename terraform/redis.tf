@@ -5,24 +5,13 @@ resource "upstash_redis_database" "redis" {
   region         = "global"
 }
 
-output "redis_endpoint" {
-  description = "Upstash Redis endpoint"
-  value       = upstash_redis_database.redis.endpoint
+output "redis_rest_url" {
+  description = "Upstash Redis REST endpoint (used by upstash-redis Python SDK)"
+  value       = "https://${upstash_redis_database.redis.endpoint}"
 }
 
-output "redis_port" {
-  description = "Upstash Redis port"
-  value       = upstash_redis_database.redis.port
-}
-
-output "redis_password" {
-  description = "Upstash Redis password"
-  value       = upstash_redis_database.redis.password
-  sensitive   = true
-}
-
-output "redis_url" {
-  description = "Redis connection URL"
-  value       = "rediss://default:${upstash_redis_database.redis.password}@${upstash_redis_database.redis.endpoint}:${upstash_redis_database.redis.port}"
+output "redis_rest_token" {
+  description = "Upstash Redis REST token"
+  value       = upstash_redis_database.redis.rest_token
   sensitive   = true
 }

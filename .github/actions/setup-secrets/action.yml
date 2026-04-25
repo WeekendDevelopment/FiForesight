@@ -76,8 +76,14 @@ runs:
         secret-name: NEW_RELIC_LICENSE_KEY
         secret-value: "${{ env.NEW_RELIC_LICENSE_KEY }}"
 
-    - name: Create UPSTASH_REDIS_URL secret
+    - name: Create UPSTASH_REDIS_REST_URL secret
       uses: koyeb/action-git-deploy/secret@v1
       with:
-        secret-name: UPSTASH_REDIS_URL
-        secret-value: "${{ env.UPSTASH_REDIS_URL }}"
+        secret-name: UPSTASH_REDIS_REST_URL
+        secret-value: "${{ env.UPSTASH_REDIS_REST_URL }}"
+
+    - name: Create UPSTASH_REDIS_REST_TOKEN secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: UPSTASH_REDIS_REST_TOKEN
+        secret-value: "${{ env.UPSTASH_REDIS_REST_TOKEN }}"
