@@ -6,24 +6,24 @@ from upstash_redis.asyncio import Redis
 
 logger = logging.getLogger(__name__)
 
-_client: Redis | None = None
-_cache_disabled: bool = False  # set once when env vars are confirmed absent
+_DISABLED = object()  # sentinel — assigned to _client when env vars are absent
+_client: Redis | object | None = None  # None=unchecked, _DISABLED=no creds, Redis=ready
 
 
 def get_redis() -> Redis | None:
-    global _client, _cache_disabled
-    if _cache_disabled:
+    global _client
+    if _client is _DISABLED:
         return None
     if _client is not None:
-        return _client
+        return _client  # type: ignore[return-value]
     url   = os.getenv("UPSTASH_REDIS_REST_URL")
     token = os.getenv("UPSTASH_REDIS_REST_TOKEN")
     if not url or not token:
         logger.warning("[REDIS] UPSTASH_REDIS_REST_URL/TOKEN not set — caching disabled")
-        _cache_disabled = True
+        _client = _DISABLED
         return None
     _client = Redis(url=url, token=token)
-    return _client
+    return _client  # type: ignore[return-value]
 
 
 async def cache_get(key: str) -> list | dict | None:
