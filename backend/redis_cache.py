@@ -4,10 +4,10 @@ import logging
 import os
 from upstash_redis.asyncio import Redis
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
-_DISABLED = object()  # sentinel — assigned to _client when env vars are absent
-_client: Redis | object | None = None  # None=unchecked, _DISABLED=no creds, Redis=ready
+_DISABLED: object = object()  # sentinel — assigned to _client when env vars are absent
+_client: Redis | object | None = None  # None=unchecked, _DISABLED=no creds, Redis=ready  # noqa: F841
 
 
 def get_redis() -> Redis | None:
@@ -32,7 +32,16 @@ async def cache_get(key: str) -> list | dict | None:
         return None
     try:
         raw = await r.get(key)
-        return json.loads(raw) if raw else None
+        if not raw:
+            return None
+        parsed = json.loads(raw)
+        if not isinstance(parsed, (list, dict)):
+            logger.warning(f"[REDIS] cache_get({key}) — unexpected type {type(parsed).__name__}, discarding")
+            return None
+        return parsed
+    except json.JSONDecodeError as e:
+        logger.warning(f"[REDIS] cache_get({key}) — invalid JSON: {e}")
+        return None
     except Exception as e:
         logger.warning(f"[REDIS] cache_get({key}) failed: {e}")
         return None
