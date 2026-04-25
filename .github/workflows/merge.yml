@@ -74,8 +74,7 @@ jobs:
         working-directory: terraform
         run: |
           PUBLIC_IP=$(terraform output -raw public_ip)
-          echo "UPSTASH_REDIS_REST_URL=$(terraform output -raw redis_rest_url)" >> $GITHUB_ENV
-          echo "UPSTASH_REDIS_REST_TOKEN=$(terraform output -raw redis_rest_token)" >> $GITHUB_ENV
+          echo "UPSTASH_REDIS_URL=$(terraform output -raw redis_url)" >> $GITHUB_ENV
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
 
   build-frontend:
@@ -199,8 +198,7 @@ jobs:
           X_AI_API_KEY: ${{ secrets.X_AI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
-          UPSTASH_REDIS_REST_URL: ${{ env.UPSTASH_REDIS_REST_URL }}
-          UPSTASH_REDIS_REST_TOKEN: ${{ env.UPSTASH_REDIS_REST_TOKEN }}
+          UPSTASH_REDIS_URL: ${{ env.UPSTASH_REDIS_URL }}
 
   deploy-nginx:
     needs:
@@ -256,8 +254,7 @@ jobs:
           SERP_API_KEY: ${{ secrets.SERP_API_KEY }}
           X_AI_API_KEY: ${{ secrets.X_AI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          UPSTASH_REDIS_REST_URL: ${{ env.UPSTASH_REDIS_REST_URL }}
-          UPSTASH_REDIS_REST_TOKEN: ${{ env.UPSTASH_REDIS_REST_TOKEN }}
+          UPSTASH_REDIS_URL: ${{ env.UPSTASH_REDIS_URL }}
           APP_ENV: "live"
           NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
           LINUX_NEW_RELIC_LICENSE_KEY: ${{ secrets.LINUX_NEW_RELIC_LICENSE_KEY }}

@@ -84,8 +84,7 @@ runs:
             -e APP_ENV=${{ env.APP_ENV }} \
             -e NEW_RELIC_LICENSE_KEY=${{ env.NEW_RELIC_LICENSE_KEY }} \
             -e NEW_RELIC_APP_NAME=${{ env.NEW_RELIC_APP_NAME }} \
-            -e UPSTASH_REDIS_REST_URL=${{ env.UPSTASH_REDIS_REST_URL }} \
-            -e UPSTASH_REDIS_REST_TOKEN=${{ env.UPSTASH_REDIS_REST_TOKEN }} \
+            -e UPSTASH_REDIS_URL=${{ env.UPSTASH_REDIS_URL }} \
             $IMAGE_LOWER:$IMAGE_TAG
 
           # Clean up old images

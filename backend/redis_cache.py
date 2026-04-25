@@ -1,12 +1,11 @@
-# backend/redis_cache.py
 import json
 import logging
 import os
-from upstash_redis.asyncio import Redis
+from redis.asyncio import Redis
 
 logger: logging.Logger = logging.getLogger(__name__)
 
-_DISABLED: object = object()  # sentinel — assigned to _client when env vars are absent
+_DISABLED: object = object()  # sentinel — assigned when env var is absent
 _client: Redis | object | None = None  # None=unchecked, _DISABLED=no creds, Redis=ready  # noqa: F841
 
 
@@ -16,13 +15,12 @@ def get_redis() -> Redis | None:
         return None
     if _client is not None:
         return _client  # type: ignore[return-value]
-    url   = os.getenv("UPSTASH_REDIS_REST_URL")
-    token = os.getenv("UPSTASH_REDIS_REST_TOKEN")
-    if not url or not token:
-        logger.warning("[REDIS] UPSTASH_REDIS_REST_URL/TOKEN not set — caching disabled")
+    url = os.getenv("UPSTASH_REDIS_URL")
+    if not url:
+        logger.warning("[REDIS] UPSTASH_REDIS_URL not set — caching disabled")
         _client = _DISABLED
         return None
-    _client = Redis(url=url, token=token)
+    _client = Redis.from_url(url, decode_responses=True)
     return _client  # type: ignore[return-value]
 
 
