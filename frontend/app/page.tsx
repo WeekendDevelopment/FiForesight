@@ -6,10 +6,10 @@ import {
   Box, Container, Typography, TextField, Button, Card, CardContent,
   Grid, CircularProgress, Alert, ThemeProvider,
   CssBaseline, Paper, Chip, Stack, MenuItem, Select, Avatar, Link,
-  Skeleton, IconButton, Autocomplete,
+  Skeleton, IconButton, Autocomplete, Fab,
 } from '@mui/material';
 import {
-  Search, BrainCircuit, Newspaper, BarChart2, Sun, Moon,
+  Search, BrainCircuit, Newspaper, BarChart2, Sun, Moon, MessageCircle,
 } from 'lucide-react';
 import ModelWeightBar   from '../components/ModelWeightBar';
 import TrendingSparklines from '../components/TrendingSparklines';
@@ -19,8 +19,10 @@ import { ChartSkeleton, SidebarSkeleton } from '../components/Skeletons';
 import AnalystJuryPanel  from '../components/AnalystJuryPanel';
 import PriceChartCard    from '../components/PriceChartCard';
 import FundamentalsPanel from '../components/FundamentalsPanel';
+import TradeSetupCard    from '../components/TradeSetupCard';
+import StockChatPanel    from '../components/StockChatPanel';
 import { useIndicatorSignals } from '../hooks/useIndicatorSignals';
-import type { PredictionData, IndicatorKey } from '../types';
+import type { PredictionData, IndicatorKey, TradeSetupResponse } from '../types';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -42,27 +44,52 @@ const POPULAR_TICKERS = [
 // ── Main dashboard ────────────────────────────────────────────────────────────
 
 export default function QuantumDashboard() {
-  const [themeMode,   setThemeMode]   = useState<'dark' | 'light'>('dark');
-  const [ticker,      setTicker]      = useState('NVDA');
-  const [exchange,    setExchange]    = useState('');
-  const [prediction,  setPrediction]  = useState<PredictionData | null>(null);
-  const [loading,     setLoading]     = useState(false);
-  const [error,       setError]       = useState<string | null>(null);
-  const [indicators,  setIndicators]  = useState<IndicatorKey[]>(['bb', 'sma']);
-  const [chartMode,   setChartMode]   = useState<'line' | 'candle'>('line');
-  const [chartEngine, setChartEngine] = useState<'classic' | 'pro'>('classic');
+  const [themeMode,        setThemeMode]        = useState<'dark' | 'light'>('dark');
+  const [ticker,           setTicker]           = useState('NVDA');
+  const [exchange,         setExchange]         = useState('');
+  const [prediction,       setPrediction]       = useState<PredictionData | null>(null);
+  const [loading,          setLoading]          = useState(false);
+  const [error,            setError]            = useState<string | null>(null);
+  const [indicators,       setIndicators]       = useState<IndicatorKey[]>(['bb', 'sma']);
+  const [chartMode,        setChartMode]        = useState<'line' | 'candle'>('line');
+  const [chartEngine,      setChartEngine]      = useState<'classic' | 'pro'>('classic');
+  const [tradeSetup,       setTradeSetup]       = useState<TradeSetupResponse | null>(null);
+  const [tradeSetupLoading, setTradeSetupLoading] = useState(false);
+  const [chatOpen,         setChatOpen]         = useState(false);
 
   const theme = useMemo(() => buildTheme(themeMode), [themeMode]);
 
   const isDark = themeMode === 'dark';
 
+  const fetchTradeSetup = (data: PredictionData) => {
+    setTradeSetup(null);
+    setTradeSetupLoading(true);
+    axios.post('/api/trade-setup', {
+      symbol:          data.symbol,
+      current_price:   parseFloat(data.currentPrice),
+      high_range:      parseFloat(data.prediction.highRange),
+      low_range:       parseFloat(data.prediction.lowRange),
+      rsi:             parseFloat(data.rsi),
+      support:         data.indicators?.support    ?? [],
+      resistance:      data.indicators?.resistance ?? [],
+      trend:           data.prediction.trend,
+      sentiment_label: data.analystNote?.slice(0, 30) ?? 'Neutral',
+    })
+      .then(r  => setTradeSetup(r.data))
+      .catch(() => { /* non-fatal */ })
+      .finally(() => setTradeSetupLoading(false));
+  };
+
   const handlePredict = async () => {
     setLoading(true);
     setError(null);
+    setTradeSetup(null);
+    setChatOpen(false);
     try {
       const fullSymbol = exchange ? `${ticker}:${exchange}` : ticker;
       const response   = await axios.post('/api/predict', { data: fullSymbol });
       setPrediction(response.data);
+      fetchTradeSetup(response.data);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Quantum analysis failed.');
     } finally {
@@ -229,6 +256,14 @@ export default function QuantumDashboard() {
                     indicatorSignals={indicatorSignals}
                   />
 
+                  {/* ── Trade Setup ──────────────────────────────────── */}
+                  <TradeSetupCard
+                    setup={tradeSetup}
+                    loading={tradeSetupLoading}
+                    isDark={isDark}
+                    primaryColor={primaryColor}
+                  />
+
                   {/* ── 5-Day forecast table ──────────────────────────── */}
                   {prediction.forecastDays?.length > 0 && (
                     <Card>
@@ -330,6 +365,31 @@ export default function QuantumDashboard() {
 
           </Grid>
         </Container>
+
+        {/* ── Chat panel + FAB ───────────────────────────────────── */}
+        {prediction && (
+          <>
+            <StockChatPanel
+              prediction={prediction}
+              isDark={isDark}
+              primaryColor={primaryColor}
+              open={chatOpen}
+              onClose={() => setChatOpen(false)}
+            />
+            <Fab
+              onClick={() => setChatOpen(o => !o)}
+              size="medium"
+              sx={{
+                position: 'fixed', bottom: 24, right: 24,
+                background: primaryColor,
+                '&:hover': { background: primaryColor, filter: 'brightness(1.15)' },
+                boxShadow: `0 0 20px ${primaryColor}66`,
+              }}
+            >
+              <MessageCircle color="#000" size={22} />
+            </Fab>
+          </>
+        )}
       </Box>
     </ThemeProvider>
   );

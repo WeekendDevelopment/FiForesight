@@ -1,7 +1,7 @@
 # FiForesight Roadmap
 
 > Source of truth for planned work. Aligned with Jira project **FIFO** on Atlassian.
-> Last synced: 2026-04-23
+> Last synced: 2026-04-25
 
 ---
 
@@ -25,7 +25,7 @@ Build a complete news and sentiment analysis pipeline: SerpAPI news integration,
 |------|-------|--------|
 | FIFO-20 | SerpAPI News Integration | Done |
 | FIFO-21 | Sentiment Analysis Pipeline (VADER — `SentimentService` in services.py) | Done |
-| FIFO-22 | AI Analyst Notes (Gemini) | To Do |
+| FIFO-22 | AI Analyst Notes (Groq llama-3.3-70b — replaces Gemini) | Done |
 
 ---
 
@@ -57,15 +57,15 @@ Build comprehensive test suites and enforce quality gates. Currently at 0% test 
 
 ## Epic 5 — Frontend Architecture & UX [FIFO-34]
 
-Refactor the monolithic page.tsx (~78KB) into modular components, add accessibility support, implement error boundaries, optimize performance with Web Vitals tracking, and add analytics.
+Refactor the monolithic page.tsx into modular components, add accessibility support, implement error boundaries, optimize performance with Web Vitals tracking, and add analytics.
 
 | Jira | Story | Status |
 |------|-------|--------|
-| FIFO-58 | Component Decomposition & Error Boundaries | To Do |
+| FIFO-58 | Component Decomposition & Error Boundaries | Done |
 | FIFO-59 | Accessibility (a11y) Compliance | To Do |
 | FIFO-60 | Performance Optimization & Analytics | To Do |
 
-**Already shipped (not in Jira):** Dark/light theme, loading skeletons, ticker autocomplete, candlestick chart mode, RSI/MACD/BB/SMA chart overlays, TradingView chart toggle, trending sparklines panel, portfolio simulation page.
+**Already shipped (not in Jira):** Dark/light theme, loading skeletons, ticker autocomplete, candlestick chart mode, RSI/MACD/BB/SMA chart overlays, TradingView chart toggle, trending sparklines panel, portfolio simulation page. page.tsx decomposed to 336 lines with components in `frontend/components/`.
 
 ---
 
@@ -86,9 +86,21 @@ Multi-model LLM analyst jury system using free-tier APIs and self-hosted models.
 
 | Jira | Story | Status |
 |------|-------|--------|
-| FIFO-102 | LLM Analyst Jury: Model Selection & Free API Integration (Groq: Kimi K2, Llama 70B, Qwen3 32B) | Done |
+| FIFO-102 | LLM Analyst Jury: Model Selection & Free API Integration (Groq: Llama 4 Scout, Llama 70B, Qwen3 32B) | Done |
 | FIFO-103 | Self-Hosted LLM on Oracle Cloud Always Free Tier | To Do |
 | FIFO-104 | Fine-Tuning Pipeline for Analyst Note Quality | To Do |
+
+---
+
+## Epic 8 — AI Decision Layer [FIFO-121]
+
+Stock Chat Agent + Trade Setup Generator: AI-guided decision panel that synthesises all signals into actionable output for beginners and advanced users.
+
+| Jira | Story | Status |
+|------|-------|--------|
+| FIFO-121 | Stock Chat Agent + Trade Setup Generator — AI-guided decision panel | Done |
+
+**Shipped:** `POST /chat` SSE streaming endpoint (llama-3.3-70b), `POST /trade-setup` deterministic entry/stop/target computation + Groq rationale, `StockChatPanel` (380px drawer, beginner chips, streaming cursor), `TradeSetupCard` (entry/stop/3 targets, R:R, setup type badge).
 
 ---
 
@@ -109,13 +121,12 @@ These items from the original roadmap are not yet tracked as Jira stories:
 | Data | Social sentiment pipeline (Reddit/X) | High |
 | Intelligence | Support & resistance via DBSCAN clustering | High |
 | Intelligence | Pattern detection (scipy.signal.find_peaks) | High |
-| Intelligence | Structured trade setup generator | High |
 | Intelligence | Isolation Forest anomaly detection | High |
 | Intelligence | Walk-forward backtesting engine | High |
-| Intelligence | LLM chat panel (streaming + stock context) | High |
 | Intelligence | Portfolio tracking & P&L dashboard | High |
 | Intelligence | Risk metrics (Sharpe, Sortino, Beta) | Medium |
 | Intelligence | Custom alert conditions (rule builder) | High |
+| Testing | External data drift monitor (price/div/cap vs Yahoo API) | Medium |
 
 ---
 
@@ -123,12 +134,13 @@ These items from the original roadmap are not yet tracked as Jira stories:
 
 | Epic | Stories | Done | Remaining |
 |------|---------|------|-----------|
-| ML & Forecasting (FIFO-5) | 3 | 1 | 2 |
-| News & Sentiment (FIFO-6) | 3 | 0 | 3 |
-| Infrastructure (FIFO-32) | 3 | 0 | 3 |
+| ML & Forecasting (FIFO-5) | 3 | 2 | 1 |
+| News & Sentiment (FIFO-6) | 3 | 3 | 0 |
+| Infrastructure (FIFO-32) | 3 | 1 | 2 |
 | Testing & Quality (FIFO-33) | 3 | 0 | 3 |
-| Frontend Architecture (FIFO-34) | 3 | 0 | 3 |
+| Frontend Architecture (FIFO-34) | 3 | 1 | 2 |
 | User Auth (FIFO-35) | 2 | 0 | 2 |
 | LLM Analyst Jury (FIFO-101) | 3 | 1 | 2 |
-| **Totals** | **20** | **2** | **18** |
-| Backlog (not in Jira) | 18 | — | 18 |
+| AI Decision Layer (FIFO-121) | 1 | 1 | 0 |
+| **Totals** | **21** | **9** | **12** |
+| Backlog (not in Jira) | 16 | — | 16 |

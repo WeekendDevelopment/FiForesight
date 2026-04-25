@@ -811,11 +811,25 @@ class YFinanceService:
                 or info.get("previousClose")
                 or 0.0
             )
+            # Compute dividend yield from annualized rate ÷ price (accurate for
+            # any stock post-split). yfinance's dividendYield field is unreliable
+            # — it can be 100× too large on low-yield tickers like NVDA.
+            _div_rate = (
+                info.get("trailingAnnualDividendRate")
+                or info.get("dividendRate")
+                or 0.0
+            )
+            _price_for_yield = float(current) if float(current) > 0 else 1.0
+            if _div_rate and float(_div_rate) > 0:
+                dividend_yield = float(_div_rate) / _price_for_yield  # decimal fraction
+            else:
+                dividend_yield = "N/A"
+
             result = {
                 "current_price":   float(current),
                 "market_cap":      info.get("marketCap",      "N/A"),
                 "pe_ratio":        info.get("trailingPE",     "N/A"),
-                "dividend_yield":  info.get("dividendYield",  "N/A"),
+                "dividend_yield":  dividend_yield,
                 "prev_close":      prev_close or "N/A",
                 "range_52w":       range_52w,
                 "short_name":      info.get("shortName",  ticker),

@@ -1,15 +1,17 @@
 # backend/main.py
 import asyncio
 import hashlib
+import json
 import logging
 import traceback
 from datetime import datetime, timedelta, timezone, date
 from typing import Any, Dict, List, Optional, Tuple
 
+import httpx
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from config import Config, SanitizeHttpxFilter
@@ -1151,6 +1153,202 @@ async def predict(payload: PredictRequest):
     except asyncio.TimeoutError:
         logger.error("[PREDICT] Request timed out after 50s")
         raise HTTPException(status_code=503, detail="Analysis timed out — please try again.")
+
+
+# ---------------------------------------------------------------------------
+# Trade Setup endpoint
+# ---------------------------------------------------------------------------
+
+class TradeSetupRequest(BaseModel):
+    symbol: str
+    current_price: float
+    high_range: float
+    low_range: float
+    rsi: float
+    support: List[float] = []
+    resistance: List[float] = []
+    trend: str = "Bullish"
+    sentiment_label: str = "Neutral"
+
+
+class TradeSetupResponse(BaseModel):
+    entry_low: float
+    entry_high: float
+    stop_loss: float
+    target_1: float
+    target_2: float
+    target_3: float
+    risk_reward: str
+    setup_type: str
+    rationale: str
+
+
+@app.post("/trade-setup", response_model=TradeSetupResponse)
+async def trade_setup(req: TradeSetupRequest):
+    p = req.current_price
+
+    # Entry zone: nearest support within 3% below price, else price ± 0.5%
+    support_nearby = sorted(
+        [s for s in req.support if 0.97 <= s / p <= 1.0],
+        reverse=True,
+    )
+    if support_nearby:
+        entry_low  = round(support_nearby[0], 2)
+        entry_high = round(entry_low * 1.01, 2)
+    else:
+        entry_low  = round(p * 0.995, 2)
+        entry_high = round(p * 1.005, 2)
+
+    # Stop loss: nearest support below entry_low (not the deepest one), or entry - 3%
+    support_below_entry = sorted(
+        [s for s in req.support if s < entry_low],
+        reverse=True,
+    )
+    if support_below_entry:
+        stop_loss = round(support_below_entry[0] * 0.985, 2)
+    else:
+        stop_loss = round(entry_low * 0.97, 2)
+
+    entry_mid = (entry_low + entry_high) / 2
+
+    # Targets — all must be above entry_mid
+    target_1 = round(entry_mid + (req.high_range - entry_mid) / 3, 2)
+    target_2 = round(req.high_range, 2)
+    target_3 = round(req.high_range + (req.high_range - entry_low), 2)
+
+    # Risk:Reward (based on T2) — cap stop at 5% below entry so R:R stays meaningful
+    raw_stop      = stop_loss
+    min_stop      = round(entry_mid * 0.95, 2)
+    stop_loss     = round(max(raw_stop, min_stop), 2)
+    risk          = max(entry_mid - stop_loss, 0.01)
+    reward        = max(target_2 - entry_mid, 0.01)
+    risk_reward   = f"1:{reward / risk:.1f}"
+
+    # Setup type derived from trend + RSI
+    rsi = req.rsi
+    if req.trend == "Bullish" and rsi <= 40:
+        setup_type = "Oversold Reversal"
+    elif req.trend == "Bullish" and rsi >= 65:
+        setup_type = "Momentum Continuation"
+    elif req.trend == "Bullish":
+        setup_type = "Support Bounce"
+    elif req.trend == "Bearish" and rsi >= 70:
+        setup_type = "Overbought Fade"
+    elif req.trend == "Bearish" and rsi <= 40:
+        setup_type = "Breakdown Play"
+    else:
+        setup_type = "Range Consolidation"
+
+    # Rationale via Groq (~80 tokens)
+    rationale = (
+        f"{setup_type} setup with RSI at {rsi:.0f} and a {req.trend.lower()} trend; "
+        f"entry zone ${entry_low:.2f}–${entry_high:.2f} targets ${target_2:.2f}."
+    )
+    try:
+        system = (
+            "You are a trading analyst. "
+            "Respond in exactly one plain-text sentence — no markdown, no bullet points."
+        )
+        user = (
+            f"Symbol: {req.symbol} | Price: ${p:.2f} | RSI: {rsi:.1f} | "
+            f"Trend: {req.trend} | Sentiment: {req.sentiment_label}\n"
+            f"Entry: ${entry_low:.2f}–${entry_high:.2f} | Stop: ${stop_loss:.2f} | "
+            f"Targets: ${target_1:.2f} / ${target_2:.2f} / ${target_3:.2f}\n"
+            f"Write one sentence explaining why this {setup_type} trade setup makes sense."
+        )
+        raw = await analyst_jury_svc._call_groq("llama-3.3-70b-versatile", system, user)
+        rationale = raw.strip()
+    except Exception as exc:
+        logger.warning("[TRADE-SETUP] Groq rationale failed: %s", exc)
+
+    return TradeSetupResponse(
+        entry_low=entry_low,
+        entry_high=entry_high,
+        stop_loss=stop_loss,
+        target_1=target_1,
+        target_2=target_2,
+        target_3=target_3,
+        risk_reward=risk_reward,
+        setup_type=setup_type,
+        rationale=rationale,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Chat SSE endpoint
+# ---------------------------------------------------------------------------
+
+class ChatRequest(BaseModel):
+    message: str
+    context: dict = {}
+    history: List[dict] = []
+
+
+@app.post("/chat")
+async def chat_endpoint(req: ChatRequest):
+    async def generate():
+        ctx = req.context
+        system = (
+            f"You are a financial assistant for FiForesight.\n"
+            f"Ticker: {ctx.get('symbol', 'N/A')}\n"
+            f"Current Price: ${ctx.get('currentPrice', 'N/A')}\n"
+            f"RSI: {ctx.get('rsi', 'N/A')} | Trend: {ctx.get('trend', 'N/A')}\n"
+            f"Analyst Jury: {ctx.get('jury_summary', 'N/A')}\n"
+            f"Sentiment: {ctx.get('sentiment_label', 'N/A')}\n"
+            f"Recent Headlines: {ctx.get('headlines', 'N/A')}\n\n"
+            "Answer concisely. Use plain language — assume the user may be a beginner. "
+            "Do not give financial advice. Use 'could', 'may', 'historically' language."
+        )
+
+        messages: List[dict] = [{"role": "system", "content": system}]
+        for msg in req.history[-10:]:
+            if msg.get("role") in ("user", "assistant") and msg.get("content"):
+                messages.append({"role": msg["role"], "content": msg["content"]})
+        messages.append({"role": "user", "content": req.message})
+
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": messages,
+            "stream": True,
+            "max_tokens": 400,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                async with client.stream(
+                    "POST",
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {Config.GROQ_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                ) as response:
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            yield "data: [DONE]\n\n"
+                            return
+                        try:
+                            chunk = json.loads(data)
+                            token = chunk["choices"][0]["delta"].get("content", "")
+                            if token:
+                                yield f"data: {json.dumps(token)}\n\n"
+                        except Exception:
+                            continue
+        except Exception as exc:
+            logger.warning("[CHAT] Groq streaming failed: %s", exc)
+            yield f"data: [ERROR] {exc}\n\n"
+
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ---------------------------------------------------------------------------
