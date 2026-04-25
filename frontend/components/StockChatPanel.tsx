@@ -44,10 +44,6 @@ export default function StockChatPanel({ prediction, isDark, primaryColor, open,
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setMessages([]);
-  }, [prediction?.symbol]);
-
-  useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 

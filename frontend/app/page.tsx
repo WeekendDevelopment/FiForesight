@@ -370,6 +370,7 @@ export default function QuantumDashboard() {
         {prediction && (
           <>
             <StockChatPanel
+              key={prediction.symbol}
               prediction={prediction}
               isDark={isDark}
               primaryColor={primaryColor}
