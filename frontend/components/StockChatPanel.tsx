@@ -17,15 +17,15 @@ const BEGINNER_CHIPS = [
 
 function buildContext(prediction: PredictionData) {
   return {
-    symbol:         prediction.symbol,
-    currentPrice:   prediction.currentPrice,
-    rsi:            prediction.rsi,
-    trend:          prediction.prediction.trend,
-    jury_summary:   prediction.juryAnalysts
-                      ?.map(a => `${a.id}: ${a.rating} (${a.confidence}%)`)
-                      .join(', '),
-    sentiment_label: prediction.analystNote?.slice(0, 100),
-    headlines:      prediction.news?.slice(0, 3).map(n => n.title).join(' | '),
+    symbol:          prediction.symbol,
+    currentPrice:    prediction.currentPrice,
+    rsi:             prediction.rsi,
+    trend:           prediction.prediction.trend,
+    jury_summary:    prediction.juryAnalysts
+                       ?.map(a => `${a.id}: ${a.rating} (${a.confidence}%)`)
+                       .join(', '),
+    sentiment_label: prediction.sentiment?.label ?? 'Neutral',
+    headlines:       prediction.news?.slice(0, 3).map(n => n.title).join(' | '),
   };
 }
 
@@ -41,14 +41,33 @@ export default function StockChatPanel({ prediction, isDark, primaryColor, open,
   const [messages,  setMessages]  = useState<ChatMessage[]>([]);
   const [input,     setInput]     = useState('');
   const [streaming, setStreaming] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const bottomRef  = useRef<HTMLDivElement>(null);
+  const abortRef   = useRef<AbortController | null>(null);
+
+  // Abort any in-flight stream on unmount
+  useEffect(() => {
+    return () => { abortRef.current?.abort(); };
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Remove a trailing empty assistant placeholder left by aborted/errored fetches
+  const removeTrailingPlaceholder = () => {
+    setMessages(prev => {
+      const last = prev[prev.length - 1];
+      return last?.role === 'assistant' && last.content === '' ? prev.slice(0, -1) : prev;
+    });
+  };
+
   const sendMessage = async (text: string) => {
     if (!text.trim() || streaming || !prediction) return;
+
+    // Abort any previous in-flight stream before starting a new one
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     const history = messages;
     setMessages(prev => [
@@ -61,16 +80,17 @@ export default function StockChatPanel({ prediction, isDark, primaryColor, open,
 
     try {
       const response = await fetch('/api/chat', {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: text,
-          context: buildContext(prediction),
-          history,
-        }),
+        body:    JSON.stringify({ message: text, context: buildContext(prediction), history }),
+        signal:  controller.signal,
       });
 
-      if (!response.body) { setStreaming(false); return; }
+      if (!response.body) {
+        removeTrailingPlaceholder();
+        setStreaming(false);
+        return;
+      }
 
       const reader  = response.body.getReader();
       const decoder = new TextDecoder();
@@ -87,7 +107,12 @@ export default function StockChatPanel({ prediction, isDark, primaryColor, open,
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const data = line.slice(6);
-          if (data === '[DONE]' || data.startsWith('[ERROR]')) {
+          if (data === '[DONE]') {
+            setStreaming(false);
+            return;
+          }
+          if (data.startsWith('[ERROR]')) {
+            removeTrailingPlaceholder();
             setStreaming(false);
             return;
           }
@@ -101,10 +126,15 @@ export default function StockChatPanel({ prediction, isDark, primaryColor, open,
               }
               return updated;
             });
-          } catch { /* non-JSON line, skip */ }
+          } catch { /* non-JSON SSE line, skip */ }
         }
       }
-    } catch { /* network error */ }
+    } catch (err: unknown) {
+      // AbortError = intentional cancel; don't leave a blank bubble for other errors
+      if ((err as { name?: string })?.name !== 'AbortError') {
+        removeTrailingPlaceholder();
+      }
+    }
 
     setStreaming(false);
   };
@@ -140,7 +170,7 @@ export default function StockChatPanel({ prediction, isDark, primaryColor, open,
             AI Chat{prediction ? ` · ${prediction.symbol}` : ''}
           </Typography>
         </Stack>
-        <IconButton size="small" onClick={onClose}>
+        <IconButton size="small" onClick={onClose} aria-label="Close chat">
           <X size={16} />
         </IconButton>
       </Stack>
@@ -157,9 +187,10 @@ export default function StockChatPanel({ prediction, isDark, primaryColor, open,
                 <Chip
                   key={chip}
                   label={chip}
+                  disabled={!prediction}
                   onClick={() => sendMessage(chip)}
                   sx={{
-                    cursor: 'pointer',
+                    cursor: prediction ? 'pointer' : 'default',
                     fontSize: '0.72rem',
                     height: 'auto',
                     py: 0.75,
@@ -168,7 +199,7 @@ export default function StockChatPanel({ prediction, isDark, primaryColor, open,
                     border: `1px solid ${primaryColor}28`,
                     color: 'text.primary',
                     '& .MuiChip-label': { whiteSpace: 'normal', lineHeight: 1.4 },
-                    '&:hover': { background: `${primaryColor}1f` },
+                    '&:hover': { background: prediction ? `${primaryColor}1f` : `${primaryColor}0f` },
                   }}
                 />
               ))}
@@ -236,13 +267,14 @@ export default function StockChatPanel({ prediction, isDark, primaryColor, open,
                 sendMessage(input);
               }
             }}
-            disabled={streaming}
+            disabled={streaming || !prediction}
             sx={{ '& .MuiOutlinedInput-root': { borderRadius: 3, fontSize: '0.82rem' } }}
           />
           <Button
             variant="contained"
             size="small"
-            disabled={streaming || !input.trim()}
+            aria-label="Send message"
+            disabled={streaming || !input.trim() || !prediction}
             onClick={() => sendMessage(input)}
             sx={{
               minWidth: 40, height: 40, borderRadius: 2, p: 0,

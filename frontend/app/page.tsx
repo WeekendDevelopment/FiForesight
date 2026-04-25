@@ -73,7 +73,7 @@ export default function QuantumDashboard() {
       support:         data.indicators?.support    ?? [],
       resistance:      data.indicators?.resistance ?? [],
       trend:           data.prediction.trend,
-      sentiment_label: data.analystNote?.slice(0, 30) ?? 'Neutral',
+      sentiment_label: data.sentiment?.label ?? 'Neutral',
     })
       .then(r  => setTradeSetup(r.data))
       .catch(() => { /* non-fatal */ })
@@ -380,6 +380,7 @@ export default function QuantumDashboard() {
             <Fab
               onClick={() => setChatOpen(o => !o)}
               size="medium"
+              aria-label={chatOpen ? 'Close chat' : 'Open chat'}
               sx={{
                 position: 'fixed', bottom: 24, right: 24,
                 background: primaryColor,

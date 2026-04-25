@@ -819,8 +819,8 @@ class YFinanceService:
                 or info.get("dividendRate")
                 or 0.0
             )
-            _price_for_yield = float(current) if float(current) > 0 else 1.0
-            if _div_rate and float(_div_rate) > 0:
+            _price_for_yield = float(current) if float(current) > 0 else 0.0
+            if _div_rate and float(_div_rate) > 0 and _price_for_yield > 0:
                 dividend_yield = float(_div_rate) / _price_for_yield  # decimal fraction
             else:
                 dividend_yield = "N/A"

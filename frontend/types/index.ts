@@ -70,6 +70,7 @@ export interface PredictionData {
   indicators?: { rsi_series?: number[]; support?: number[]; resistance?: number[] };
   juryAnalysts?: AnalystJuror[];
   modelWeights?: { prophet: number; sarima: number; rf: number };
+  sentiment?:    { compound: number; label: string; headline_count: number };
   lastUpdated: string;
 }
 

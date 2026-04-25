@@ -1170,6 +1170,35 @@ class TradeSetupRequest(BaseModel):
     trend: str = "Bullish"
     sentiment_label: str = "Neutral"
 
+    @field_validator("current_price")
+    @classmethod
+    def validate_current_price(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("current_price must be > 0")
+        return v
+
+    @field_validator("rsi")
+    @classmethod
+    def validate_rsi(cls, v: float) -> float:
+        if not (0 <= v <= 100):
+            raise ValueError("rsi must be between 0 and 100")
+        return v
+
+    @field_validator("high_range")
+    @classmethod
+    def validate_ranges(cls, v: float, info: Any) -> float:
+        low = info.data.get("low_range")
+        if low is not None and v <= low:
+            raise ValueError("high_range must be > low_range")
+        return v
+
+    @field_validator("support", "resistance")
+    @classmethod
+    def validate_non_negative(cls, v: List[float]) -> List[float]:
+        if any(x < 0 for x in v):
+            raise ValueError("support/resistance values must be non-negative")
+        return v
+
 
 class TradeSetupResponse(BaseModel):
     entry_low: float
@@ -1324,6 +1353,11 @@ async def chat_endpoint(req: ChatRequest):
                         "Content-Type": "application/json",
                     },
                 ) as response:
+                    if response.status_code != 200:
+                        body = await response.aread()
+                        logger.warning("[CHAT] Groq returned %s: %s", response.status_code, body[:200])
+                        yield f"data: [ERROR] Groq error {response.status_code}\n\n"
+                        return
                     async for line in response.aiter_lines():
                         if not line.startswith("data:"):
                             continue
