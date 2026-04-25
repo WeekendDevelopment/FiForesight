@@ -70,12 +70,30 @@ export interface PredictionData {
   indicators?: { rsi_series?: number[]; support?: number[]; resistance?: number[] };
   juryAnalysts?: AnalystJuror[];
   modelWeights?: { prophet: number; sarima: number; rf: number };
+  sentiment?:    { compound: number; label: string; headline_count: number };
   lastUpdated: string;
 }
 
 export type ChartEntry = Record<string, string | number | undefined>;
 
 export type IndicatorKey = 'bb' | 'sma' | 'macd' | 'rsi' | 'volume';
+
+export interface TradeSetupResponse {
+  entry_low:    number;
+  entry_high:   number;
+  stop_loss:    number;
+  target_1:     number;
+  target_2:     number;
+  target_3:     number;
+  risk_reward:  string;
+  setup_type:   string;
+  rationale:    string;
+}
+
+export interface ChatMessage {
+  role:    'user' | 'assistant';
+  content: string;
+}
 
 export interface ChartStats {
   open:      number;
