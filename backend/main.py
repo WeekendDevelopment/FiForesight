@@ -1,5 +1,6 @@
 # backend/main.py
 import asyncio
+import hashlib
 import logging
 import traceback
 from datetime import datetime, timedelta, timezone, date
@@ -7,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, HTTPException, Body, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -56,22 +57,31 @@ yf_svc           = YFinanceService()
 analyst_jury_svc = AnalystJuryService()
 sentiment_svc    = SentimentService()
 
-# Per-symbol lock — prevents concurrent resolve_past_forecasts for same ticker
-_resolution_locks: dict[str, asyncio.Lock] = {}
+# Atomic in-progress guard — prevents duplicate resolve_past_forecasts for same ticker
+_in_progress: set[str] = set()
+_in_progress_lock: asyncio.Lock = asyncio.Lock()
 
 
 async def _resolve_with_lock(symbol: str) -> None:
-    lock = _resolution_locks.setdefault(symbol, asyncio.Lock())
-    if lock.locked():
-        logger.info(f"[RL] resolve_past_forecasts already running for {symbol} — skipping duplicate")
-        return
-    async with lock:
+    async with _in_progress_lock:
+        if symbol in _in_progress:
+            logger.info(f"[RL] resolve_past_forecasts already running for {symbol} — skipping duplicate")
+            return
+        _in_progress.add(symbol)
+    try:
         await resolve_past_forecasts(symbol)
+    finally:
+        async with _in_progress_lock:
+            _in_progress.discard(symbol)
 
 
 # ---------------------------------------------------------------------------
 # Response schema
 # ---------------------------------------------------------------------------
+
+class PredictRequest(BaseModel):
+    data: str = "SPY"
+
 
 class PredictionResponse(BaseModel):
     symbol:       str
@@ -686,8 +696,8 @@ async def debug():
     return results
 
 
-async def _predict_inner(payload: dict) -> PredictionResponse:
-    symbol = payload.get("data", "SPY").upper()
+async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
+    symbol = payload.data.upper()
     now    = datetime.now(timezone.utc)
 
     logger.info("[REQUEST] ════════════════════════════════════════════")
@@ -706,10 +716,21 @@ async def _predict_inner(payload: dict) -> PredictionResponse:
     #   • InfluxDB write_price (Step 7) still tracks intraday live-price history
     # Steps 1 + 3 in parallel — both are independent yfinance calls
     logger.info("[STEP-1+3] Fetching 2y OHLCV history + fundamentals concurrently ...")
-    df, info = await asyncio.gather(
+    _gather_results = await asyncio.gather(
         asyncio.to_thread(yf_svc.fetch_history, symbol, "2y"),
         asyncio.to_thread(yf_svc.fetch_info, symbol),
+        return_exceptions=True,
     )
+    df = _gather_results[0]
+    if isinstance(df, Exception):
+        logger.error(f"[STEP-1] fetch_history failed for {symbol}: {df}")
+        raise HTTPException(status_code=404, detail=f"No data found for {symbol}.")
+    _info_result = _gather_results[1]
+    if isinstance(_info_result, Exception):
+        logger.error(f"[STEP-3] fetch_info failed for {symbol}: {_info_result} — using empty fundamentals")
+        info: dict = {}
+    else:
+        info: dict = _info_result
 
     if df.empty:
         logger.error(f"[STEP-1] yfinance returned empty df for {symbol} — returning 404")
@@ -876,7 +897,8 @@ async def _predict_inner(payload: dict) -> PredictionResponse:
         "with full OHLCV context ..."
         + (f" | RL blending active ({rl_sample_count} samples)" if rl_sample_count > 0 else "")
     )
-    forecast = run_ensemble_forecast(
+    forecast = await asyncio.to_thread(
+        run_ensemble_forecast,
         closes, symbol,
         opens=opens, highs=highs, lows=lows, volumes=volumes,
         historical_weights=historical_weights,
@@ -996,7 +1018,10 @@ async def _predict_inner(payload: dict) -> PredictionResponse:
         f"forecast_high=${forecast['high']:.2f}, forecast_low=${forecast['low']:.2f}, "
         f"conf={forecast['conf']}, ann_vol={forecast.get('stats', {}).get('ann_volatility_pct', 'N/A')}%"
     )
-    jury_cache_key = f"jury:{symbol.upper()}"
+    _jury_fp = hashlib.md5(
+        f"{rsi:.1f}|{forecast['high']:.2f}|{forecast['low']:.2f}|{closes[-1]:.2f}|{sentiment.get('label', '')}".encode()
+    ).hexdigest()[:12]
+    jury_cache_key = f"jury:{symbol.upper()}:{_jury_fp}"
     cached_jury = await cache_get(jury_cache_key)
     if cached_jury is not None:
         logger.info(f"[STEP-5] Jury cache HIT for {symbol} — skipping Groq jury calls")
@@ -1120,7 +1145,7 @@ async def _predict_inner(payload: dict) -> PredictionResponse:
 
 
 @app.post("/predict", response_model=PredictionResponse)
-async def predict(payload: dict = Body(...)):
+async def predict(payload: PredictRequest):
     try:
         return await asyncio.wait_for(_predict_inner(payload), timeout=50.0)
     except asyncio.TimeoutError:
