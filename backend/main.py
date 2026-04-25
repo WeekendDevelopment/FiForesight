@@ -1216,42 +1216,75 @@ class TradeSetupResponse(BaseModel):
 async def trade_setup(req: TradeSetupRequest):
     p = req.current_price
 
-    # Entry zone: nearest support within 3% below price, else price ± 0.5%
-    support_nearby = sorted(
-        [s for s in req.support if 0.97 <= s / p <= 1.0],
-        reverse=True,
-    )
-    if support_nearby:
-        entry_low  = round(support_nearby[0], 2)
-        entry_high = round(entry_low * 1.01, 2)
+    if req.trend == "Bearish":
+        # Entry zone: nearest resistance within 3% above price, else price ± 0.5%
+        resistance_nearby = sorted(
+            [r for r in req.resistance if 1.0 <= r / p <= 1.03],
+        )
+        if resistance_nearby:
+            entry_high = round(resistance_nearby[0], 2)
+            entry_low  = round(entry_high * 0.99, 2)
+        else:
+            entry_high = round(p * 1.005, 2)
+            entry_low  = round(p * 0.995, 2)
+
+        entry_mid = (entry_low + entry_high) / 2
+
+        # Stop: nearest resistance above entry_high, capped at 5% above entry_mid
+        resistance_above = sorted([r for r in req.resistance if r > entry_high])
+        if resistance_above:
+            raw_stop = round(resistance_above[0] * 1.015, 2)
+        else:
+            raw_stop = round(entry_high * 1.03, 2)
+        max_stop  = round(entry_mid * 1.05, 2)
+        stop_loss = round(min(raw_stop, max_stop), 2)
+
+        # Targets: descending below entry_mid toward low_range
+        target_1 = round(entry_mid - (entry_mid - req.low_range) / 3, 2)
+        target_2 = round(req.low_range, 2)
+        target_3 = round(req.low_range - (entry_mid - req.low_range), 2)
+
+        # R:R — risk is distance to stop above, reward is distance to T2 below
+        risk        = max(stop_loss - entry_mid, 0.01)
+        reward      = max(entry_mid - target_2, 0.01)
+        risk_reward = f"1:{reward / risk:.1f}"
     else:
-        entry_low  = round(p * 0.995, 2)
-        entry_high = round(p * 1.005, 2)
+        # Bullish: entry zone near nearest support within 3% below price
+        support_nearby = sorted(
+            [s for s in req.support if 0.97 <= s / p <= 1.0],
+            reverse=True,
+        )
+        if support_nearby:
+            entry_low  = round(support_nearby[0], 2)
+            entry_high = round(entry_low * 1.01, 2)
+        else:
+            entry_low  = round(p * 0.995, 2)
+            entry_high = round(p * 1.005, 2)
 
-    # Stop loss: nearest support below entry_low (not the deepest one), or entry - 3%
-    support_below_entry = sorted(
-        [s for s in req.support if s < entry_low],
-        reverse=True,
-    )
-    if support_below_entry:
-        stop_loss = round(support_below_entry[0] * 0.985, 2)
-    else:
-        stop_loss = round(entry_low * 0.97, 2)
+        # Stop: nearest support below entry_low, capped at 5% below entry_mid
+        support_below_entry = sorted(
+            [s for s in req.support if s < entry_low],
+            reverse=True,
+        )
+        if support_below_entry:
+            stop_loss = round(support_below_entry[0] * 0.985, 2)
+        else:
+            stop_loss = round(entry_low * 0.97, 2)
 
-    entry_mid = (entry_low + entry_high) / 2
+        entry_mid = (entry_low + entry_high) / 2
 
-    # Targets — all must be above entry_mid
-    target_1 = round(entry_mid + (req.high_range - entry_mid) / 3, 2)
-    target_2 = round(req.high_range, 2)
-    target_3 = round(req.high_range + (req.high_range - entry_low), 2)
+        # Targets: ascending above entry_mid toward high_range
+        target_1 = round(entry_mid + (req.high_range - entry_mid) / 3, 2)
+        target_2 = round(req.high_range, 2)
+        target_3 = round(req.high_range + (req.high_range - entry_low), 2)
 
-    # Risk:Reward (based on T2) — cap stop at 5% below entry so R:R stays meaningful
-    raw_stop      = stop_loss
-    min_stop      = round(entry_mid * 0.95, 2)
-    stop_loss     = round(max(raw_stop, min_stop), 2)
-    risk          = max(entry_mid - stop_loss, 0.01)
-    reward        = max(target_2 - entry_mid, 0.01)
-    risk_reward   = f"1:{reward / risk:.1f}"
+        # R:R — cap stop at 5% below entry so R:R stays meaningful
+        raw_stop    = stop_loss
+        min_stop    = round(entry_mid * 0.95, 2)
+        stop_loss   = round(max(raw_stop, min_stop), 2)
+        risk        = max(entry_mid - stop_loss, 0.01)
+        reward      = max(target_2 - entry_mid, 0.01)
+        risk_reward = f"1:{reward / risk:.1f}"
 
     # Setup type derived from trend + RSI
     rsi = req.rsi
