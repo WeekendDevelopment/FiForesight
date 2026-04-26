@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 
 from redis.asyncio import Redis, ConnectionPool
 
