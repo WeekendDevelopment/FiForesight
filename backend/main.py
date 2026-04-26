@@ -3,7 +3,9 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import traceback
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone, date
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -27,7 +29,7 @@ from services import (
 )
 from simulation_service import suggest_portfolio, get_portfolio_performance
 from jury_graph import run_jury_graph
-from redis_cache import cache_get, cache_set
+from redis_cache import cache_get, cache_set, init_redis, close_redis
 
 # ---------------------------------------------------------------------------
 logging.basicConfig(level=logging.INFO)
@@ -36,7 +38,19 @@ logger = logging.getLogger(__name__)
 # Sanitize sensitive parameters in logs
 logging.getLogger("httpx").addFilter(SanitizeHttpxFilter())
 
-app = FastAPI(title="FiForesight Quantum Engine")
+
+@asynccontextmanager
+async def lifespan(app):
+    url = os.getenv("UPSTASH_REDIS_URL")
+    if url:
+        init_redis(url)
+    else:
+        logger.warning("[REDIS] UPSTASH_REDIS_URL not set — caching disabled")
+    yield
+    await close_redis()
+
+
+app = FastAPI(title="FiForesight Quantum Engine", lifespan=lifespan)
 
 
 @app.exception_handler(Exception)

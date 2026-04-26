@@ -1,29 +1,31 @@
-# backend/redis_cache.py
 import json
 import logging
-import os
-from upstash_redis.asyncio import Redis
+
+from redis.asyncio import Redis, ConnectionPool
 
 logger: logging.Logger = logging.getLogger(__name__)
 
-_DISABLED: object = object()  # sentinel — assigned to _client when env vars are absent
-_client: Redis | object | None = None  # None=unchecked, _DISABLED=no creds, Redis=ready  # noqa: F841
+_pool: ConnectionPool | None = None
+
+
+def init_redis(url: str) -> None:
+    global _pool
+    _pool = ConnectionPool.from_url(url, decode_responses=True, max_connections=10)
+    logger.info("[REDIS] Connection pool initialized (max_connections=10)")
+
+
+async def close_redis() -> None:
+    global _pool
+    if _pool is not None:
+        await _pool.aclose()
+        _pool = None
+        logger.info("[REDIS] Connection pool closed")
 
 
 def get_redis() -> Redis | None:
-    global _client
-    if _client is _DISABLED:
+    if _pool is None:
         return None
-    if _client is not None:
-        return _client  # type: ignore[return-value]
-    url   = os.getenv("UPSTASH_REDIS_REST_URL")
-    token = os.getenv("UPSTASH_REDIS_REST_TOKEN")
-    if not url or not token:
-        logger.warning("[REDIS] UPSTASH_REDIS_REST_URL/TOKEN not set — caching disabled")
-        _client = _DISABLED
-        return None
-    _client = Redis(url=url, token=token)
-    return _client  # type: ignore[return-value]
+    return Redis(connection_pool=_pool)
 
 
 async def cache_get(key: str) -> list | dict | None:
