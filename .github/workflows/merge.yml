@@ -55,6 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       vm_host: ${{ steps.tf_outputs.outputs.public_ip }}
+      upstash_redis_url: ${{ steps.tf_outputs.outputs.upstash_redis_url }}
     environment:
       name: "terraform.apply"
     steps:
@@ -74,7 +75,9 @@ jobs:
         working-directory: terraform
         run: |
           PUBLIC_IP=$(terraform output -raw public_ip)
-          echo "UPSTASH_REDIS_URL=$(terraform output -raw redis_url)" >> $GITHUB_ENV
+          UPSTASH_REDIS_URL=$(terraform output -raw redis_url)
+          echo "::add-mask::$UPSTASH_REDIS_URL"
+          echo "upstash_redis_url=$UPSTASH_REDIS_URL" >> $GITHUB_OUTPUT
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
 
   build-frontend:
@@ -254,7 +257,7 @@ jobs:
           SERP_API_KEY: ${{ secrets.SERP_API_KEY }}
           X_AI_API_KEY: ${{ secrets.X_AI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          UPSTASH_REDIS_URL: ${{ env.UPSTASH_REDIS_URL }}
+          UPSTASH_REDIS_URL: ${{ needs.terraform.outputs.upstash_redis_url }}
           APP_ENV: "live"
           NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
           LINUX_NEW_RELIC_LICENSE_KEY: ${{ secrets.LINUX_NEW_RELIC_LICENSE_KEY }}
