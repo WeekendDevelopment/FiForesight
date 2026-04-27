@@ -528,7 +528,7 @@ export default function SimulationPage() {
     setSimulation(null);
     setPerfData(null);
     setSuggestions([]);
-    setPortfolioVaR95(null);
+    // portfolioVaR95 derived live — no reset needed
     setBenchmark(null);
     setCustomShares({});
     setRiskLevel('moderate');
