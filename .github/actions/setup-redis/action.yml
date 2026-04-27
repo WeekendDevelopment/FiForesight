@@ -1,0 +1,26 @@
+name: Setup Redis
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v4
+      with:
+        terraform_version: 1.14.8
+        cli_config_credentials_token: ${{ env.TF_API_TOKEN }}
+
+    - name: Terraform Init
+      working-directory: ${{ env.WORKING_DIR }}
+      shell: bash
+      run: terraform init
+
+    - name: Get Redis URL from terraform outputs
+      working-directory: ${{ env.WORKING_DIR }}
+      shell: bash
+      run: |
+        REDIS_URL="$(terraform output -raw redis_url)"
+        if [ -z "$REDIS_URL" ] || [ "$REDIS_URL" = "null" ]; then
+          echo "Error: terraform output 'redis_url' is empty or null" >> $GITHUB_STEP_SUMMARY
+          exit 1
+        fi
+        echo "::add-mask::$REDIS_URL"
+        echo "UPSTASH_REDIS_URL=$REDIS_URL" >> "$GITHUB_ENV"
