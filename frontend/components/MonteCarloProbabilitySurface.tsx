@@ -66,11 +66,14 @@ export default function MonteCarloProbabilitySurface({
   const xDays = priceRangeByDay.map(d => d.day);
 
   // For each day, approximate the distribution as Gaussian using the 80% interval
-  // (p10→p90 spans ≈ 2×1.28σ for a normal distribution)
-  const zData = priceRangeByDay.map(d => {
-    const std = (d.p90 - d.p10) / 2.56;
-    return yBins.map(y => gaussianPdf(y, d.p50, std));
-  });
+  // (p10→p90 spans ≈ 2×1.28σ for a normal distribution).
+  // Plotly surface with 1D x/y arrays requires z[row=y][col=x], i.e. [priceBin][day].
+  const zData = yBins.map((y) =>
+    priceRangeByDay.map((d) => {
+      const std = Math.max((d.p90 - d.p10) / 2.56, 1e-9);
+      return gaussianPdf(y, d.p50, std);
+    }),
+  );
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const plotData: any[] = [
@@ -167,6 +170,7 @@ export default function MonteCarloProbabilitySurface({
           outline:    'none',
         }}>
           <IconButton
+            aria-label="Close Monte Carlo probability surface"
             onClick={() => setOpen(false)}
             size="small"
             sx={{ position: 'absolute', top: 8, right: 8, color: 'text.secondary' }}

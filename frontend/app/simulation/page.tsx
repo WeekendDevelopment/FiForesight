@@ -147,7 +147,7 @@ const LEGACY_STORAGE_KEY = 'fiforesight_simulation';
 // Saves always go to the specific env; reads use "all" locally so preview/live sims are visible.
 const SIM_ENV: string = (() => {
   const e = process.env.NEXT_PUBLIC_APP_ENV;
-  return (e === 'live' || e === 'preview') ? 'live' : 'local';
+  return (e === 'live' || e === 'preview' || e === 'local') ? e : 'local';
 })();
 const SIM_ENV_READ = SIM_ENV === 'local' ? 'all' : SIM_ENV;
 
@@ -912,10 +912,15 @@ export default function SimulationPage() {
 
         {/* Portfolio Risk metrics (from Monte Carlo) */}
         {(() => {
-          const mcStocks   = active.filter(s => s.prob_gain != null);
-          const bestGain   = mcStocks.length > 0 ? Math.max(...mcStocks.map(s => s.prob_gain!)) : null;
-          const worstGain  = mcStocks.length > 0 ? Math.min(...mcStocks.map(s => s.prob_gain!)) : null;
-          if (portfolioVaR95 == null && bestGain == null) return null;
+          const mcStocks   = active.filter(s => s.prob_gain != null || s.var_95 != null);
+          const bestGain   = mcStocks.length > 0 ? Math.max(...mcStocks.filter(s => s.prob_gain != null).map(s => s.prob_gain!)) : null;
+          const worstGain  = mcStocks.length > 0 ? Math.min(...mcStocks.filter(s => s.prob_gain != null).map(s => s.prob_gain!)) : null;
+          // Recompute VaR from current active holdings so removals/edits stay accurate
+          const livePortfolioVaR95 = active.reduce(
+            (sum, s) => sum + (s.var_95 ?? 0) * effectiveShares(s),
+            0,
+          );
+          if (livePortfolioVaR95 <= 0 && bestGain == null) return null;
           return (
             <Paper sx={{
               p: 2, mb: 3,
@@ -926,11 +931,11 @@ export default function SimulationPage() {
                 Portfolio Risk (Monte Carlo, 5-day)
               </Typography>
               <Grid container spacing={2}>
-                {portfolioVaR95 != null && (
+                {livePortfolioVaR95 > 0 && (
                   <Grid size={{ xs: 12, sm: 4 }}>
                     <StatCard
                       label="Portfolio VaR 95%"
-                      value={`$${portfolioVaR95.toLocaleString('en-US', { maximumFractionDigits: 0 })}`}
+                      value={`$${livePortfolioVaR95.toLocaleString('en-US', { maximumFractionDigits: 0 })}`}
                       sub="Expected max 5-day loss"
                       color="#ef4444"
                     />

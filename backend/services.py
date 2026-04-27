@@ -286,6 +286,13 @@ class InfluxService:
         return env
 
     @staticmethod
+    def _validate_sim_env_read(env: str) -> str:
+        """Like _validate_sim_env but also accepts 'all' for cross-env reads."""
+        if env not in _VALID_SIM_ENV_READ:
+            raise ValueError(f"Invalid simulation env for read: {env!r}")
+        return env
+
+    @staticmethod
     def _validate_sim_id(sim_id: str) -> str:
         if not _UUID_RE.match(sim_id.lower()):
             raise ValueError(f"sim_id must be a UUID v4, got: {sim_id!r}")

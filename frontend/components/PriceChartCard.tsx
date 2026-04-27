@@ -474,7 +474,7 @@ export default function PriceChartCard({
                         strokeOpacity={0.4}
                         strokeDasharray="2 4"
                         label={({ viewBox }: any) => {
-                          const { x, y, height } = viewBox;
+                          const { x, y } = viewBox;
                           return (
                             <text
                               x={x + 3}

@@ -183,7 +183,7 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol }:
           Monte Carlo: 1,000 simulated price paths using GBM
         </Typography>
         <MuiTooltip title="Show/hide guide" arrow>
-          <IconButton size="small" onClick={() => setGuideOpen(o => !o)} sx={{ p: 0.25, color: guideOpen ? '#7c4dff' : 'rgba(124,77,255,0.4)' }}>
+          <IconButton size="small" aria-label="Toggle Monte Carlo guide" onClick={() => setGuideOpen(o => !o)} sx={{ p: 0.25, color: guideOpen ? '#7c4dff' : 'rgba(124,77,255,0.4)' }}>
             <HelpCircle size={13} />
           </IconButton>
         </MuiTooltip>
@@ -199,7 +199,7 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol }:
               { icon: '🐂🐻', term: 'Bull / Bear case', desc: 'Top 10% of paths (Bull) and bottom 10% (Bear). 80% of paths land between these lines.' },
               { icon: '⚠️', term: 'VaR 95', desc: 'Value at Risk: the maximum expected loss in 95% of scenarios over 5 days. Think of it as a "worst normal day" estimate.' },
               { icon: '🏔️', term: '3D Surface', desc: 'Each mountain shows where prices are most likely on that day. Taller peak = higher probability. The surface fans out because uncertainty grows.' },
-              { icon: '🎲', term: 'GBM model', desc: 'Paths follow Geometric Brownian Motion: drift (avg daily return) + volatility (daily std dev) estimated from the last 60 days.' },
+              { icon: '🎲', term: 'GBM model', desc: 'Paths follow Geometric Brownian Motion: drift (avg daily return) + volatility (daily std dev) estimated from the full available price history.' },
             ].map(({ icon, term, desc }) => (
               <Box key={term} sx={{ display: 'flex', gap: 0.5, alignItems: 'flex-start' }}>
                 <Typography sx={{ fontSize: 11, lineHeight: 1.2, flexShrink: 0 }}>{icon}</Typography>

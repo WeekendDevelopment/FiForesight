@@ -636,19 +636,21 @@ def run_monte_carlo(
 
         rng = np.random.default_rng(seed=42)
         Z   = rng.standard_normal((n_sims, steps))
-        t   = np.arange(1, steps + 1, dtype=float)
 
-        # Closed-form GBM: log-price at step t relative to S_0
-        drift      = mu - 0.5 * sigma ** 2
-        log_paths  = drift * t[np.newaxis, :] + sigma * np.sqrt(t)[np.newaxis, :] * Z
-        paths      = S0 * np.exp(log_paths)   # shape (n_sims, steps)
+        # GBM via cumulative log-returns (Δt = 1 trading day).
+        # Each column is an independent daily increment so paths are
+        # temporally consistent (Brownian bridge continuity preserved).
+        drift            = mu - 0.5 * sigma ** 2
+        step_log_returns = drift + sigma * Z          # per-step Δ log price
+        log_paths        = np.cumsum(step_log_returns, axis=1)
+        paths            = S0 * np.exp(log_paths)     # shape (n_sims, steps)
 
         final     = paths[:, -1]
         p10       = float(np.percentile(final, 10))
         p50       = float(np.percentile(final, 50))
         p90       = float(np.percentile(final, 90))
         prob_gain = float(np.mean(final > S0) * 100)
-        var_95    = float(S0 - np.percentile(final, 5))
+        var_95    = float(max(0.0, S0 - np.percentile(final, 5)))
 
         # 50 representative paths for the 2D fan chart
         sample_idx   = rng.choice(n_sims, size=min(50, n_sims), replace=False)
@@ -741,10 +743,13 @@ def run_ensemble_forecast(
         f"vol(10d)={vol:.4f} ({vol * 100:.2f}%), MODELS_AVAILABLE={MODELS_AVAILABLE}, "
         f"ohlcv_supplied={ohlcv_available}"
     )
-    logger.debug(
-        f"[ENSEMBLE] Closes sent to models — closes[0]=${closes[0]:.2f} ... "
-        f"closes[-10]={', '.join(f'${p:.2f}' for p in closes[-10:])}"
-    )
+    if closes:
+        logger.debug(
+            f"[ENSEMBLE] Closes sent to models — closes[0]=${closes[0]:.2f} ... "
+            f"closes[-10]={', '.join(f'${p:.2f}' for p in closes[-10:])}"
+        )
+    else:
+        logger.debug("[ENSEMBLE] Closes sent to models — empty series")
     if ohlcv_available:
         logger.debug(
             f"[ENSEMBLE] OHLCV context — "

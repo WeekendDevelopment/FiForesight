@@ -1569,7 +1569,7 @@ async def simulation_state_save(req: SimStateSaveRequest):
 @app.get("/simulation/state")
 async def simulation_state_list(env: str = Query(...)):
     try:
-        influx_svc._validate_sim_env(env)
+        influx_svc._validate_sim_env_read(env)  # accepts "all" for cross-env reads
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     sims = await asyncio.to_thread(influx_svc.query_simulation_states, env)
