@@ -326,7 +326,7 @@ export default function SimulationPage() {
   const [chatStep, setChatStep]             = useState(0);
   const [analysisMsg, setAnalysisMsg]       = useState(0);
   const [suggestions, setSuggestions]       = useState<StockSuggestion[]>([]);
-  const [portfolioVaR95, setPortfolioVaR95] = useState<number | null>(null);
+  // portfolioVaR95 is recomputed live from active holdings — no state needed
   const [benchmark, setBenchmark]           = useState<BenchmarkInfo | null>(null);
   const [removed, setRemoved]               = useState<Set<string>>(new Set());
   const [addTicker, setAddTicker]           = useState('');
@@ -458,7 +458,7 @@ export default function SimulationPage() {
         return;
       }
       setSuggestions(data.suggestions ?? []);
-      setPortfolioVaR95(data.portfolioVaR95 ?? null);
+      // portfolioVaR95 from backend is now derived live from active holdings
       setBenchmark(data.benchmark ?? null);
       setRemoved(new Set());
       setCustomShares({});
