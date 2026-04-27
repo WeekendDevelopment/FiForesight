@@ -158,8 +158,10 @@ export default function PriceChartCard({
     const allVals = data.flatMap(d => [
       (d as any).price,    (d as any).predicted, (d as any).foreHigh, (d as any).foreLow,
       (d as any).open,     (d as any).high,       (d as any).low,      (d as any).close,
-      indicators.includes('bb') ? (d as any).bb_upper : undefined,
-      indicators.includes('bb') ? (d as any).bb_lower : undefined,
+      indicators.includes('bb')  ? (d as any).bb_upper  : undefined,
+      indicators.includes('bb')  ? (d as any).bb_lower  : undefined,
+      indicators.includes('sma') ? (d as any).sma50     : undefined,
+      indicators.includes('sma') ? (d as any).sma200    : undefined,
     ].filter((v): v is number => v !== undefined && v !== null));
     if (!allVals.length) return ['auto', 'auto'];
     const min = Math.min(...allVals);
@@ -167,6 +169,46 @@ export default function PriceChartCard({
     const pad = (max - min) * 0.12 || max * 0.02;
     return [min - pad, max + pad];
   }, [chartData, candleChartData, chartMode, indicators]);
+
+  // Detect notable trading days: large price moves (>1.5σ) or volume spikes (>2× median)
+  const eventMarkers = useMemo(() => {
+    const hist = prediction.history;
+    if (hist.length < 10) return [];
+
+    const returns = hist.slice(1).map((h, i) => (h.price - hist[i].price) / hist[i].price);
+    const mu  = returns.reduce((s, r) => s + r, 0) / returns.length;
+    const sig = Math.sqrt(returns.reduce((s, r) => s + (r - mu) ** 2, 0) / returns.length);
+
+    const vols = hist.map(h => h.volume ?? 0).filter(v => v > 0);
+    const medVol = vols.length ? [...vols].sort((a, b) => a - b)[Math.floor(vols.length / 2)] : 0;
+
+    const events: { date: string; type: 'up' | 'down' | 'volume'; label: string; pct: number; z: number }[] = [];
+    returns.forEach((ret, i) => {
+      const h      = hist[i + 1];
+      const zScore = sig > 0 ? Math.abs(ret - mu) / sig : 0;
+      const volMult = medVol > 0 ? (h.volume ?? 0) / medVol : 0;
+      const volSpike = volMult > 2.2;
+      if (zScore >= 1.5 || volSpike) {
+        const isUp   = ret > 0;
+        const pctVal = ret * 100;
+        // Short label: "▲+7.9%" or "◆vol×3.1" to avoid overflow
+        const label  = zScore >= 1.5
+          ? `${isUp ? '+' : ''}${pctVal.toFixed(1)}%`
+          : `vol×${volMult.toFixed(1)}`;
+        events.push({ date: h.date, type: volSpike && zScore < 1.5 ? 'volume' : isUp ? 'up' : 'down', label, pct: pctVal, z: zScore });
+      }
+    });
+
+    // Sort by significance, deduplicate events closer than 5 trading days, keep top 5
+    const sorted = events.sort((a, b) => Math.abs(b.z) - Math.abs(a.z));
+    const kept: typeof events = [];
+    for (const ev of sorted) {
+      const tooClose = kept.some(k => Math.abs(hist.findIndex(h => h.date === ev.date) - hist.findIndex(h => h.date === k.date)) < 5);
+      if (!tooClose) kept.push(ev);
+      if (kept.length >= 5) break;
+    }
+    return kept;
+  }, [prediction.history]);
 
   const SERIES_LABEL_MAP: Record<string, string> = {
     price: 'Close', close: 'Close (OHLC)', predicted: 'Forecast',
@@ -359,8 +401,8 @@ export default function PriceChartCard({
           />
         ) : (<>
           {/* Main price + overlay chart */}
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            <Box ref={chartBoxRef} sx={{ height: 380, position: 'relative', flex: 1 }}>
+          <Box sx={{ display: 'flex', gap: 1, minWidth: 0 }}>
+            <Box ref={chartBoxRef} sx={{ height: 380, position: 'relative', flex: 1, minWidth: 0 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={(chartMode === 'line' ? chartData : candleChartData) as ChartEntry[]} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
                   <defs>
@@ -417,10 +459,41 @@ export default function PriceChartCard({
                     />
                   ))}
 
+                  {/* Event markers — large moves / volume spikes */}
+                  {eventMarkers.map((ev, i) => {
+                    const color  = ev.type === 'up' ? '#00ffa3' : ev.type === 'down' ? '#ff0055' : '#f59e0b';
+                    const symbol = ev.type === 'up' ? '▲' : ev.type === 'down' ? '▼' : '◆';
+                    // Stagger label y so clustered markers don't collide
+                    const yOffset = 8 + (i % 3) * 14;
+                    return (
+                      <ReferenceLine
+                        key={`ev-${i}`}
+                        x={ev.date}
+                        stroke={color}
+                        strokeWidth={1}
+                        strokeOpacity={0.4}
+                        strokeDasharray="2 4"
+                        label={({ viewBox }: any) => {
+                          const { x, y, height } = viewBox;
+                          return (
+                            <text
+                              x={x + 3}
+                              y={(y ?? 0) + yOffset}
+                              fill={color}
+                              fontSize={8}
+                              opacity={0.9}
+                              style={{ pointerEvents: 'none', userSelect: 'none' }}
+                            >
+                              {symbol}{ev.label}
+                            </text>
+                          );
+                        }}
+                      />
+                    );
+                  })}
+
                   {indicators.includes('bb') && <>
-                    {/* Stacked areas fill only between bb_lower and bb_upper */}
-                    <Area type="monotone" dataKey="bb_lower" stackId="bb" stroke={primaryColor} strokeWidth={1} strokeDasharray="3 2" strokeOpacity={0.5} fill="transparent" dot={false} connectNulls isAnimationActive={false} legendType="none" />
-                    <Area type="monotone" dataKey="bb_band"  stackId="bb" stroke="none" strokeWidth={0} fill="url(#bbGrad)" dot={false} connectNulls isAnimationActive={false} legendType="none" />
+                    <Line  type="monotone" dataKey="bb_lower"  stroke={primaryColor} strokeWidth={1} strokeDasharray="3 2" strokeOpacity={0.5} dot={false} connectNulls isAnimationActive={false} />
                     <Line  type="monotone" dataKey="bb_upper"  stroke={primaryColor} strokeWidth={1} strokeDasharray="3 2" strokeOpacity={0.5} dot={false} connectNulls isAnimationActive={false} />
                     <Line  type="monotone" dataKey="bb_middle" stroke={primaryColor} strokeWidth={1} strokeDasharray="5 3" strokeOpacity={0.4} dot={false} connectNulls isAnimationActive={false} />
                   </>}
@@ -434,10 +507,8 @@ export default function PriceChartCard({
                     <Area type="monotone" dataKey="price" stroke={trendColor} strokeWidth={2.5} fill="url(#histGrad)" dot={false} connectNulls={false} activeDot={{ r: 4, strokeWidth: 0 }} isAnimationActive={false} />
                   )}
 
-                  {/* Stacked areas fill only between foreLow and foreHigh */}
-                  <Area type="monotone" dataKey="foreLow"   stackId="fore" stroke="rgba(188,19,254,0.3)" strokeWidth={1}   strokeDasharray="5 3" fill="transparent"    dot={false} connectNulls={false} isAnimationActive={false} legendType="none" />
-                  <Area type="monotone" dataKey="fore_band" stackId="fore" stroke="none" strokeWidth={0} fill="url(#foreGrad)" dot={false} connectNulls={false} isAnimationActive={false} legendType="none" />
-                  <Line  type="monotone" dataKey="foreHigh" stroke="rgba(188,19,254,0.5)" strokeWidth={1.5} strokeDasharray="5 3" dot={false} connectNulls={false} isAnimationActive={false} />
+                  <Line type="monotone" dataKey="foreLow"  stroke="rgba(188,19,254,0.4)" strokeWidth={1}   strokeDasharray="5 3" dot={false} connectNulls={false} isAnimationActive={false} legendType="none" />
+                  <Line type="monotone" dataKey="foreHigh" stroke="rgba(188,19,254,0.5)" strokeWidth={1.5} strokeDasharray="5 3" dot={false} connectNulls={false} isAnimationActive={false} />
                   <Line type="monotone" dataKey="predicted" stroke="#bc13fe" strokeWidth={2} strokeDasharray="6 3"
                     dot={{ r: 4, fill: '#bc13fe', strokeWidth: 0 }} connectNulls={false} isAnimationActive={false} />
                 </ComposedChart>

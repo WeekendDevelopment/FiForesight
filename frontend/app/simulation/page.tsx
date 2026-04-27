@@ -64,6 +64,8 @@ interface StockSuggestion {
   allocationPct:  number;
   allocationUsd:  number;
   shares:         number;
+  var_95?:        number | null;
+  prob_gain?:     number | null;
 }
 
 interface BenchmarkInfo {
@@ -142,11 +144,12 @@ const ANALYZING_MSGS = [
 const LEGACY_STORAGE_KEY = 'fiforesight_simulation';
 
 // Environment is baked in at build time via NEXT_PUBLIC_APP_ENV.
-// local = dev machine; preview + live share the same simulation pool.
+// Saves always go to the specific env; reads use "all" locally so preview/live sims are visible.
 const SIM_ENV: string = (() => {
   const e = process.env.NEXT_PUBLIC_APP_ENV;
   return (e === 'live' || e === 'preview') ? 'live' : 'local';
 })();
+const SIM_ENV_READ = SIM_ENV === 'local' ? 'all' : SIM_ENV;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -323,6 +326,7 @@ export default function SimulationPage() {
   const [chatStep, setChatStep]             = useState(0);
   const [analysisMsg, setAnalysisMsg]       = useState(0);
   const [suggestions, setSuggestions]       = useState<StockSuggestion[]>([]);
+  const [portfolioVaR95, setPortfolioVaR95] = useState<number | null>(null);
   const [benchmark, setBenchmark]           = useState<BenchmarkInfo | null>(null);
   const [removed, setRemoved]               = useState<Set<string>>(new Set());
   const [addTicker, setAddTicker]           = useState('');
@@ -334,7 +338,8 @@ export default function SimulationPage() {
   const [customShares, setCustomShares]     = useState<Record<string, number>>({});
   const [chartInterval, setChartInterval]   = useState<'1m' | '5m' | '1h' | '1d'>('1h');
   const [savedSims, setSavedSims]           = useState<SimulationState[]>([]);
-  const [simsLoading, setSimsLoading]       = useState(false);
+  const [simsLoading, setSimsLoading]       = useState(true);   // true until first load completes
+  const [simsError, setSimsError]           = useState('');
   const msgTimer     = useRef<ReturnType<typeof setInterval> | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   // Per-sim-id pending save promise, so resets can await in-flight saves
@@ -376,12 +381,16 @@ export default function SimulationPage() {
 
   async function loadSavedSims() {
     setSimsLoading(true);
+    setSimsError('');
     try {
       const { data } = await axios.get<{ simulations: SimulationState[] }>(
-        `/api/simulation/state?env=${SIM_ENV}`
+        `/api/simulation/state?env=${SIM_ENV_READ}`
       );
       setSavedSims(data.simulations ?? []);
-    } catch {
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        ?? 'Could not load saved simulations — backend may be offline.';
+      setSimsError(msg);
       setSavedSims([]);
     } finally {
       setSimsLoading(false);
@@ -449,6 +458,7 @@ export default function SimulationPage() {
         return;
       }
       setSuggestions(data.suggestions ?? []);
+      setPortfolioVaR95(data.portfolioVaR95 ?? null);
       setBenchmark(data.benchmark ?? null);
       setRemoved(new Set());
       setCustomShares({});
@@ -518,6 +528,7 @@ export default function SimulationPage() {
     setSimulation(null);
     setPerfData(null);
     setSuggestions([]);
+    setPortfolioVaR95(null);
     setBenchmark(null);
     setCustomShares({});
     setRiskLevel('moderate');
@@ -577,6 +588,24 @@ export default function SimulationPage() {
         {simsLoading && (
           <LinearProgress sx={{ mb: 3, borderRadius: 1 }} />
         )}
+        {!simsLoading && simsError && (
+          <Alert
+            severity="warning"
+            sx={{ mb: 3, textAlign: 'left' }}
+            action={
+              <Button size="small" color="inherit" onClick={() => void loadSavedSims()}>
+                Retry
+              </Button>
+            }
+          >
+            {simsError}
+          </Alert>
+        )}
+        {!simsLoading && !simsError && savedSims.length === 0 && (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 2 }}>
+            No saved simulations yet.
+          </Typography>
+        )}
         {!simsLoading && savedSims.length > 0 && (
           <Paper sx={{
             mb: 4, p: 2, border: '1px solid rgba(0,242,255,0.2)',
@@ -584,24 +613,36 @@ export default function SimulationPage() {
           }}>
             <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5 }}>
               <Typography variant="subtitle2" fontWeight={700} color="primary.main">
-                Saved simulations ({SIM_ENV})
+                Saved simulations
               </Typography>
-              <Chip label={SIM_ENV} size="small" sx={{
-                background: SIM_ENV === 'live' ? 'rgba(16,185,129,0.15)' : 'rgba(0,242,255,0.12)',
-                color: SIM_ENV === 'live' ? '#10b981' : '#00f2ff',
-                fontSize: 11, fontWeight: 700,
-              }} />
+              <Chip
+                label={SIM_ENV_READ === 'all' ? 'all envs' : SIM_ENV_READ}
+                size="small"
+                sx={{
+                  background: SIM_ENV_READ === 'live' ? 'rgba(16,185,129,0.15)' : 'rgba(0,242,255,0.12)',
+                  color: SIM_ENV_READ === 'live' ? '#10b981' : '#00f2ff',
+                  fontSize: 11, fontWeight: 700,
+                }}
+              />
             </Stack>
             <Stack spacing={1}>
-              {savedSims.map(sim => (
+              {savedSims.map(sim => {
+                const simEnv = (sim as any).env as string | undefined;
+                const envColor = simEnv === 'live' ? '#10b981' : simEnv === 'preview' ? '#f59e0b' : '#64748b';
+                return (
                 <Stack key={sim.id} direction="row" alignItems="center"
                   justifyContent="space-between" flexWrap="wrap" gap={1}
                   sx={{ p: 1.2, borderRadius: 1, border: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' }}
                 >
                   <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography variant="body2" fontWeight={600} noWrap>
-                      {sim.riskLevel.charAt(0).toUpperCase() + sim.riskLevel.slice(1)} · {sim.sectors.join(', ')}
-                    </Typography>
+                    <Stack direction="row" alignItems="center" gap={0.75} sx={{ mb: 0.1 }}>
+                      <Typography variant="body2" fontWeight={600} noWrap>
+                        {sim.riskLevel.charAt(0).toUpperCase() + sim.riskLevel.slice(1)} · {sim.sectors.join(', ')}
+                      </Typography>
+                      {simEnv && SIM_ENV_READ === 'all' && (
+                        <Chip label={simEnv} size="small" sx={{ height: 16, fontSize: 9, fontWeight: 700, bgcolor: `${envColor}22`, color: envColor, border: `1px solid ${envColor}44` }} />
+                      )}
+                    </Stack>
                     <Typography variant="caption" color="text.secondary">
                       Started {new Date(sim.startDate).toLocaleString()} · ${sim.budget.toLocaleString()} budget
                     </Typography>
@@ -627,7 +668,8 @@ export default function SimulationPage() {
                     </Button>
                   </Stack>
                 </Stack>
-              ))}
+                );
+              })}
             </Stack>
           </Paper>
         )}
@@ -867,6 +909,57 @@ export default function SimulationPage() {
             )}
           </Stack>
         </Paper>
+
+        {/* Portfolio Risk metrics (from Monte Carlo) */}
+        {(() => {
+          const mcStocks   = active.filter(s => s.prob_gain != null);
+          const bestGain   = mcStocks.length > 0 ? Math.max(...mcStocks.map(s => s.prob_gain!)) : null;
+          const worstGain  = mcStocks.length > 0 ? Math.min(...mcStocks.map(s => s.prob_gain!)) : null;
+          if (portfolioVaR95 == null && bestGain == null) return null;
+          return (
+            <Paper sx={{
+              p: 2, mb: 3,
+              border: '1px solid rgba(239,68,68,0.2)',
+              background: 'rgba(239,68,68,0.03)',
+            }}>
+              <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1.5, color: '#ef4444' }}>
+                Portfolio Risk (Monte Carlo, 5-day)
+              </Typography>
+              <Grid container spacing={2}>
+                {portfolioVaR95 != null && (
+                  <Grid size={{ xs: 12, sm: 4 }}>
+                    <StatCard
+                      label="Portfolio VaR 95%"
+                      value={`$${portfolioVaR95.toLocaleString('en-US', { maximumFractionDigits: 0 })}`}
+                      sub="Expected max 5-day loss"
+                      color="#ef4444"
+                    />
+                  </Grid>
+                )}
+                {bestGain != null && (
+                  <Grid size={{ xs: 6, sm: 4 }}>
+                    <StatCard
+                      label="Best Prob of Gain"
+                      value={`${bestGain.toFixed(1)}%`}
+                      sub="Strongest stock (MC 5d)"
+                      color="#10b981"
+                    />
+                  </Grid>
+                )}
+                {worstGain != null && (
+                  <Grid size={{ xs: 6, sm: 4 }}>
+                    <StatCard
+                      label="Worst Prob of Gain"
+                      value={`${worstGain.toFixed(1)}%`}
+                      sub="Weakest stock (MC 5d)"
+                      color="#f59e0b"
+                    />
+                  </Grid>
+                )}
+              </Grid>
+            </Paper>
+          );
+        })()}
 
         <Stack direction="row" spacing={2}>
           <Button

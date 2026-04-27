@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useTransition } from 'react';
-import { LineChart, Line, ResponsiveContainer } from 'recharts';
+import { LineChart, Line } from 'recharts';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import axios from 'axios';
@@ -84,18 +84,16 @@ export default function TrendingSparklines({ tickers, isDark }: Props) {
               {/* Sparkline */}
               <Box sx={{ width: 52, height: 28, flexShrink: 0 }}>
                 {pts.length >= 2 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={pts} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
-                      <Line
-                        type="monotone"
-                        dataKey="v"
-                        stroke={lineC}
-                        strokeWidth={1.5}
-                        dot={false}
-                        isAnimationActive={false}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
+                  <LineChart data={pts} width={52} height={28} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+                    <Line
+                      type="monotone"
+                      dataKey="v"
+                      stroke={lineC}
+                      strokeWidth={1.5}
+                      dot={false}
+                      isAnimationActive={false}
+                    />
+                  </LineChart>
                 ) : (
                   <Box sx={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <Box sx={{ width: '80%', height: 1, bgcolor: dimColor }} />

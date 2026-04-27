@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _SAFE_TAG_RE  = re.compile(r"^[A-Za-z0-9._:\-]+$")
-_VALID_SIM_ENV = frozenset({"local", "preview", "live"})
+_VALID_SIM_ENV      = frozenset({"local", "preview", "live"})
+_VALID_SIM_ENV_READ = frozenset({"local", "preview", "live", "all"})
 _UUID_RE       = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
@@ -69,7 +70,7 @@ def _validate_model(model: str) -> str:
 
 class InfluxService:
     def __init__(self):
-        logger.info(
+        logger.debug(
             f"[INFLUXDB] Initialising client — url={Config.INFLUXDB_URL}, "
             f"org={Config.INFLUXDB_ORG}, bucket={Config.INFLUXDB_BUCKET}, "
             f"token_set={'yes' if Config.INFLUXDB_TOKEN else 'NO — writes will fail'}"
@@ -90,7 +91,7 @@ class InfluxService:
         except ValueError as e:
             logger.error(f"[INFLUXDB] write_price rejected — {e}")
             return
-        logger.info(f"[INFLUXDB] write_price — symbol={symbol}, price=${price:.2f}")
+        logger.debug(f"[INFLUXDB] write_price — symbol={symbol}, price=${price:.2f}")
         try:
             p = (
                 Point("market_data")
@@ -121,7 +122,7 @@ class InfluxService:
             return
         cutoff = datetime.now(timezone.utc) - timedelta(days=29)
 
-        logger.info(
+        logger.debug(
             f"[INFLUXDB] write_ohlcv_batch — symbol={symbol}, df_rows={len(df)}, "
             f"retention_cutoff={cutoff.date()} (last 29 days)"
         )
@@ -146,7 +147,7 @@ class InfluxService:
             )
             points.append(p)
 
-        logger.info(
+        logger.debug(
             f"[INFLUXDB] Batch analysis — total_rows={len(df)}, "
             f"skipped_outside_retention={skipped}, queued_to_write={len(points)}"
         )
@@ -182,7 +183,7 @@ class InfluxService:
             logger.error(f"[INFLUXDB] query_history rejected — {e}")
             return []
         days = max(1, int(days))
-        logger.info(
+        logger.debug(
             f"[INFLUXDB] query_history — symbol={symbol}, range=last {days}d, "
             f"measurement=market_data"
         )
@@ -236,7 +237,7 @@ class InfluxService:
             logger.error(f"[INFLUXDB] has_recent_data rejected — {e}")
             return False
         within_hours = max(1, int(within_hours))
-        logger.info(
+        logger.debug(
             f"[INFLUXDB] has_recent_data — symbol={symbol}, "
             f"checking last {within_hours}h ..."
         )
@@ -312,15 +313,16 @@ class InfluxService:
             return False
 
     def query_simulation_states(self, env: str) -> List[dict]:
-        """Return all live (non-deleted) simulations for the given env, newest first."""
+        """Return all live (non-deleted) simulations for the given env (or all envs), newest first."""
         try:
-            env = self._validate_sim_env(env)
+            if env not in _VALID_SIM_ENV_READ:
+                raise ValueError(f"Invalid simulation env: {env!r}")
+            env_filter = "" if env == "all" else f'  |> filter(fn: (r) => r.env == "{env}")\n'
             query = f"""
 from(bucket: "{Config.INFLUXDB_BUCKET}")
   |> range(start: -365d)
   |> filter(fn: (r) => r._measurement == "simulation_state")
-  |> filter(fn: (r) => r.env == "{env}")
-  |> filter(fn: (r) => r._field == "state_json")
+{env_filter}  |> filter(fn: (r) => r._field == "state_json")
   |> last()
   |> filter(fn: (r) => r._value != "")
   |> sort(columns: ["_time"], desc: true)
@@ -331,6 +333,9 @@ from(bucket: "{Config.INFLUXDB_BUCKET}")
                 for record in table.records:
                     try:
                         state = json.loads(record.get_value())
+                        # Inject the env tag so the frontend can label cross-env results
+                        if "env" not in state:
+                            state["env"] = record.values.get("env", env)
                         results.append(state)
                     except Exception as exc:
                         logger.debug(
@@ -412,7 +417,7 @@ class ForecastStore:
         s_str = f"{sarima_d1:.2f}"  if sarima_d1  is not None else "N/A"
         r_str = f"{rf_d1:.2f}"      if rf_d1       is not None else "N/A"
         try:
-            logger.info(
+            logger.debug(
                 f"[RL] write_forecast_record — {symbol} @ last_price=${last_price:.2f} | "
                 f"p_d1={p_str}, s_d1={s_str}, r_d1={r_str} | "
                 f"w=[{w_prophet:.3f},{w_sarima:.3f},{w_rf:.3f}]"
@@ -659,7 +664,7 @@ class ForecastStore:
                 logger.warning(
                     f"[RL] query_model_accuracy error for {symbol}/{model}: {e}"
                 )
-        logger.info(f"[RL] query_model_accuracy — {symbol}: {result}")
+        logger.debug(f"[RL] query_model_accuracy — {symbol}: {result}")
         return result
 
     def query_ensemble_mae(self, symbol: str, lookback_days: int = 90) -> Dict[str, dict]:
@@ -698,7 +703,7 @@ class ForecastStore:
                         }
             except Exception as e:
                 logger.warning(f"[RL] query_ensemble_mae error for {symbol}/{model}: {e}")
-        logger.info(f"[RL] query_ensemble_mae — {symbol}: {result}")
+        logger.debug(f"[RL] query_ensemble_mae — {symbol}: {result}")
         return result
 
 
@@ -736,7 +741,7 @@ class YFinanceService:
             return pd.DataFrame()
 
         ticker = self._to_yf_symbol(symbol)
-        logger.info(
+        logger.debug(
             f"[YFINANCE] fetch_history — ticker={ticker}, period={period}, "
             f"interval=1d, auto_adjust=True, timeout=20s"
         )
@@ -797,7 +802,7 @@ class YFinanceService:
             return {}
 
         ticker = self._to_yf_symbol(symbol)
-        logger.info(f"[YFINANCE] fetch_info — ticker={ticker}")
+        logger.debug(f"[YFINANCE] fetch_info — ticker={ticker}")
 
         try:
             info       = yf.Ticker(ticker).info
@@ -860,7 +865,7 @@ class YFinanceService:
             return 0.0
 
         ticker = self._to_yf_symbol(symbol)
-        logger.info(f"[YFINANCE] get_live_price — ticker={ticker}")
+        logger.debug(f"[YFINANCE] get_live_price — ticker={ticker}")
 
         try:
             t     = yf.Ticker(ticker)
@@ -901,7 +906,7 @@ class DataCleaner:
             return df
 
         input_rows = len(df)
-        logger.info(
+        logger.debug(
             f"[CLEANER] clean() — input: {input_rows} rows | "
             f"close range: ${float(df['Close'].min()):.2f} – ${float(df['Close'].max()):.2f}"
         )
@@ -914,9 +919,9 @@ class DataCleaner:
         after_nan_drop = len(df)
         nan_removed    = input_rows - after_nan_drop
         if nan_removed:
-            logger.info(f"[CLEANER] NaN/zero Close rows removed: {nan_removed}")
+            logger.debug(f"[CLEANER] NaN/zero Close rows removed: {nan_removed}")
         else:
-            logger.info("[CLEANER] NaN/zero check — 0 rows removed (all Close values valid)")
+            logger.debug("[CLEANER] NaN/zero check — 0 rows removed (all Close values valid)")
 
         if df.empty:
             logger.warning("[CLEANER] DataFrame empty after NaN/zero drop — returning empty")
@@ -930,11 +935,11 @@ class DataCleaner:
         mask  = (df["Close"] >= lower) & (df["Close"] <= upper)
         removed = int((~mask).sum())
         if removed:
-            logger.info(
+            logger.debug(
                 f"[CLEANER] Outlier rows removed (>4σ from 30d rolling median): {removed}"
             )
         else:
-            logger.info(
+            logger.debug(
                 "[CLEANER] Outlier check — 0 rows removed (all within 4σ rolling bands)"
             )
         df = df[mask]
@@ -970,7 +975,7 @@ class DataCleaner:
 
             after_ffill = len(df)
             synthetic   = after_ffill - after_outlier
-            logger.info(
+            logger.debug(
                 f"[CLEANER] Gap-fill (bdate_range ffill) — "
                 f"rows before={after_outlier}, after={after_ffill} "
                 f"(+{synthetic} synthetic rows; price ffill, volume=0 on synthetics)"
@@ -989,7 +994,7 @@ class DataCleaner:
         if "High" in df.columns and "Low" in df.columns:
             df["High"] = df[["High", "Close"]].max(axis=1)
             df["Low"]  = df[["Low",  "Close"]].min(axis=1)
-            logger.info("[CLEANER] OHLC integrity enforced — High≥Close≥Low corrected")
+            logger.debug("[CLEANER] OHLC integrity enforced — High≥Close≥Low corrected")
 
         logger.info(
             f"[CLEANER] ✓ clean() complete — output: {len(df)} rows "
@@ -1004,7 +1009,7 @@ class DataCleaner:
             logger.warning("[CLEANER] to_history_list() — empty DataFrame, returning []")
             return []
 
-        logger.info(f"[CLEANER] to_history_list() — converting {len(df)} rows to dicts")
+        logger.debug(f"[CLEANER] to_history_list() — converting {len(df)} rows to dicts")
         out = []
         for ts, row in df.iterrows():
             out.append({
@@ -1058,7 +1063,7 @@ class SerpService:
             )
             return {"news_results": [], "markets": {}}
 
-        logger.info(
+        logger.debug(
             f"[SERP] fetch_data — query='{query}', engine=google_finance, timeout=25s"
         )
         params = {
@@ -1089,7 +1094,7 @@ class SerpService:
             }
 
         except Exception as e:
-            logger.error(f"[SERP] ✗ fetch_data error for '{query}': {e}")
+            logger.warning(f"[SERP] fetch_data failed ('{query}'): {e} → fallback: 0 articles, empty markets")
             return {"news_results": [], "markets": {}}
 
 
@@ -1274,7 +1279,7 @@ class AnalystJuryService:
         if not api_key:
             raise ValueError(f"{provider_label} API key not configured")
 
-        logger.info(
+        logger.debug(
             f"[{provider_label}] POST → {base_url} | "
             f"model={model}, max_tokens={max_tokens}, temperature=0.65, "
             f"system_chars={len(system)}, user_chars={len(user)}"
@@ -1298,7 +1303,7 @@ class AnalystJuryService:
             resp.raise_for_status()
             content = resp.json()["choices"][0]["message"]["content"].strip()
 
-        logger.info(
+        logger.debug(
             f"[{provider_label}] ✓ Response — model={model}, "
             f"response_chars={len(content)}, "
             f"http_status={resp.status_code}"
@@ -1318,7 +1323,7 @@ class AnalystJuryService:
     async def _call_groq(
         self, model: str, system: str, user: str, max_tokens: int = 320
     ) -> str:
-        logger.info(
+        logger.debug(
             f"[GROQ] _call_groq — model={model}, max_tokens={max_tokens}"
         )
         result = await self._call_openai_compatible(
@@ -1330,7 +1335,7 @@ class AnalystJuryService:
             provider_label="GROQ",
             max_tokens=max_tokens,
         )
-        logger.info(
+        logger.debug(
             f"[GROQ] ✓ _call_groq complete — model={model}, "
             f"response_chars={len(result)}"
         )
@@ -1344,7 +1349,7 @@ class AnalystJuryService:
     def _parse_analyst_response(raw: str, persona_id: str = "?") -> dict:
         import json
 
-        logger.info(
+        logger.debug(
             f"[JURY/{persona_id}] _parse_analyst_response — "
             f"raw_chars={len(raw)}, "
             f"has_think_block={'yes' if '<think>' in raw else 'no'}"
@@ -1354,7 +1359,7 @@ class AnalystJuryService:
         if "<think>" in raw:
             if "</think>" in raw:
                 cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-                logger.info(
+                logger.debug(
                     f"[JURY/{persona_id}] <think> block stripped — "
                     f"remaining_chars={len(cleaned)}"
                 )
@@ -1387,7 +1392,7 @@ class AnalystJuryService:
             if end != -1:
                 parsed = json.loads(cleaned[start: end + 1])
                 if "rating" in parsed:
-                    logger.info(
+                    logger.debug(
                         f"[JURY/{persona_id}] ✓ Parse path: PRIMARY (brace-depth JSON) — "
                         f"rating={parsed.get('rating')}, confidence={parsed.get('confidence')}"
                     )
@@ -1402,7 +1407,7 @@ class AnalystJuryService:
         try:
             parsed = json.loads(cleaned)
             if "rating" in parsed:
-                logger.info(
+                logger.debug(
                     f"[JURY/{persona_id}] ✓ Parse path: SECONDARY (full-string JSON) — "
                     f"rating={parsed.get('rating')}, confidence={parsed.get('confidence')}"
                 )
@@ -1438,7 +1443,7 @@ class AnalystJuryService:
             "note":       note,
             "confidence": min(max(confidence, 10), 95),
         }
-        logger.info(
+        logger.debug(
             f"[JURY/{persona_id}] Last-resort result — "
             f"rating={result['rating']}, confidence={result['confidence']}"
         )
@@ -1464,7 +1469,7 @@ class AnalystJuryService:
             f"provider={persona['provider']}, model={model_used}, "
             f"max_tokens={max_tok}, title='{persona['title']}' ──"
         )
-        logger.info(
+        logger.debug(
             f"[JURY/{persona['id']}] Context sent — "
             f"market_ctx_chars={len(market_ctx)}, total_prompt_chars={len(user_prompt)}"
         )
@@ -1475,7 +1480,7 @@ class AnalystJuryService:
             else:
                 raise ValueError(f"Unknown provider: {persona['provider']}")
 
-            logger.info(
+            logger.debug(
                 f"[JURY/{persona['id']}] ✓ Raw response received — "
                 f"model={model_used}, raw_chars={len(raw)}"
             )

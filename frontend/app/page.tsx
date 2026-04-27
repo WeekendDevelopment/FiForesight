@@ -13,6 +13,8 @@ import {
 } from 'lucide-react';
 import ModelWeightBar   from '../components/ModelWeightBar';
 import TrendingSparklines from '../components/TrendingSparklines';
+import MonteCarloFanChart from '../components/MonteCarloFanChart';
+import MonteCarloProbabilitySurface from '../components/MonteCarloProbabilitySurface';
 import { buildTheme }    from '../lib/theme';
 import ConfidenceBadge   from '../components/ConfidenceBadge';
 import { ChartSkeleton, SidebarSkeleton } from '../components/Skeletons';
@@ -293,6 +295,29 @@ export default function QuantumDashboard() {
                             );
                           })}
                         </Box>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {/* ── Monte Carlo GBM ──────────────────────────────────── */}
+                  {prediction.monteCarlo && (
+                    <Card>
+                      <CardContent>
+                        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5 }}>
+                          <Typography variant="overline" sx={{ opacity: 0.5 }}>
+                            Monte Carlo Simulation
+                          </Typography>
+                          <MonteCarloProbabilitySurface
+                            priceRangeByDay={prediction.monteCarlo.price_range_by_day}
+                            currentPrice={parseFloat(prediction.currentPrice)}
+                            symbol={prediction.symbol}
+                          />
+                        </Stack>
+                        <MonteCarloFanChart
+                          monteCarlo={prediction.monteCarlo}
+                          currentPrice={parseFloat(prediction.currentPrice)}
+                          symbol={prediction.symbol}
+                        />
                       </CardContent>
                     </Card>
                   )}
