@@ -86,6 +86,7 @@ interface Holding {
 
 interface SimulationState {
   id:          string;
+  env?:        'local' | 'preview' | 'live';
   startDate:   string;
   budget:      number;
   riskLevel:   string;
@@ -520,7 +521,7 @@ export default function SimulationPage() {
       deletedSims.current.add(simId);
       const pending = pendingSaves.current.get(simId) ?? Promise.resolve();
       void pending.then(() =>
-        axios.delete(`/api/simulation/state/${simId}?env=${SIM_ENV}`)
+        axios.delete(`/api/simulation/state/${simId}?env=${simulation.env ?? SIM_ENV}`)
           .then(() => setSavedSims(prev => prev.filter(s => s.id !== simId)))
           .catch(() => { /* silent */ })
       );
@@ -565,6 +566,8 @@ export default function SimulationPage() {
         allocationPct:  BUDGET > 0 ? Math.round((shares * price) / BUDGET * 100) : 0,
         allocationUsd:  parseFloat((shares * price).toFixed(2)),
         shares,
+        var_95:         data.monteCarlo?.var_95 ?? null,
+        prob_gain:      data.monteCarlo?.prob_gain ?? null,
       }]);
       setAddTicker('');
     } catch {
@@ -627,7 +630,7 @@ export default function SimulationPage() {
             </Stack>
             <Stack spacing={1}>
               {savedSims.map(sim => {
-                const simEnv = (sim as any).env as string | undefined;
+                const simEnv = sim.env ?? SIM_ENV;
                 const envColor = simEnv === 'live' ? '#10b981' : simEnv === 'preview' ? '#f59e0b' : '#64748b';
                 return (
                 <Stack key={sim.id} direction="row" alignItems="center"
@@ -649,7 +652,7 @@ export default function SimulationPage() {
                   </Box>
                   <Stack direction="row" spacing={0.5}>
                     <Button size="small" variant="outlined"
-                      onClick={() => { setSimulation(sim); setPhase('race'); }}
+                      onClick={() => { setSimulation({ ...sim, env: simEnv as SimulationState['env'] }); setPhase('race'); }}
                       sx={{ borderColor: 'primary.main', color: 'primary.main', fontWeight: 700, fontSize: 11 }}
                     >
                       Resume
@@ -659,7 +662,7 @@ export default function SimulationPage() {
                         deletedSims.current.add(sim.id);
                         const pending = pendingSaves.current.get(sim.id) ?? Promise.resolve();
                         void pending.then(() =>
-                          axios.delete(`/api/simulation/state/${sim.id}?env=${SIM_ENV}`).catch(() => {})
+                          axios.delete(`/api/simulation/state/${sim.id}?env=${simEnv}`).catch(() => {})
                         );
                         setSavedSims(prev => prev.filter(s => s.id !== sim.id));
                       }}

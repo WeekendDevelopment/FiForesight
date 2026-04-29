@@ -616,7 +616,9 @@ def run_monte_carlo(
     """
     Geometric Brownian Motion Monte Carlo price path simulation.
 
-    S_t = S_0 × exp((μ - σ²/2)×t + σ×√t×Z),  Z ~ N(0,1)
+    Daily log-returns are simulated as:
+        Δlog(S_t) = (μ - σ²/2) + σ·Z_t,  Z_t ~ N(0,1)
+    and accumulated with np.cumsum to form each GBM path (Δt = 1 trading day).
 
     μ and σ are estimated from daily log-returns of closes.
     Uses np.random.default_rng(seed=42) for reproducibility.
@@ -638,8 +640,8 @@ def run_monte_carlo(
         Z   = rng.standard_normal((n_sims, steps))
 
         # GBM via cumulative log-returns (Δt = 1 trading day).
-        # Each column is an independent daily increment so paths are
-        # temporally consistent (Brownian bridge continuity preserved).
+        # Each column is an independent daily increment; np.cumsum builds
+        # temporally consistent Brownian-motion trajectories.
         drift            = mu - 0.5 * sigma ** 2
         step_log_returns = drift + sigma * Z          # per-step Δ log price
         log_paths        = np.cumsum(step_log_returns, axis=1)
