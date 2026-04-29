@@ -2,8 +2,8 @@
 
 import React, { useState } from 'react';
 import {
-  ComposedChart, Line, XAxis, YAxis, CartesianGrid,
-  ResponsiveContainer, ReferenceLine, Tooltip, ReferenceArea,
+  ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid,
+  ResponsiveContainer, ReferenceLine, Tooltip,
 } from 'recharts';
 import { Box, Button, Chip, Collapse, IconButton, Paper, Stack, Tooltip as MuiTooltip, Typography } from '@mui/material';
 import { HelpCircle } from 'lucide-react';
@@ -50,35 +50,31 @@ function FanTooltip({ active, payload, label }: {
   if (!active || !payload?.length) return null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const get = (key: string) => payload.find((p: any) => p.dataKey === key)?.value as number | undefined;
-  const p50v = get('p50');
   const p10v = get('p10');
+  const p25v = get('p25');
+  const p50v = get('p50');
+  const p75v = get('p75');
   const p90v = get('p90');
   return (
     <Paper sx={{
       p: 1.25, background: '#0d1117',
-      border: '1px solid rgba(0,242,255,0.2)', fontSize: 12, minWidth: 170,
+      border: '1px solid rgba(0,242,255,0.2)', fontSize: 12, minWidth: 190,
     }}>
       <Typography variant="caption" fontWeight={700} display="block" sx={{ mb: 0.75, opacity: 0.6 }}>{label}</Typography>
-      {p90v != null && (
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.25 }}>
-          <Typography variant="caption" sx={{ color: '#00ffa3' }}>🐂 Optimistic</Typography>
-          <Typography variant="caption" sx={{ color: '#00ffa3', fontWeight: 700 }}>${p90v.toFixed(2)}</Typography>
+      {[
+        { val: p90v, label: '🐂 Best 10%',    color: '#00ffa3' },
+        { val: p75v, label: '   75th pctl',    color: 'rgba(0,242,255,0.6)' },
+        { val: p50v, label: '📊 Most Likely',  color: '#00f2ff' },
+        { val: p25v, label: '   25th pctl',    color: 'rgba(0,242,255,0.6)' },
+        { val: p10v, label: '🐻 Worst 10%',   color: '#ff6b6b' },
+      ].map(({ val, label: lbl, color }) => val != null && (
+        <Box key={lbl} sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.25 }}>
+          <Typography variant="caption" sx={{ color }}>{lbl}</Typography>
+          <Typography variant="caption" sx={{ color, fontWeight: 700 }}>${val.toFixed(2)}</Typography>
         </Box>
-      )}
-      {p50v != null && (
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.25 }}>
-          <Typography variant="caption" sx={{ color: '#00f2ff' }}>📊 Most Likely</Typography>
-          <Typography variant="caption" sx={{ color: '#00f2ff', fontWeight: 700 }}>${p50v.toFixed(2)}</Typography>
-        </Box>
-      )}
-      {p10v != null && (
-        <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-          <Typography variant="caption" sx={{ color: '#ff6b6b' }}>🐻 Pessimistic</Typography>
-          <Typography variant="caption" sx={{ color: '#ff6b6b', fontWeight: 700 }}>${p10v.toFixed(2)}</Typography>
-        </Box>
-      )}
+      ))}
       <Typography variant="caption" display="block" sx={{ mt: 0.75, opacity: 0.4, fontSize: 10 }}>
-        Each cyan line = 1 simulated price path
+        Shaded bands = likely price range · Cyan lines = sample paths
       </Typography>
     </Paper>
   );
@@ -151,19 +147,28 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol }:
 
   const { price_range_by_day, paths_sample, n_sims, prob_gain, var_95, p10, p50, p90 } = monteCarlo;
 
+  // Build chart data with stacked band fields for the percentile envelope.
+  // Recharts stacked areas render bottom-up, so we split into:
+  //   bandBase       = p10                (transparent — just the baseline)
+  //   bandOuterLow   = p25 − p10          (outer band, lower half)
+  //   bandInner      = p75 − p25          (inner band — "likely" range)
+  //   bandOuterHigh  = p90 − p75          (outer band, upper half)
   const data: FanPoint[] = [
     {
       day: 'Now',
-      p10: currentPrice,
-      p90: currentPrice,
-      p50: currentPrice,
+      p10: currentPrice, p25: currentPrice, p50: currentPrice,
+      p75: currentPrice, p90: currentPrice,
+      bandBase: currentPrice, bandOuterLow: 0, bandInner: 0, bandOuterHigh: 0,
       ...Object.fromEntries(paths_sample.map((_, i) => [`path${i}`, currentPrice])),
     },
     ...price_range_by_day.map((d, idx) => ({
       day: `D${d.day}`,
-      p10: d.p10,
-      p90: d.p90,
-      p50: d.p50,
+      p10: d.p10, p25: d.p25, p50: d.p50,
+      p75: d.p75, p90: d.p90,
+      bandBase: d.p10,
+      bandOuterLow: d.p25 - d.p10,
+      bandInner: d.p75 - d.p25,
+      bandOuterHigh: d.p90 - d.p75,
       ...Object.fromEntries(paths_sample.map((path, i) => [`path${i}`, path[idx]])),
     })),
   ];
@@ -175,12 +180,6 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol }:
 
   // Final day percentile values (for end labels)
   const last = price_range_by_day[price_range_by_day.length - 1];
-
-  // Gain zone: above currentPrice; Loss zone: below currentPrice
-  const gainZoneTop    = yMax;
-  const gainZoneBottom = currentPrice;
-  const lossZoneTop    = currentPrice;
-  const lossZoneBottom = yMin;
 
   const CHART_H = 240;
 
@@ -271,9 +270,9 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol }:
             </Box>
             <Stack direction="row" spacing={0.75} flexWrap="wrap">
               {[
-                { color: '#00ffa3', label: '🐂 Optimistic' },
-                { color: '#00f2ff', label: '📊 Most Likely' },
-                { color: '#ff6b6b', label: '🐻 Pessimistic' },
+                { color: '#00ffa3', label: '🐂 Best 10%' },
+                { color: '#00f2ff', label: '📊 Likely Range' },
+                { color: '#ff6b6b', label: '🐻 Worst 10%' },
               ].map(({ color, label }) => (
                 <Chip
                   key={label}
@@ -299,30 +298,39 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol }:
                 />
                 <Tooltip content={<FanTooltip />} />
 
-                {/* Gain zone — green tint above current price */}
-                <ReferenceArea
-                  y1={gainZoneBottom}
-                  y2={gainZoneTop}
-                  fill="#00ffa3"
-                  fillOpacity={0.04}
-                  strokeOpacity={0}
+                {/* ── Percentile envelope bands (stacked areas) ────────────── */}
+                {/* Transparent baseline up to p10 */}
+                <Area
+                  type="monotone" dataKey="bandBase" stackId="envelope"
+                  fill="transparent" stroke="none"
+                  isAnimationActive={false} legendType="none" tooltipType="none"
                 />
-                {/* Loss zone — red tint below current price */}
-                <ReferenceArea
-                  y1={lossZoneBottom}
-                  y2={lossZoneTop}
-                  fill="#ff6b6b"
-                  fillOpacity={0.04}
-                  strokeOpacity={0}
+                {/* Outer band lower: p10 → p25 */}
+                <Area
+                  type="monotone" dataKey="bandOuterLow" stackId="envelope"
+                  fill="#00f2ff" fillOpacity={0.06} stroke="none"
+                  isAnimationActive={false} legendType="none" tooltipType="none"
+                />
+                {/* Inner band: p25 → p75 (most likely range) */}
+                <Area
+                  type="monotone" dataKey="bandInner" stackId="envelope"
+                  fill="#00f2ff" fillOpacity={0.14} stroke="none"
+                  isAnimationActive={false} legendType="none" tooltipType="none"
+                />
+                {/* Outer band upper: p75 → p90 */}
+                <Area
+                  type="monotone" dataKey="bandOuterHigh" stackId="envelope"
+                  fill="#00f2ff" fillOpacity={0.06} stroke="none"
+                  isAnimationActive={false} legendType="none" tooltipType="none"
                 />
 
-                {/* P90 optimistic bound */}
+                {/* P90 optimistic bound — dashed line at outer edge */}
                 <Line
                   type="monotone" dataKey="p90"
                   stroke="#00ffa3" strokeWidth={1} strokeOpacity={0.4} strokeDasharray="4 2"
                   dot={false} isAnimationActive={false} legendType="none" tooltipType="none"
                 />
-                {/* P10 pessimistic bound */}
+                {/* P10 pessimistic bound — dashed line at outer edge */}
                 <Line
                   type="monotone" dataKey="p10"
                   stroke="#ff6b6b" strokeWidth={1} strokeOpacity={0.4} strokeDasharray="4 2"
