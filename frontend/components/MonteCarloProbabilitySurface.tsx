@@ -6,6 +6,8 @@ import { Box, Button, CircularProgress, IconButton, Modal, Paper, Typography } f
 import { X } from 'lucide-react';
 import type { PlotParams } from 'react-plotly.js';
 
+// react-plotly.js exception: Recharts has no 3D surface capability, so this
+// component uses Plotly via dynamic import. See CLAUDE.md "Key Decisions" for details.
 // Load Plotly only on the client — it doesn't support SSR
 const Plot = dynamic<PlotParams>(
   () => import('react-plotly.js').then(m => m.default as React.ComponentType<PlotParams>),
@@ -186,11 +188,12 @@ export default function MonteCarloProbabilitySurface({
             Monte Carlo Probability Surface — {symbol}
           </Typography>
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
-            Each &quot;mountain&quot; shows where prices are most likely to land on that day —
-            higher peaks = more probable. The surface fans wider over time as uncertainty grows.
+            Think of each &quot;mountain&quot; as a bell curve on its side — the taller the peak, the
+            more likely the price lands there on that day. The surface fans wider over time because
+            the further out you look, the less certain the prediction becomes.
           </Typography>
           <Typography variant="caption" sx={{ fontSize: 10, opacity: 0.45, display: 'block', mb: 1.5 }}>
-            Drag to rotate · Scroll to zoom · Based on 1,000 GBM simulations
+            Drag to rotate · Scroll to zoom · Based on 1,000 simulated price paths
           </Typography>
 
           <Plot
@@ -203,10 +206,10 @@ export default function MonteCarloProbabilitySurface({
           {/* How to read guide */}
           <Box sx={{ mt: 1.5, display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
             {[
-              { dot: '#fde047', label: 'Yellow peak', desc: 'Highest probability price — most paths cluster here' },
-              { dot: '#4ade80', label: 'Green slopes', desc: 'Reasonably likely prices — moderate probability' },
-              { dot: '#6366f1', label: 'Blue/purple base', desc: 'Tail outcomes — possible but unlikely' },
-              { dot: '#f59e0b', label: 'Wider fan = more time', desc: 'Uncertainty grows as the forecast horizon extends' },
+              { dot: '#fde047', label: 'Yellow peak', desc: 'The price the stock is most likely to hit — like the bullseye on a dartboard' },
+              { dot: '#4ade80', label: 'Green slopes', desc: 'Prices that are fairly likely — not the best guess, but still reasonable' },
+              { dot: '#6366f1', label: 'Blue/purple edges', desc: 'Unlikely but possible prices — rare scenarios, not impossible' },
+              { dot: '#f59e0b', label: 'Wider = less certain', desc: 'The further into the future, the harder it is to predict — so the range gets wider' },
             ].map(({ dot, label, desc }) => (
               <Box key={label} sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.75, flex: '1 1 45%' }}>
                 <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: dot, mt: 0.3, flexShrink: 0 }} />

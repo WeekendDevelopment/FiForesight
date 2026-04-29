@@ -88,14 +88,23 @@ function FanTooltip({ active, payload, label }: {
 
 function GainProbBar({ prob_gain }: { prob_gain: number }) {
   const isGain = prob_gain >= 50;
+  const sentiment = prob_gain >= 65 ? 'Odds favor a gain'
+                  : prob_gain >= 50 ? 'Slightly favors gain'
+                  : prob_gain >= 35 ? 'Slightly favors loss'
+                  :                   'Odds favor a loss';
+  const sentimentColor = prob_gain >= 65 ? '#00ffa3'
+                       : prob_gain >= 50 ? '#4ade80'
+                       : prob_gain >= 35 ? '#f59e0b'
+                       :                   '#ff6b6b';
   return (
     <MuiTooltip
-      title={`${prob_gain.toFixed(1)}% of simulated paths end above the current price (gain scenario). ${(100 - prob_gain).toFixed(1)}% end below (loss scenario).`}
+      title={`${prob_gain.toFixed(1)}% of 1,000 simulated paths end above today's price. ${sentiment}.`}
       arrow
     >
       <Box sx={{ flex: 1, minWidth: 140 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.25 }}>
           <Typography variant="caption" sx={{ fontSize: 10, color: '#00ffa3' }}>Gain {prob_gain.toFixed(0)}%</Typography>
+          <Typography variant="caption" sx={{ fontSize: 10, color: sentimentColor, fontWeight: 600 }}>{sentiment}</Typography>
           <Typography variant="caption" sx={{ fontSize: 10, color: '#ff6b6b' }}>Loss {(100 - prob_gain).toFixed(0)}%</Typography>
         </Box>
         <Box sx={{ position: 'relative', height: 6, borderRadius: 3, overflow: 'hidden', background: '#ff6b6b44' }}>
@@ -138,7 +147,7 @@ function EndLabels({ p10, p50, p90, yMin, yMax, chartH }: {
 
 export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol }: Props) {
   const [visible, setVisible] = useState(false);
-  const [guideOpen, setGuideOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(true);
 
   const { price_range_by_day, paths_sample, n_sims, prob_gain, var_95, p10, p50, p90 } = monteCarlo;
 
@@ -180,7 +189,7 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol }:
       {/* Persistent "How to read" guide — always visible */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.75 }}>
         <Typography variant="caption" sx={{ fontSize: 10, opacity: 0.45, fontStyle: 'italic' }}>
-          Monte Carlo: 1,000 simulated price paths using GBM
+          Monte Carlo: 1,000 &quot;what if?&quot; scenarios for this stock&apos;s price over the next 5 days
         </Typography>
         <MuiTooltip title="Show/hide guide" arrow>
           <IconButton size="small" aria-label="Toggle Monte Carlo guide" onClick={() => setGuideOpen(o => !o)} sx={{ p: 0.25, color: guideOpen ? '#7c4dff' : 'rgba(124,77,255,0.4)' }}>
@@ -194,12 +203,12 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol }:
           <Typography sx={{ fontSize: 10, fontWeight: 700, color: '#7c4dff', mb: 0.75 }}>How to read Monte Carlo charts</Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0.75 }}>
             {[
-              { icon: '📈', term: 'Gain % bar', desc: 'How many simulated paths ended above today\'s price — higher = more likely to profit.' },
-              { icon: '📊', term: 'MC Fan Chart', desc: 'Each cyan line = one simulated future. The bold line is the median (most likely). The fan spreads wider over time because uncertainty grows.' },
-              { icon: '🐂🐻', term: 'Bull / Bear case', desc: 'Top 10% of paths (Bull) and bottom 10% (Bear). 80% of paths land between these lines.' },
-              { icon: '⚠️', term: 'VaR 95', desc: 'Value at Risk: the maximum expected loss in 95% of scenarios over 5 days. Think of it as a "worst normal day" estimate.' },
-              { icon: '🏔️', term: '3D Surface', desc: 'Each mountain shows where prices are most likely on that day. Taller peak = higher probability. The surface fans out because uncertainty grows.' },
-              { icon: '🎲', term: 'GBM model', desc: 'Paths follow Geometric Brownian Motion: drift (avg daily return) + volatility (daily std dev) estimated from the full available price history.' },
+              { icon: '📈', term: 'Gain % bar', desc: 'Out of 1,000 simulated futures, this is how many ended above today\'s price. Above 50%? The odds lean in your favor.' },
+              { icon: '📊', term: 'Fan Chart', desc: 'Each faint line is one possible future for the stock. The bold cyan line is the middle outcome — where things most likely land. The fan widens because the future gets harder to predict.' },
+              { icon: '🐂🐻', term: 'Bull / Bear case', desc: 'The best 10% of outcomes (Bull) and the worst 10% (Bear). 80% of all simulated paths fall between these two lines — that\'s your likely range.' },
+              { icon: '⚠️', term: 'VaR 95 (Risk gauge)', desc: 'Stands for "Value at Risk." If you held this stock for 5 days, this is the most you\'d expect to lose in 95 out of 100 scenarios. Lower = safer.' },
+              { icon: '🏔️', term: '3D Surface', desc: 'A 3D view where mountain peaks show the most likely price for each day. Taller peak = higher chance of landing there. Open it from the "3D Surface" button.' },
+              { icon: '🎲', term: 'How it works', desc: 'The simulation uses the stock\'s real historical data (daily returns and volatility) to generate 1,000 realistic random price paths — like rolling the dice 1,000 times.' },
             ].map(({ icon, term, desc }) => (
               <Box key={term} sx={{ display: 'flex', gap: 0.5, alignItems: 'flex-start' }}>
                 <Typography sx={{ fontSize: 11, lineHeight: 1.2, flexShrink: 0 }}>{icon}</Typography>
@@ -229,10 +238,18 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol }:
           {visible ? 'Hide Fan Chart' : 'MC Fan Chart'}
         </Button>
         <GainProbBar prob_gain={prob_gain} />
-        <MuiTooltip title="Value at Risk (95%): the maximum expected loss in 95% of scenarios over 5 days." arrow>
-          <Typography variant="caption" color="text.secondary" sx={{ cursor: 'help', textDecoration: 'underline dotted' }}>
-            VaR95 ${var_95.toFixed(2)}
-          </Typography>
+        <MuiTooltip
+          title={`VaR 95 = $${var_95.toFixed(2)} per share. In 95 out of 100 simulated scenarios, you wouldn't lose more than this amount per share over 5 days. Think of it as your "reasonable worst case."`}
+          arrow
+        >
+          <Box sx={{ cursor: 'help', textAlign: 'center' }}>
+            <Typography variant="caption" color="text.secondary" sx={{ textDecoration: 'underline dotted' }}>
+              VaR95 ${var_95.toFixed(2)}/share
+            </Typography>
+            <Typography variant="caption" display="block" sx={{ fontSize: 9, opacity: 0.45 }}>
+              Max likely loss per share
+            </Typography>
+          </Box>
         </MuiTooltip>
       </Box>
 
@@ -370,28 +387,35 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol }:
           {/* Summary row — Bull / Base / Bear */}
           <Stack direction="row" spacing={1} sx={{ mt: 1.5, flexWrap: 'wrap', gap: 0.75 }}>
             {[
-              { icon: '🐂', label: 'Bull Case', val: p90, color: '#00ffa3', tip: 'Top 10% of scenarios — strong upside' },
-              { icon: '📊', label: 'Base Case', val: p50, color: '#00f2ff', tip: 'Median outcome — most paths land here' },
-              { icon: '🐻', label: 'Bear Case', val: p10, color: '#ff6b6b', tip: 'Bottom 10% of scenarios — worst expected move' },
-            ].map(({ icon, label, val, color, tip }) => (
-              <MuiTooltip key={label} title={tip} arrow>
-                <Box sx={{
-                  flex: 1, minWidth: 80, textAlign: 'center',
-                  p: 0.75, borderRadius: 1,
-                  background: `${color}0d`,
-                  border: `1px solid ${color}22`,
-                  cursor: 'help',
-                }}>
-                  <Typography sx={{ fontSize: 11 }}>{icon} {label}</Typography>
-                  <Typography sx={{ fontSize: 13, fontWeight: 800, color }}>
-                    ${val.toFixed(2)}
-                  </Typography>
-                  <Typography sx={{ fontSize: 9, opacity: 0.5 }}>
-                    at Day 5
-                  </Typography>
-                </Box>
-              </MuiTooltip>
-            ))}
+              { icon: '🐂', label: 'Best Case', val: p90, color: '#00ffa3', tip: 'If things go really well (top 10% of simulations) — this is a realistic upside target' },
+              { icon: '📊', label: 'Most Likely', val: p50, color: '#00f2ff', tip: 'The middle outcome — half of simulations ended above this, half below. Your best single guess.' },
+              { icon: '🐻', label: 'Worst Case', val: p10, color: '#ff6b6b', tip: 'If things go poorly (bottom 10% of simulations) — a realistic downside to plan for' },
+            ].map(({ icon, label, val, color, tip }) => {
+              const pctChange = ((val - currentPrice) / currentPrice) * 100;
+              const sign = pctChange >= 0 ? '+' : '';
+              return (
+                <MuiTooltip key={label} title={tip} arrow>
+                  <Box sx={{
+                    flex: 1, minWidth: 80, textAlign: 'center',
+                    p: 0.75, borderRadius: 1,
+                    background: `${color}0d`,
+                    border: `1px solid ${color}22`,
+                    cursor: 'help',
+                  }}>
+                    <Typography sx={{ fontSize: 11 }}>{icon} {label}</Typography>
+                    <Typography sx={{ fontSize: 13, fontWeight: 800, color }}>
+                      ${val.toFixed(2)}
+                    </Typography>
+                    <Typography sx={{ fontSize: 9, color, opacity: 0.7 }}>
+                      {sign}{pctChange.toFixed(1)}% from now
+                    </Typography>
+                    <Typography sx={{ fontSize: 9, opacity: 0.4 }}>
+                      at Day 5
+                    </Typography>
+                  </Box>
+                </MuiTooltip>
+              );
+            })}
           </Stack>
         </Paper>
       )}
