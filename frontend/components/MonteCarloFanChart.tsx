@@ -48,13 +48,16 @@ function FanTooltip({ active, payload, label }: {
   label?: string;
 }) {
   if (!active || !payload?.length) return null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const get = (key: string) => payload.find((p: any) => p.dataKey === key)?.value as number | undefined;
-  const p10v = get('p10');
-  const p25v = get('p25');
-  const p50v = get('p50');
-  const p75v = get('p75');
-  const p90v = get('p90');
+  // Read from the data row directly — percentile lines use tooltipType="none"
+  // and p25/p75 aren't rendered as standalone series.
+  const row = payload[0]?.payload as Partial<
+    Record<'p10' | 'p25' | 'p50' | 'p75' | 'p90', number>
+  > | undefined;
+  const p10v = row?.p10;
+  const p25v = row?.p25;
+  const p50v = row?.p50;
+  const p75v = row?.p75;
+  const p90v = row?.p90;
   return (
     <Paper sx={{
       p: 1.25, background: '#0d1117',
@@ -169,14 +172,15 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol }:
       bandOuterLow: d.p25 - d.p10,
       bandInner: d.p75 - d.p25,
       bandOuterHigh: d.p90 - d.p75,
-      ...Object.fromEntries(paths_sample.map((path, i) => [`path${i}`, path[idx]])),
+      ...Object.fromEntries(paths_sample.map((path, i) => [`path${i}`, path[idx] ?? d.p50])),
     })),
   ];
 
   const allP10 = data.map(d => d.p10 as number);
   const allP90 = data.map(d => d.p90 as number);
-  const yMin = Math.min(...allP10) * 0.985;
-  const yMax = Math.max(...allP90) * 1.015;
+  const allPathValues = paths_sample.flat();
+  const yMin = Math.min(...allP10, ...allPathValues) * 0.985;
+  const yMax = Math.max(...allP90, ...allPathValues) * 1.015;
 
   // Final day percentile values (for end labels)
   const last = price_range_by_day[price_range_by_day.length - 1];

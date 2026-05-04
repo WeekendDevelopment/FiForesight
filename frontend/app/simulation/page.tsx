@@ -152,6 +152,10 @@ const SIM_ENV: string = (() => {
 })();
 const SIM_ENV_READ = SIM_ENV === 'local' ? 'all' : SIM_ENV;
 
+// Guards against legacy records that may carry env="all" from cross-env reads.
+const normalizeSimEnv = (env?: string): 'local' | 'preview' | 'live' =>
+  env === 'live' || env === 'preview' || env === 'local' ? env : SIM_ENV as 'local' | 'preview' | 'live';
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function ratingColor(r: string): string {
@@ -521,7 +525,7 @@ export default function SimulationPage() {
       deletedSims.current.add(simId);
       const pending = pendingSaves.current.get(simId) ?? Promise.resolve();
       void pending.then(() =>
-        axios.delete(`/api/simulation/state/${simId}?env=${simulation.env ?? SIM_ENV}`)
+        axios.delete(`/api/simulation/state/${simId}?env=${normalizeSimEnv(simulation.env)}`)
           .then(() => setSavedSims(prev => prev.filter(s => s.id !== simId)))
           .catch(() => { /* silent */ })
       );
@@ -630,7 +634,7 @@ export default function SimulationPage() {
             </Stack>
             <Stack spacing={1}>
               {savedSims.map(sim => {
-                const simEnv = sim.env ?? SIM_ENV;
+                const simEnv = normalizeSimEnv(sim.env);
                 const envColor = simEnv === 'live' ? '#10b981' : simEnv === 'preview' ? '#f59e0b' : '#64748b';
                 return (
                 <Stack key={sim.id} direction="row" alignItems="center"
@@ -652,7 +656,7 @@ export default function SimulationPage() {
                   </Box>
                   <Stack direction="row" spacing={0.5}>
                     <Button size="small" variant="outlined"
-                      onClick={() => { setSimulation({ ...sim, env: simEnv as SimulationState['env'] }); setPhase('race'); }}
+                      onClick={() => { setSimulation({ ...sim, env: simEnv }); setPhase('race'); }}
                       sx={{ borderColor: 'primary.main', color: 'primary.main', fontWeight: 700, fontSize: 11 }}
                     >
                       Resume
@@ -916,8 +920,9 @@ export default function SimulationPage() {
         {/* Portfolio Risk metrics (from Monte Carlo) */}
         {(() => {
           const mcStocks   = active.filter(s => s.prob_gain != null || s.var_95 != null);
-          const bestGain   = mcStocks.length > 0 ? Math.max(...mcStocks.filter(s => s.prob_gain != null).map(s => s.prob_gain!)) : null;
-          const worstGain  = mcStocks.length > 0 ? Math.min(...mcStocks.filter(s => s.prob_gain != null).map(s => s.prob_gain!)) : null;
+          const gainStocks = mcStocks.filter((s): s is typeof s & { prob_gain: number } => s.prob_gain != null);
+          const bestGain   = gainStocks.length > 0 ? Math.max(...gainStocks.map(s => s.prob_gain)) : null;
+          const worstGain  = gainStocks.length > 0 ? Math.min(...gainStocks.map(s => s.prob_gain)) : null;
           // Recompute VaR from current active holdings so removals/edits stay accurate
           const livePortfolioVaR95 = active.reduce(
             (sum, s) => sum + (s.var_95 ?? 0) * effectiveShares(s),
