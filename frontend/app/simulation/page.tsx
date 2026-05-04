@@ -86,7 +86,7 @@ interface Holding {
 
 interface SimulationState {
   id:          string;
-  env?:        'local' | 'preview' | 'live';
+  env?:        'local' | 'preview' | 'live' | 'all';
   startDate:   string;
   budget:      number;
   riskLevel:   string;
@@ -646,7 +646,7 @@ export default function SimulationPage() {
                       <Typography variant="body2" fontWeight={600} noWrap>
                         {sim.riskLevel.charAt(0).toUpperCase() + sim.riskLevel.slice(1)} · {sim.sectors.join(', ')}
                       </Typography>
-                      {simEnv && SIM_ENV_READ === 'all' && (
+                      {simEnv && (
                         <Chip label={simEnv} size="small" sx={{ height: 16, fontSize: 9, fontWeight: 700, bgcolor: `${envColor}22`, color: envColor, border: `1px solid ${envColor}44` }} />
                       )}
                     </Stack>
