@@ -321,6 +321,7 @@ async def _analyze_ticker(
         )
 
         live_price = info.get("current_price") or float(closes[-1])
+        mc         = forecast.get("monte_carlo") or {}
         return {
             "symbol":       symbol,
             "name":         info.get("short_name", symbol),
@@ -328,6 +329,8 @@ async def _analyze_ticker(
             "currentPrice": float(live_price),
             "forecast":     forecast,
             "rsi":          _calc_rsi(closes),
+            "var_95":       mc.get("var_95"),
+            "prob_gain":    mc.get("prob_gain"),
         }
     except Exception as exc:
         logger.error("[SIM] _analyze_ticker(%s) failed: %s", symbol, exc)
@@ -453,6 +456,7 @@ async def suggest_portfolio(
         f       = stock["forecast"]
         verdict = verdicts.get(sym, {})
         shares  = int(alloc_per / price) if price > 0 else 0
+        mc      = f.get("monte_carlo") or {}
 
         suggestions.append({
             "symbol":         sym,
@@ -471,12 +475,23 @@ async def suggest_portfolio(
             "allocationPct":  round(100 / n, 1) if n else 0,
             "allocationUsd":  round(shares * price, 2),
             "shares":         shares,
+            "var_95":         mc.get("var_95"),
+            "prob_gain":      mc.get("prob_gain"),
         })
+
+    # Weighted portfolio VaR: sum of (per-share VaR × shares) across all positions
+    portfolio_var_95 = round(
+        sum(
+            (s.get("var_95") or 0.0) * s.get("shares", 0)
+            for s in suggestions
+        ),
+        2,
+    )
 
     spy_shares = int(budget / spy_price) if spy_price > 0 else 0
 
     return {
-        "suggestions":    suggestions,
+        "suggestions":     suggestions,
         "benchmark": {
             "symbol":        BENCHMARK_SYMBOL,
             "name":          "S&P 500 ETF (SPY)",
@@ -484,10 +499,11 @@ async def suggest_portfolio(
             "allocationUsd": round(spy_shares * spy_price, 2),
             "shares":        spy_shares,
         },
-        "riskLevel":       risk_level,
-        "sectors":         sectors,
-        "budget":          budget,
-        "candidateSource": source,
+        "riskLevel":        risk_level,
+        "sectors":          sectors,
+        "budget":           budget,
+        "candidateSource":  source,
+        "portfolioVaR95":   portfolio_var_95,
     }
 
 

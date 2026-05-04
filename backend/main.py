@@ -117,6 +117,7 @@ class PredictionResponse(BaseModel):
     juryAnalysts:  List[dict]
     modelWeights:  dict
     sentiment:     dict
+    monteCarlo:    Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -332,12 +333,19 @@ async def _run_analyst_jury(
             f"compound={sentiment['compound']:+.3f} [{sentiment['label']}]\n"
         )
 
+    _mc = forecast.get("monte_carlo")
+    mc_line = (
+        f"Monte Carlo (1000 sims, 5d): "
+        f"prob_gain={_mc['prob_gain']:.1f}%, VaR95=${_mc['var_95']:.2f}\n"
+    ) if _mc else ""
+
     ctx = (
         f"Symbol: {symbol} | Price: ${price:.2f} | RSI: {rsi:.1f} | Sector: {sec_str}\n"
         f"Fundamentals: PE={pe_str} | Cap={cap_str} | Div={div_str} | 52w={rng_str}\n"
         f"10-day closes: {price_str}\n"
         f"Forecast 5d → High: ${forecast['high']:.2f}, Low: ${forecast['low']:.2f} "
         f"[Confidence: {forecast.get('conf', 'low')}]\n"
+        f"{mc_line}"
         f"Volatility: {stats.get('ann_volatility_pct', 0):.1f}% ann | "
         f"Slope: {stats.get('trend_slope', 0):.4f}/day | "
         f"vs SMA20: {stats.get('price_vs_sma20_pct', 0):+.2f}%\n"
@@ -388,7 +396,7 @@ async def resolve_past_forecasts(symbol: str) -> None:
     Runs once per /predict request (non-blocking, fire-and-forget).
     """
     try:
-        logger.info(f"[RL] resolve_past_forecasts — starting for {symbol}")
+        logger.debug(f"[RL] resolve_past_forecasts — starting for {symbol}")
 
         records = await asyncio.to_thread(
             forecast_store.query_forecast_records, symbol, 10
@@ -503,7 +511,7 @@ async def resolve_past_forecasts(symbol: str) -> None:
                     if pred_val > 0:
                         err = abs(pred_val - actual_d1)
                         errors_per_model[model_name].append(err)
-                        logger.info(
+                        logger.debug(
                             f"[RL] {symbol}/{model_name}: pred={pred_val:.2f}, "
                             f"actual={actual_d1:.2f}, err={err:.4f} ({target_d1})"
                         )
@@ -514,7 +522,7 @@ async def resolve_past_forecasts(symbol: str) -> None:
                 if e_d1_high > 0 and e_d1_low > 0:
                     hit = 1 if e_d1_low <= actual_d1 <= e_d1_high else 0
                     band_hits.append(hit)
-                    logger.info(
+                    logger.debug(
                         f"[RL] {symbol} band check: actual=${actual_d1:.2f} "
                         f"vs [{e_d1_low:.2f}-{e_d1_high:.2f}] → {'HIT' if hit else 'MISS'}"
                     )
@@ -534,7 +542,7 @@ async def resolve_past_forecasts(symbol: str) -> None:
                     break  # can't find data — stop this record for now
                 err = abs(pred_val - actual_dn)
                 errors_per_horizon[f"ensemble_d{horizon}"].append(err)
-                logger.info(
+                logger.debug(
                     f"[RL] {symbol}/ensemble_d{horizon}: pred={pred_val:.2f}, "
                     f"actual={actual_dn:.2f}, err={err:.4f} ({target_dn})"
                 )
@@ -770,16 +778,16 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     )
 
     # Cache recent rows to InfluxDB (last 29d) for downstream analytics
-    logger.info(f"[STEP-1] [INFLUXDB] Checking cache freshness for {symbol} ...")
+    logger.debug(f"[STEP-1] [INFLUXDB] Checking cache freshness for {symbol} ...")
     has_fresh = await asyncio.to_thread(influx_svc.has_recent_data, symbol)
     if not has_fresh:
-        logger.info(
+        logger.debug(
             "[STEP-1] [INFLUXDB] Cache MISS — "
             "writing last 29d rows to InfluxDB for analytics ..."
         )
         await asyncio.to_thread(influx_svc.write_ohlcv_batch, symbol, df)
     else:
-        logger.info(
+        logger.debug(
             "[STEP-1] [INFLUXDB] Cache HIT — "
             "InfluxDB write SKIPPED (fresh data already present)"
         )
@@ -787,7 +795,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     historical_prices.sort(key=lambda x: x["_time"])
 
     # ── Step 2. Live price ────────────────────────────────────────────────────
-    logger.info(f"[STEP-2] Fetching live price for {symbol} ...")
+    logger.debug(f"[STEP-2] Fetching live price for {symbol} ...")
     live_price = await asyncio.to_thread(yf_svc.get_live_price, symbol)
     if live_price > 0:
         # If yfinance already returned today's (partial) bar, replace its close
@@ -854,7 +862,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     volumes      = [v if v > 0 else vol_fill for v in volumes_raw]
 
     zero_vol_count = sum(1 for v in volumes_raw if v == 0)
-    logger.info(
+    logger.debug(
         f"[STEP-4] OHLCV arrays built — {len(closes)} rows | "
         f"zero-volume rows filled with mean ({zero_vol_count} filled, mean_vol={vol_fill:.0f}) | "
         f"last OHLCV: O=${opens[-1]:.2f} H=${highs[-1]:.2f} "
@@ -862,7 +870,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     )
 
     # ── RL: load historical model accuracy for weight calibration ────────────
-    logger.info(f"[RL] Querying historical model accuracy for {symbol} ...")
+    logger.debug(f"[RL] Querying historical model accuracy for {symbol} ...")
     model_acc = await asyncio.to_thread(forecast_store.query_model_accuracy, symbol)
     ensemble_mae = await asyncio.to_thread(forecast_store.query_ensemble_mae, symbol)
 
@@ -889,7 +897,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             ]
             total_inv          = sum(inv_maes)
             historical_weights = [v / total_inv for v in inv_maes] if total_inv > 0 else None
-            logger.info(
+            logger.debug(
                 f"[RL] Historical weights (inv-MAE) — "
                 f"prophet={historical_weights[0]:.3f}, "
                 f"sarima={historical_weights[1]:.3f}, "
@@ -903,10 +911,10 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
                 parts.append(f"{label} d1_MAE=${acc['mae']:.2f} (n={n})")
         if parts:
             track_record = "Model track record: " + " | ".join(parts)
-            logger.info(f"[RL] Track record for jury: {track_record}")
+            logger.debug(f"[RL] Track record for jury: {track_record}")
 
     rsi = calculate_rsi(closes)
-    logger.info(f"[STEP-4] RSI scalar computed: {rsi:.2f}")
+    logger.debug(f"[STEP-4] RSI scalar computed: {rsi:.2f}")
 
     logger.info(
         "[STEP-4] Running ensemble forecast (Prophet + SARIMAX + RF) "
@@ -946,7 +954,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     _safe_background(_resolve_with_lock(symbol), name="RL-RESOLVE")
 
     # ── Step 4b. Technical indicators (close-based — correct by definition) ──
-    logger.info(
+    logger.debug(
         "[STEP-4b] Computing technical indicators — "
         "MACD(12,26,9), BB(window=20, std=2), SMA50, SMA200 ..."
     )
@@ -966,7 +974,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         serp_task = asyncio.create_task(serp_svc.fetch_data(symbol))
 
     # ── Support/resistance — now uses intraday highs/lows ────────────────────
-    logger.info(
+    logger.debug(
         "[STEP-4d] Computing support/resistance levels "
         "(using intraday High/Low extrema) ..."
     )
@@ -1029,7 +1037,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         f"[STEP-5] Dispatching AI header note (Groq llama-3.3-70b) + "
         f"analyst jury ({len(ANALYST_PERSONAS)} personas) concurrently ..."
     )
-    logger.info(
+    logger.debug(
         f"[STEP-5] Data sent to AI layer — symbol={symbol}, RSI={rsi:.2f}, "
         f"forecast_high=${forecast['high']:.2f}, forecast_low=${forecast['low']:.2f}, "
         f"conf={forecast['conf']}, ann_vol={forecast.get('stats', {}).get('ann_volatility_pct', 'N/A')}%"
@@ -1070,14 +1078,14 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         )
 
     # ── Step 6. (News/trending already resolved at 4e — nothing to await) ────
-    logger.info(
+    logger.debug(
         f"[STEP-6] News/trending already resolved — "
         f"news={len(news)}, trending={len(trending)}, "
         f"sentiment={sentiment['label']} ({sentiment['compound']:+.3f})"
     )
 
     # ── Step 7. Background price snapshot ────────────────────────────────────
-    logger.info(
+    logger.debug(
         f"[STEP-7] Scheduling background InfluxDB price snapshot — "
         f"{symbol} @ ${live_price:.2f}"
     )
@@ -1089,7 +1097,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     # ── Step 8. Build chart history (last 90 trading days) ───────────────────
     total       = len(historical_prices)
     slice_start = max(0, total - 90)
-    logger.info(
+    logger.debug(
         f"[STEP-8] Building chart history — total_bars={total}, "
         f"chart_window=90, slice_start={slice_start} "
         f"(showing bars {slice_start}–{total - 1})"
@@ -1157,6 +1165,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         juryAnalysts  = jury,
         modelWeights  = forecast.get("weights", {"prophet": 0.0, "sarima": 0.0, "rf": 0.0}),
         sentiment    = sentiment,
+        monteCarlo   = forecast.get("monte_carlo"),
     )
 
 
@@ -1560,7 +1569,7 @@ async def simulation_state_save(req: SimStateSaveRequest):
 @app.get("/simulation/state")
 async def simulation_state_list(env: str = Query(...)):
     try:
-        influx_svc._validate_sim_env(env)
+        influx_svc._validate_sim_env_read(env)  # accepts "all" for cross-env reads
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     sims = await asyncio.to_thread(influx_svc.query_simulation_states, env)

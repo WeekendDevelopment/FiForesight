@@ -52,7 +52,7 @@ export default function VolumeProfile({ history, isDark, height = 380, buckets =
       <Typography sx={{ fontSize: 9, fontWeight: 800, letterSpacing: 1.2, color: textColor, textTransform: 'uppercase', mb: 0.3, textAlign: 'center' }}>
         Vol Profile
       </Typography>
-      <Box sx={{ flex: 1 }}>
+      <Box sx={{ flex: 1, minHeight: 0 }}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={data}

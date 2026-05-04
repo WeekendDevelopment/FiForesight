@@ -42,6 +42,26 @@ export interface AnalystJuror {
   model:       string;
 }
 
+export interface MonteCarloPriceRangeDay {
+  day:  number;
+  p10:  number;
+  p25:  number;
+  p50:  number;
+  p75:  number;
+  p90:  number;
+}
+
+export interface MonteCarloResult {
+  p10:               number;
+  p50:               number;
+  p90:               number;
+  prob_gain:         number;
+  var_95:            number;
+  paths_sample:      number[][];
+  price_range_by_day: MonteCarloPriceRangeDay[];
+  n_sims:            number;
+}
+
 export interface PredictionData {
   symbol:       string;
   currentPrice: string;
@@ -71,6 +91,7 @@ export interface PredictionData {
   juryAnalysts?: AnalystJuror[];
   modelWeights?: { prophet: number; sarima: number; rf: number };
   sentiment?:    { compound: number; label: string; headline_count: number };
+  monteCarlo?:   MonteCarloResult | null;
   lastUpdated: string;
 }
 

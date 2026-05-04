@@ -196,3 +196,4 @@ See `.claude/FiForesight_Roadmap.md` for full task list. Jira project: **FIFO** 
 - `frontend/app/api/compare/route.ts` exists but backend `/compare` endpoint is not yet implemented.
 - New Relic APM is active: `newrelic.ini` for backend, conditional script injection in `layout.tsx` based on `NEXT_PUBLIC_APP_ENV`.
 - Deploys: PRs auto-deploy to preview (`fiforesight-preview.duckdns.org`), merges to main deploy to prod (`fiforesight.duckdns.org` + Koyeb).
+- **react-plotly.js exception** — `MonteCarloProbabilitySurface.tsx` uses `react-plotly.js` (+ `plotly.js` peer dep) for 3D surface rendering. This is the only intentional deviation from the Recharts-only guideline; Recharts has no 3D surface capability. All 2D charts (candlestick, RSI, MACD, BB, sparklines) remain Recharts.

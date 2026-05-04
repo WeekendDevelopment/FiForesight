@@ -275,7 +275,7 @@ def calculate_model_stats(prices: List[float]) -> Dict:
     Returns a dict of descriptive statistics used both in the response
     and as context for the AI analysis layer later.
     """
-    logger.info(f"[STATS] calculate_model_stats — input: {len(prices)} prices")
+    logger.debug(f"[STATS] calculate_model_stats — input: {len(prices)} prices")
     arr     = np.array(prices)
     returns = np.diff(arr) / arr[:-1]
 
@@ -324,13 +324,13 @@ def _prophet_forecast(
         volumes   is not None and len(volumes)   == len(prices) and
         hl_ranges is not None and len(hl_ranges) == len(prices)
     )
-    logger.info(
+    logger.debug(
         f"[PROPHET] Fitting — training_rows={len(prices)}, forecast_steps={steps} | "
         f"config: changepoint_prior_scale=0.05, weekly_seasonality=True, "
         f"daily_seasonality=False, interval_width=0.80 | "
         f"extra_regressors={'volume_log + hl_range' if use_regressors else 'none (closes only)'}"
     )
-    logger.info(
+    logger.debug(
         f"[PROPHET] Input price range: ${min(prices):.2f} – ${max(prices):.2f} | "
         f"last_close=${prices[-1]:.2f}"
     )
@@ -353,7 +353,7 @@ def _prophet_forecast(
         vol_arr = np.where(np.isnan(vol_arr), vol_fill, vol_arr)
         df["volume_log"] = np.log1p(vol_arr)
         df["hl_range"]   = hl_ranges
-        logger.info(
+        logger.debug(
             f"[PROPHET] Regressors — volume_log: mean={df['volume_log'].mean():.3f}, "
             f"std={df['volume_log'].std():.3f} | "
             f"hl_range: mean={df['hl_range'].mean():.4f}, "
@@ -378,7 +378,7 @@ def _prophet_forecast(
         hlr_future = float(df["hl_range"].iloc[-5:].mean())
         future["volume_log"] = vol_future
         future["hl_range"]   = hlr_future
-        logger.info(
+        logger.debug(
             f"[PROPHET] Future regressor estimates (mean of last 5d) — "
             f"volume_log={vol_future:.3f}, hl_range={hlr_future:.4f}"
         )
@@ -411,12 +411,12 @@ def _sarima_forecast(
         volumes   is not None and len(volumes)   == len(prices) and
         hl_ranges is not None and len(hl_ranges) == len(prices)
     )
-    logger.info(
+    logger.debug(
         f"[SARIMA] Fitting — training_rows={len(prices)}, forecast_steps={steps} | "
         f"order=(p=1, d=1, q=1), enforce_stationarity=False, enforce_invertibility=False | "
         f"exog={'volume_zscore + hl_range' if use_exog else 'none (closes only)'}"
     )
-    logger.info(
+    logger.debug(
         f"[SARIMA] Input price range: ${min(prices):.2f} – ${max(prices):.2f} | "
         f"last_close=${prices[-1]:.2f}"
     )
@@ -439,7 +439,7 @@ def _sarima_forecast(
         future_row  = exog[-5:].mean(axis=0)
         exog_future = np.tile(future_row, (steps, 1))
 
-        logger.info(
+        logger.debug(
             f"[SARIMA] Exog training — vol_zscore: mean≈0 std=1 (normalised) | "
             f"hl_range: mean={hl_arr.mean():.4f}, std={hl_arr.std():.4f} | "
             f"exog_future (mean of last 5d): vol_z={future_row[0]:.4f}, "
@@ -493,7 +493,7 @@ def _rf_forecast(
         v is not None and len(v) == len(prices)
         for v in [opens, highs, lows, volumes]
     )
-    logger.info(
+    logger.debug(
         f"[RF] Preparing — input_prices={len(prices)}, forecast_steps={steps}, "
         f"feature_window={window} | "
         f"mode={'OHLCV (5 cols × {window} steps = {5*window} features)' if use_ohlcv else f'closes-only ({window} features)'}"
@@ -514,7 +514,7 @@ def _rf_forecast(
     vol = np.std(prices[-20:]) / np.mean(prices[-20:]) if len(prices) >= 20 else 0.02
 
     if use_ohlcv:
-        logger.info(
+        logger.debug(
             f"[RF] Input price range: ${min(prices):.2f} – ${max(prices):.2f} | "
             f"last_close=${prices[-1]:.2f} | "
             f"vol range: ${min(volumes):.0f} – ${max(volumes):.0f}"
@@ -532,7 +532,7 @@ def _rf_forecast(
         col_stds  = raw.std(axis=0) + 1e-8
         norm      = (raw - col_means) / col_stds
 
-        logger.info(
+        logger.debug(
             f"[RF] OHLCV normalisation (z-score per column) — "
             f"col_means: O={col_means[0]:.2f}, H={col_means[1]:.2f}, "
             f"L={col_means[2]:.2f}, C={col_means[3]:.2f}, V={col_means[4]:.0f}"
@@ -544,7 +544,7 @@ def _rf_forecast(
             y.append(prices[i + window])
         X, y = np.array(X), np.array(y)
 
-        logger.info(
+        logger.debug(
             f"[RF] Training — samples={len(X)}, features_per_sample={X.shape[1]}, "
             f"n_estimators=100, random_state=42 | hist_vol(20d)={vol:.4f}, band_mult=1.5"
         )
@@ -561,13 +561,13 @@ def _rf_forecast(
             new_row    = last_window_raw[-1].copy()
             new_row[3] = p
             last_window_raw = np.vstack([last_window_raw[1:], new_row])
-            logger.info(
+            logger.debug(
                 f"[RF] Step {step_i + 1}/{steps} (OHLCV) — predicted=${p:.2f} | "
                 f"carried: open=${new_row[0]:.2f}, high=${new_row[1]:.2f}, "
                 f"low=${new_row[2]:.2f}, vol={new_row[4]:.0f}"
             )
     else:
-        logger.info(
+        logger.debug(
             f"[RF] Input price range: ${min(prices):.2f} – ${max(prices):.2f} | "
             f"last_close=${prices[-1]:.2f}"
         )
@@ -577,7 +577,7 @@ def _rf_forecast(
             y.append(prices[i + window])
         X, y = np.array(X), np.array(y)
 
-        logger.info(
+        logger.debug(
             f"[RF] Training — samples={len(X)}, features_per_sample={window} (closes only), "
             f"n_estimators=100, random_state=42 | hist_vol(20d)={vol:.4f}, band_mult=1.5"
         )
@@ -590,7 +590,7 @@ def _rf_forecast(
             p = float(rf.predict([last_window])[0])
             preds.append(p)
             last_window = last_window[1:] + [p]
-            logger.info(f"[RF] Step {step_i + 1}/{steps} (closes) — predicted=${p:.2f}")
+            logger.debug(f"[RF] Step {step_i + 1}/{steps} (closes) — predicted=${p:.2f}")
 
     preds  = np.array(preds)
     band   = preds * vol * 1.5
@@ -602,6 +602,96 @@ def _rf_forecast(
         f"Day-{steps}: predicted=${result[-1, 0]:.2f} band=[{result[-1, 1]:.2f}–{result[-1, 2]:.2f}]"
     )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Monte Carlo GBM simulation
+# ---------------------------------------------------------------------------
+
+def run_monte_carlo(
+    closes: List[float],
+    steps: int = 5,
+    n_sims: int = 1000,
+) -> Optional[Dict]:
+    """
+    Geometric Brownian Motion Monte Carlo price path simulation.
+
+    Daily log-returns are simulated as:
+        Δlog(S_t) = (μ - σ²/2) + σ·Z_t,  Z_t ~ N(0,1)
+    and accumulated with np.cumsum to form each GBM path (Δt = 1 trading day).
+
+    μ and σ are estimated from daily log-returns of closes.
+    Uses np.random.default_rng(seed=42) for reproducibility.
+    Returns None gracefully when fewer than 10 price points are available.
+    """
+    if len(closes) < 10:
+        logger.warning(
+            f"[MC] Insufficient data ({len(closes)} closes < 10 minimum) — returning None"
+        )
+        return None
+    try:
+        arr         = np.array(closes, dtype=float)
+        log_returns = np.diff(np.log(arr))
+        mu          = float(np.mean(log_returns))
+        sigma       = float(np.std(log_returns))
+        S0          = float(arr[-1])
+
+        rng = np.random.default_rng(seed=42)
+        Z   = rng.standard_normal((n_sims, steps))
+
+        # GBM via cumulative log-returns (Δt = 1 trading day).
+        # Each column is an independent daily increment; np.cumsum builds
+        # temporally consistent Brownian-motion trajectories.
+        drift            = mu - 0.5 * sigma ** 2
+        step_log_returns = drift + sigma * Z          # per-step Δ log price
+        log_paths        = np.cumsum(step_log_returns, axis=1)
+        paths            = S0 * np.exp(log_paths)     # shape (n_sims, steps)
+
+        final     = paths[:, -1]
+        p10       = float(np.percentile(final, 10))
+        p50       = float(np.percentile(final, 50))
+        p90       = float(np.percentile(final, 90))
+        prob_gain = float(np.mean(final > S0) * 100)
+        var_95    = float(max(0.0, S0 - np.percentile(final, 5)))
+
+        # 50 representative paths for the 2D fan chart
+        sample_idx   = rng.choice(n_sims, size=min(50, n_sims), replace=False)
+        paths_sample = [
+            [round(float(paths[i, j]), 4) for j in range(steps)]
+            for i in sample_idx
+        ]
+
+        # Per-day percentile surface (used by both fan chart and 3D surface)
+        price_range_by_day = []
+        for d in range(steps):
+            dp = paths[:, d]
+            price_range_by_day.append({
+                "day": d + 1,
+                "p10": round(float(np.percentile(dp, 10)), 4),
+                "p25": round(float(np.percentile(dp, 25)), 4),
+                "p50": round(float(np.percentile(dp, 50)), 4),
+                "p75": round(float(np.percentile(dp, 75)), 4),
+                "p90": round(float(np.percentile(dp, 90)), 4),
+            })
+
+        logger.info(
+            f"[MC] ✓ n_sims={n_sims}, steps={steps} | "
+            f"S0=${S0:.2f} → p10=${p10:.2f}, p50=${p50:.2f}, p90=${p90:.2f} | "
+            f"prob_gain={prob_gain:.1f}%, VaR95=${var_95:.2f}"
+        )
+        return {
+            "p10":               round(p10,       4),
+            "p50":               round(p50,       4),
+            "p90":               round(p90,       4),
+            "prob_gain":         round(prob_gain, 2),
+            "var_95":            round(var_95,    4),
+            "paths_sample":      paths_sample,
+            "price_range_by_day": price_range_by_day,
+            "n_sims":            n_sims,
+        }
+    except Exception as exc:
+        logger.warning(f"[MC] run_monte_carlo failed: {exc} — returning None")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -644,22 +734,26 @@ def run_ensemble_forecast(
     last_price = float(closes[-1]) if closes else 100.0
     vol        = np.std(closes[-10:]) / np.mean(closes[-10:]) if len(closes) >= 10 else 0.02
     stats      = calculate_model_stats(closes) if len(closes) >= 5 else {}
+    mc_result  = run_monte_carlo(closes, steps=FORECAST_DAYS)
 
     ohlcv_available = all(
         v is not None and len(v) == len(closes)
         for v in [opens, highs, lows, volumes]
     )
-    logger.info(
+    logger.debug(
         f"[ENSEMBLE] Input — price_points={len(closes)}, last_price=${last_price:.2f}, "
         f"vol(10d)={vol:.4f} ({vol * 100:.2f}%), MODELS_AVAILABLE={MODELS_AVAILABLE}, "
         f"ohlcv_supplied={ohlcv_available}"
     )
-    logger.info(
-        f"[ENSEMBLE] Closes sent to models — closes[0]=${closes[0]:.2f} ... "
-        f"closes[-10]={', '.join(f'${p:.2f}' for p in closes[-10:])}"
-    )
+    if closes:
+        logger.debug(
+            f"[ENSEMBLE] Closes sent to models — closes[0]=${closes[0]:.2f} ... "
+            f"closes[-10]={', '.join(f'${p:.2f}' for p in closes[-10:])}"
+        )
+    else:
+        logger.debug("[ENSEMBLE] Closes sent to models — empty series")
     if ohlcv_available:
-        logger.info(
+        logger.debug(
             f"[ENSEMBLE] OHLCV context — "
             f"last_open=${opens[-1]:.2f}, last_high=${highs[-1]:.2f}, "
             f"last_low=${lows[-1]:.2f}, last_vol={volumes[-1]:.0f}"
@@ -672,7 +766,7 @@ def run_ensemble_forecast(
             (h - lo) / c if c > 0 else 0.0
             for h, lo, c in zip(highs, lows, closes)
         ]
-        logger.info(
+        logger.debug(
             f"[ENSEMBLE] HL range (intraday vol proxy = (H-L)/C) — "
             f"mean={float(np.mean(hl_ranges)):.4f}, "
             f"last={hl_ranges[-1]:.4f}"
@@ -712,9 +806,10 @@ def run_ensemble_forecast(
             "conf": "low", "stats": stats,
             "weights":       {"prophet": 0.0, "sarima": 0.0, "rf": 0.0},
             "per_model_d1":  {"prophet": None, "sarima": None, "rf": None},
+            "monte_carlo":   mc_result,
         }
 
-    logger.info(
+    logger.debug(
         f"[ENSEMBLE] Fallback path SKIPPED — "
         f"MODELS_AVAILABLE=True, price_points={len(closes)} ≥ 20"
     )
@@ -791,6 +886,7 @@ def run_ensemble_forecast(
             "conf":          "low", "stats": stats,
             "weights":       {"prophet": 0.0, "sarima": 0.0, "rf": 0.0},
             "per_model_d1":  {"prophet": None, "sarima": None, "rf": None},
+            "monte_carlo":   mc_result,
         }
 
     # ── Dynamic weights: inverse day-1 error (realtime) ──────────────────────
@@ -841,12 +937,12 @@ def run_ensemble_forecast(
     ):
         if fc is not None:
             err = abs(fc[0, 0] - last_price)
-            logger.info(
+            logger.debug(
                 f"[ENSEMBLE]   {label}: day1_pred=${fc[0, 0]:.2f}, "
                 f"err_vs_last={err:.4f}, raw_w={rw:.6f}, final_w={wi:.4f} ({wi:.1%})"
             )
         else:
-            logger.info(f"[ENSEMBLE]   {label}: FAILED → raw_w=0.000000, final_w=0.0000 (0.0%)")
+            logger.debug(f"[ENSEMBLE]   {label}: FAILED → raw_w=0.000000, final_w=0.0000 (0.0%)")
 
     # ── Build per-day weighted forecast ──────────────────────────────────────
     days = []
@@ -966,4 +1062,5 @@ def run_ensemble_forecast(
             "sarima":  float(s_fc[0, 0]) if s_fc is not None else None,
             "rf":      float(r_fc[0, 0]) if r_fc is not None else None,
         },
+        "monte_carlo":   mc_result,
     }
