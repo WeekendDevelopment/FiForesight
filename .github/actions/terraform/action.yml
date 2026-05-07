@@ -19,6 +19,7 @@ runs:
       run: terraform validate
 
     - name: Terraform Plan
+      if: ${{ !(github.event_name == 'push' || env.WORKING_DIR == 'terraform-preview') }}
       working-directory: ${{ env.WORKING_DIR }}
       shell: bash
       run: terraform plan
