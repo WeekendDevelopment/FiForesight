@@ -1,5 +1,9 @@
 # FiForesight
 
+[![Build](https://github.com/WeekendDevelopment/FiForesight/actions/workflows/pull-request.yml/badge.svg)](https://github.com/WeekendDevelopment/FiForesight/actions/workflows/pull-request.yml)
+[![Build and Deploy](https://github.com/WeekendDevelopment/FiForesight/actions/workflows/merge.yml/badge.svg)](https://github.com/WeekendDevelopment/FiForesight/actions/workflows/merge.yml)
+[![Daily RL Training](https://github.com/WeekendDevelopment/FiForesight/actions/workflows/daily-train.yml/badge.svg)](https://github.com/WeekendDevelopment/FiForesight/actions/workflows/daily-train.yml)
+
 AI-driven quantitative financial forecasting SaaS. Enter a ticker symbol and get an ensemble ML forecast (48-hour price range), technical indicators, a 3-analyst LLM jury verdict, and live news — all in one dashboard.
 
 ## Current Features
