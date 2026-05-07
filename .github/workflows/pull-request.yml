@@ -180,6 +180,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup HTTPS
+        if: github.actor != 'dependabot[bot]'
         uses: ./.github/actions/setup-https
         env:
           VM_IP_ADDRESS: ${{ needs.terraform-preview.outputs.vm_host }}
@@ -205,6 +206,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup Redis
+        if: github.actor != 'dependabot[bot]'
         uses: ./.github/actions/setup-redis
         env:
           TF_API_TOKEN: ${{ secrets.TF_API_TOKEN }}
