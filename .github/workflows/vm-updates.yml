@@ -41,7 +41,7 @@ jobs:
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
 
       - name: Run system updates
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ steps.tf_outputs.outputs.public_ip }}
           username: ubuntu
@@ -52,7 +52,7 @@ jobs:
             sudo apt autoremove -y
 
       - name: Reboot if required
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         continue-on-error: true   # SSH dies mid-reboot, that's fine
         with:
           host: ${{ steps.tf_outputs.outputs.public_ip }}
