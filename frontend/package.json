@@ -21,7 +21,7 @@
     "next": "16.2.6",
     "plotly.js": "^3.5.1",
     "react": "^19.2.6",
-    "react-dom": "^19.2.4",
+    "react-dom": "^19.2.6",
     "react-force-graph-2d": "^1.29.1",
     "react-plotly.js": "^2.6.0",
     "recharts": "^3.8.1"
