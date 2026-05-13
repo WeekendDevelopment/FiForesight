@@ -1638,5 +1638,48 @@ async def simulation_state_delete(sim_id: str, env: str = Query(...)):
     return {"deleted": True}
 
 
+@app.get("/compare")
+async def compare_peers(symbols: str = Query(..., description="Comma-separated tickers, max 6")):
+    """
+    Returns side-by-side fundamentals for up to 6 tickers.
+    Each symbol hits Redis cache first (same 1h TTL as /predict).
+    """
+    import re
+    raw = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    # Validate: only alphanumeric, hyphens, and dots (e.g. BRK.B, BTC-USD)
+    syms = [s for s in raw if re.match(r'^[A-Z0-9.\-]{1,10}$', s)][:6]
+    if not syms:
+        raise HTTPException(status_code=400, detail="Provide at least one valid symbol (max 6).")
+
+    async def _peer(sym: str) -> dict:
+        cached = await cache_get(f"info:{sym}")
+        if cached:
+            info = cached
+        else:
+            info = await asyncio.to_thread(yf_svc.fetch_info, sym)
+            if info:
+                await cache_set(f"info:{sym}", info, ttl_seconds=3600)
+        price = info.get("current_price", 0)
+        return {
+            "symbol":         sym,
+            "name":           info.get("short_name", sym),
+            "sector":         info.get("sector",      "N/A"),
+            "price":          f"{float(price):.2f}" if price else "N/A",
+            "market_cap":     _fmt_market_cap(info.get("market_cap")),
+            "pe_ratio":       _fmt_ratio(info.get("pe_ratio"))     if info.get("pe_ratio")     not in (None, "N/A") else "N/A",
+            "forward_pe":     _fmt_ratio(info.get("forward_pe"))   if info.get("forward_pe")   not in (None, "N/A") else "N/A",
+            "peg_ratio":      _fmt_ratio(info.get("peg_ratio"))    if info.get("peg_ratio")    not in (None, "N/A") else "N/A",
+            "ev_to_ebitda":   _fmt_ratio(info.get("ev_to_ebitda")) if info.get("ev_to_ebitda") not in (None, "N/A") else "N/A",
+            "beta":           _fmt_ratio(info.get("beta"))         if info.get("beta")         not in (None, "N/A") else "N/A",
+            "revenue_growth": _fmt_pct(info.get("revenue_growth")) if info.get("revenue_growth") not in (None, "N/A") else "N/A",
+            "range_52w":      info.get("range_52w", "N/A"),
+        }
+
+    results = await asyncio.gather(*[_peer(s) for s in syms], return_exceptions=True)
+    peers = [r for r in results if not isinstance(r, Exception)]
+    logger.info(f"[COMPARE] ✓ {len(peers)}/{len(syms)} peers resolved: {[p['symbol'] for p in peers]}")
+    return {"peers": peers}
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=Config.PORT)
