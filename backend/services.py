@@ -875,6 +875,41 @@ class YFinanceService:
             return {}
 
     @newrelic.agent.function_trace()
+    def fetch_earnings_dates(self, symbol: str) -> List[str]:
+        """
+        Returns upcoming (and recent) earnings dates as 'MM/DD' strings,
+        matching the chart date format used by PriceChartCard.
+        Returns at most 4 dates; empty list on any failure.
+        """
+        if not YFINANCE_AVAILABLE:
+            return []
+        ticker = self._to_yf_symbol(symbol)
+        try:
+            cal = yf.Ticker(ticker).calendar
+            if cal is None:
+                return []
+            # yfinance returns a dict with 'Earnings Date' key → list of Timestamps
+            dates_raw = cal.get("Earnings Date", [])
+            if not isinstance(dates_raw, (list, tuple)):
+                dates_raw = [dates_raw]
+            result = []
+            for d in dates_raw:
+                try:
+                    if hasattr(d, "strftime"):
+                        result.append(d.strftime("%m/%d"))
+                    else:
+                        from datetime import datetime
+                        result.append(datetime.strptime(str(d)[:10], "%Y-%m-%d").strftime("%m/%d"))
+                except Exception:
+                    continue
+            result = list(dict.fromkeys(result))[:4]  # deduplicate, cap at 4
+            logger.info(f"[YFINANCE] ✓ fetch_earnings_dates — {ticker}: {result}")
+            return result
+        except Exception as e:
+            logger.warning(f"[YFINANCE] fetch_earnings_dates failed for {ticker}: {e}")
+            return []
+
+    @newrelic.agent.function_trace()
     def get_live_price(self, symbol: str) -> float:
         """Fast path to get the latest price from yfinance."""
         if not YFINANCE_AVAILABLE:

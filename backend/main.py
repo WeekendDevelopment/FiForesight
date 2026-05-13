@@ -118,6 +118,7 @@ class PredictionResponse(BaseModel):
     modelWeights:  dict
     sentiment:     dict
     monteCarlo:    Optional[dict] = None
+    earningsDates: List[str]      = []
 
 
 # ---------------------------------------------------------------------------
@@ -998,7 +999,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     ema50     = calculate_ema_series(closes, 50)
     logger.info(f"[STEP-4b] ✓ All indicator series computed ({len(closes)} points each)")
 
-    # ── Step 4c. Fire news fetch concurrently with S/R computation ──────────
+    # ── Step 4c. Fire news + earnings fetch concurrently ─────────────────────
     news_cache_key = f"news:{symbol.upper()}"
     cached_news_payload = await cache_get(news_cache_key)
     if cached_news_payload is not None:
@@ -1006,6 +1007,10 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     else:
         logger.info("[STEP-4c] News cache MISS — launching SerpAPI task")
         serp_task = asyncio.create_task(serp_svc.fetch_data(symbol))
+
+    earnings_task = asyncio.create_task(
+        asyncio.to_thread(yf_svc.fetch_earnings_dates, symbol)
+    )
 
     # ── Support/resistance — now uses intraday highs/lows ────────────────────
     logger.debug(
@@ -1065,6 +1070,13 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             await cache_set(news_cache_key, {"news": news, "trending": trending, "sentiment": sentiment}, ttl_seconds=1800)
         except Exception as e:
             logger.warning(f"[STEP-4e] SerpAPI/sentiment failed: {e}")
+
+    # Resolve earnings dates (fired concurrently at Step 4c)
+    try:
+        earnings_dates: List[str] = await earnings_task
+    except Exception as e:
+        logger.warning(f"[STEP-4e] earnings_task failed: {e}")
+        earnings_dates = []
 
     # ── Step 5. AI analyst note + jury (concurrent) ──────────────────────────
     logger.info(
@@ -1202,6 +1214,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         modelWeights  = forecast.get("weights", {"prophet": 0.0, "sarima": 0.0, "rf": 0.0}),
         sentiment    = sentiment,
         monteCarlo   = forecast.get("monte_carlo"),
+        earningsDates = earnings_dates,
     )
 
 
