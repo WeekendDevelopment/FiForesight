@@ -79,13 +79,23 @@ export interface PredictionData {
   forecastDays: ForecastDay[];
   modelStats:   ModelStats;
   metrics: {
-    market_cap: string;
-    pe_ratio:   string;
-    yield:      string;
-    prev_close: string;
-    range_52w:  string;
-    sector?:    string;
-    currency?:  string;
+    market_cap:     string;
+    pe_ratio:       string;
+    yield:          string;
+    prev_close:     string;
+    range_52w:      string;
+    sector?:        string;
+    industry?:      string;
+    currency?:      string;
+    // Extended quant fundamentals
+    beta?:          string;
+    forward_pe?:    string;
+    peg_ratio?:     string;
+    price_to_book?: string;
+    ev_to_ebitda?:  string;
+    free_cash_flow?: string;
+    revenue_growth?: string;
+    total_debt?:    string;
   };
   news:      { title: string; link: string; source: string; thumbnail: string; date: string }[];
   trending:  { symbol: string; name?: string; price: string | number; change: string; category?: string }[];

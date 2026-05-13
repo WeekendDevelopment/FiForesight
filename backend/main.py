@@ -145,6 +145,14 @@ def _fmt_pct(val) -> str:
         return "N/A"
 
 
+def _fmt_ratio(val, decimals: int = 2, suffix: str = "") -> str:
+    """Format a numeric ratio/multiple (beta, P/E, P/B, EV/EBITDA, etc.)."""
+    try:
+        return f"{float(val):.{decimals}f}{suffix}"
+    except Exception:
+        return "N/A"
+
+
 def _safe_background(coro_or_future, *, name: str = "background"):
     """Wrap a coroutine in a task that logs exceptions instead of dropping them."""
     async def _wrapper():
@@ -832,18 +840,29 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
 
     # ── Step 3. Fundamentals (info already fetched concurrently at Step 1+3) ──
     metrics = {
-        "market_cap": _fmt_market_cap(info.get("market_cap")),
-        "pe_ratio":   str(info.get("pe_ratio", "N/A")),
-        "yield":      _fmt_pct(info.get("dividend_yield")) if info.get("dividend_yield") not in (None, "N/A") else "N/A",
-        "prev_close": str(info.get("prev_close", "N/A")),
-        "range_52w":  info.get("range_52w", "N/A"),
-        "sector":     info.get("sector",    "N/A"),
-        "currency":   info.get("currency",  "USD"),
+        "market_cap":     _fmt_market_cap(info.get("market_cap")),
+        "pe_ratio":       str(info.get("pe_ratio", "N/A")),
+        "yield":          _fmt_pct(info.get("dividend_yield")) if info.get("dividend_yield") not in (None, "N/A") else "N/A",
+        "prev_close":     str(info.get("prev_close", "N/A")),
+        "range_52w":      info.get("range_52w",  "N/A"),
+        "sector":         info.get("sector",     "N/A"),
+        "industry":       info.get("industry",   "N/A"),
+        "currency":       info.get("currency",   "USD"),
+        # Extended quant fundamentals
+        "beta":           _fmt_ratio(info.get("beta"))          if info.get("beta")          not in (None, "N/A") else "N/A",
+        "forward_pe":     _fmt_ratio(info.get("forward_pe"))    if info.get("forward_pe")    not in (None, "N/A") else "N/A",
+        "peg_ratio":      _fmt_ratio(info.get("peg_ratio"))     if info.get("peg_ratio")     not in (None, "N/A") else "N/A",
+        "price_to_book":  _fmt_ratio(info.get("price_to_book")) if info.get("price_to_book") not in (None, "N/A") else "N/A",
+        "ev_to_ebitda":   _fmt_ratio(info.get("ev_to_ebitda"))  if info.get("ev_to_ebitda")  not in (None, "N/A") else "N/A",
+        "free_cash_flow": _fmt_market_cap(info.get("free_cash_flow")) if info.get("free_cash_flow") not in (None, "N/A") else "N/A",
+        "revenue_growth": _fmt_pct(info.get("revenue_growth"))  if info.get("revenue_growth") not in (None, "N/A") else "N/A",
+        "total_debt":     _fmt_market_cap(info.get("total_debt"))     if info.get("total_debt")     not in (None, "N/A") else "N/A",
     }
     logger.info(
-        f"[STEP-3] ✓ Fundamentals — sector={metrics['sector']}, "
-        f"market_cap={metrics['market_cap']}, pe={metrics['pe_ratio']}, "
-        f"yield={metrics['yield']}, 52w={metrics['range_52w']}"
+        f"[STEP-3] ✓ Fundamentals — sector={metrics['sector']}, industry={metrics['industry']}, "
+        f"market_cap={metrics['market_cap']}, pe={metrics['pe_ratio']}, fwd_pe={metrics['forward_pe']}, "
+        f"peg={metrics['peg_ratio']}, beta={metrics['beta']}, ev/ebitda={metrics['ev_to_ebitda']}, "
+        f"fcf={metrics['free_cash_flow']}, rev_growth={metrics['revenue_growth']}"
     )
 
     # ── Step 4. Analytics & ensemble forecast ────────────────────────────────
