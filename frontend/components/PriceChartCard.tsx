@@ -75,6 +75,8 @@ export default function PriceChartCard({
         bb_band:   bbU != null && bbL != null ? bbU - bbL : undefined,
         sma50:     h.sma50  ?? undefined,
         sma200:    h.sma200 ?? undefined,
+        ema20:     h.ema20  ?? undefined,
+        ema50:     h.ema50  ?? undefined,
         predicted: undefined as number | undefined,
         foreHigh:  undefined as number | undefined,
         foreLow:   undefined as number | undefined,
@@ -85,7 +87,7 @@ export default function PriceChartCard({
       date:      f.date,
       price:     undefined as number | undefined,
       bb_upper:  undefined, bb_middle: undefined, bb_lower: undefined, bb_band: undefined,
-      sma50:     undefined, sma200:    undefined,
+      sma50:     undefined, sma200:    undefined, ema20: undefined, ema50: undefined,
       predicted: f.predicted,
       foreHigh:  f.high,
       foreLow:   f.low,
@@ -110,6 +112,8 @@ export default function PriceChartCard({
         bb_band:   bbU != null && bbL != null ? bbU - bbL : undefined,
         sma50:     h.sma50  ?? undefined,
         sma200:    h.sma200 ?? undefined,
+        ema20:     h.ema20  ?? undefined,
+        ema50:     h.ema50  ?? undefined,
         predicted: undefined as number | undefined,
         foreHigh:  undefined as number | undefined,
         foreLow:   undefined as number | undefined,
@@ -121,7 +125,7 @@ export default function PriceChartCard({
       high: undefined as number | undefined, low: undefined as number | undefined,
       close: undefined as number | undefined,
       bb_upper: undefined, bb_middle: undefined, bb_lower: undefined, bb_band: undefined,
-      sma50: undefined, sma200: undefined,
+      sma50: undefined, sma200: undefined, ema20: undefined, ema50: undefined,
       predicted: f.predicted, foreHigh: f.high, foreLow: f.low,
       fore_band: f.high != null && f.low != null ? f.high - f.low : undefined,
     }));
@@ -162,6 +166,8 @@ export default function PriceChartCard({
       indicators.includes('bb')  ? (d as any).bb_lower  : undefined,
       indicators.includes('sma') ? (d as any).sma50     : undefined,
       indicators.includes('sma') ? (d as any).sma200    : undefined,
+      indicators.includes('ema') ? (d as any).ema20     : undefined,
+      indicators.includes('ema') ? (d as any).ema50     : undefined,
     ].filter((v): v is number => v !== undefined && v !== null));
     if (!allVals.length) return ['auto', 'auto'];
     const min = Math.min(...allVals);
@@ -214,7 +220,7 @@ export default function PriceChartCard({
     price: 'Close', close: 'Close (OHLC)', predicted: 'Forecast',
     foreHigh: 'Fore. High', foreLow: 'Fore. Low',
     bb_upper: 'BB Upper', bb_middle: 'BB Mid', bb_lower: 'BB Lower',
-    sma50: 'SMA 50', sma200: 'SMA 200',
+    sma50: 'SMA 50', sma200: 'SMA 200', ema20: 'EMA 20', ema50: 'EMA 50',
   };
 
   const toggleSx = {
@@ -283,6 +289,7 @@ export default function PriceChartCard({
           {([
             { key: 'bb',     label: 'Bollinger Bands' },
             { key: 'sma',    label: 'SMA 50/200'      },
+            { key: 'ema',    label: 'EMA 20/50'       },
             { key: 'macd',   label: 'MACD'            },
             { key: 'rsi',    label: 'RSI'             },
             { key: 'volume', label: 'Volume'          },
@@ -336,6 +343,8 @@ export default function PriceChartCard({
                     description: 'Volatility envelope: upper/lower = ±2 std devs from the 20-day MA. Bands widen during high volatility, narrow during consolidation.' },
                   { key: 'sma', always: false, label: 'SMA 50 / SMA 200', color: '#f97316', color2: '#a855f7',
                     description: 'Trend-following averages. SMA50 (orange) tracks medium-term, SMA200 (purple) tracks long-term. Golden cross (50 > 200) = bullish; death cross (50 < 200) = bearish.' },
+                  { key: 'ema', always: false, label: 'EMA 20 / EMA 50', color: '#06b6d4', color2: '#f43f5e',
+                    description: 'Exponential Moving Averages weight recent prices more heavily than SMA, reacting faster to momentum shifts. EMA20 (cyan) for short-term momentum, EMA50 (rose) confirms trend direction. EMA20 crossing EMA50 is a faster golden/death cross signal.' },
                   { key: 'macd', always: false, label: 'MACD (12, 26, 9)', color: isDark ? '#00f2ff' : '#0077ff',
                     description: 'Momentum oscillator. Line crossing above signal = bullish; below = bearish. Histogram bars show momentum strength — growing bars = accelerating trend.' },
                   { key: 'rsi', always: false, label: 'RSI (14)', color: '#bc13fe',
@@ -501,6 +510,11 @@ export default function PriceChartCard({
                   {indicators.includes('sma') && <>
                     <Line type="monotone" dataKey="sma50"  stroke="#f97316" strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
                     <Line type="monotone" dataKey="sma200" stroke="#a855f7" strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false} />
+                  </>}
+
+                  {indicators.includes('ema') && <>
+                    <Line type="monotone" dataKey="ema20" stroke="#06b6d4" strokeWidth={1.5} strokeDasharray="4 2" dot={false} connectNulls isAnimationActive={false} />
+                    <Line type="monotone" dataKey="ema50" stroke="#f43f5e" strokeWidth={1.5} strokeDasharray="4 2" dot={false} connectNulls isAnimationActive={false} />
                   </>}
 
                   {chartMode === 'line' && (
