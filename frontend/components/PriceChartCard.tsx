@@ -501,6 +501,27 @@ export default function PriceChartCard({
                     );
                   })}
 
+                  {/* Earnings date markers */}
+                  {(prediction.earningsDates ?? []).map((d, i) => (
+                    <ReferenceLine
+                      key={`earn-${i}`}
+                      x={d}
+                      stroke="#facc15"
+                      strokeWidth={1.5}
+                      strokeDasharray="3 3"
+                      strokeOpacity={0.8}
+                      label={({ viewBox }: any) => {
+                        const { x, y } = viewBox;
+                        return (
+                          <text x={x + 3} y={(y ?? 0) + 10} fill="#facc15" fontSize={8} opacity={0.9}
+                            style={{ pointerEvents: 'none', userSelect: 'none' }}>
+                            📅E
+                          </text>
+                        );
+                      }}
+                    />
+                  ))}
+
                   {indicators.includes('bb') && <>
                     <Line  type="monotone" dataKey="bb_lower"  stroke={primaryColor} strokeWidth={1} strokeDasharray="3 2" strokeOpacity={0.5} dot={false} connectNulls isAnimationActive={false} />
                     <Line  type="monotone" dataKey="bb_upper"  stroke={primaryColor} strokeWidth={1} strokeDasharray="3 2" strokeOpacity={0.5} dot={false} connectNulls isAnimationActive={false} />
