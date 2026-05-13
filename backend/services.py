@@ -802,7 +802,9 @@ class YFinanceService:
     def fetch_info(self, symbol: str) -> dict:
         """
         Returns a dict of fundamentals:
-        market_cap, pe_ratio, dividend_yield, prev_close, range_52w, current_price
+        market_cap, pe_ratio, dividend_yield, prev_close, range_52w, current_price,
+        plus extended quant fields: beta, forward_pe, peg_ratio, price_to_book,
+        ev_to_ebitda, free_cash_flow, revenue_growth, total_debt, industry.
         """
         if not YFINANCE_AVAILABLE:
             logger.warning("[YFINANCE] fetch_info SKIPPED — yfinance not installed")
@@ -839,24 +841,32 @@ class YFinanceService:
 
             result = {
                 "current_price":   float(current),
-                "market_cap":      info.get("marketCap",      "N/A"),
-                "pe_ratio":        info.get("trailingPE",     "N/A"),
+                "market_cap":      info.get("marketCap",           "N/A"),
+                "pe_ratio":        info.get("trailingPE",          "N/A"),
                 "dividend_yield":  dividend_yield,
                 "prev_close":      prev_close or "N/A",
                 "range_52w":       range_52w,
-                "short_name":      info.get("shortName",  ticker),
-                "sector":          info.get("sector",     "N/A"),
-                "currency":        info.get("currency",   "USD"),
+                "short_name":      info.get("shortName",       ticker),
+                "sector":          info.get("sector",          "N/A"),
+                "industry":        info.get("industry",        "N/A"),
+                "currency":        info.get("currency",        "USD"),
+                # Extended quant fundamentals
+                "beta":            info.get("beta",                 "N/A"),
+                "forward_pe":      info.get("forwardPE",            "N/A"),
+                "peg_ratio":       info.get("pegRatio",             "N/A"),
+                "price_to_book":   info.get("priceToBook",          "N/A"),
+                "ev_to_ebitda":    info.get("enterpriseToEbitda",   "N/A"),
+                "free_cash_flow":  info.get("freeCashflow",         "N/A"),
+                "revenue_growth":  info.get("revenueGrowth",        "N/A"),
+                "total_debt":      info.get("totalDebt",            "N/A"),
             }
             logger.info(
                 f"[YFINANCE] ✓ fetch_info — {ticker}: "
                 f"price=${result['current_price']:.2f}, "
-                f"market_cap={result['market_cap']}, "
-                f"pe={result['pe_ratio']}, "
-                f"div_yield={result['dividend_yield']}, "
-                f"52w={result['range_52w']}, "
-                f"sector={result['sector']}, "
-                f"currency={result['currency']}"
+                f"market_cap={result['market_cap']}, pe={result['pe_ratio']}, "
+                f"fwd_pe={result['forward_pe']}, peg={result['peg_ratio']}, "
+                f"beta={result['beta']}, ev/ebitda={result['ev_to_ebitda']}, "
+                f"sector={result['sector']}, industry={result['industry']}"
             )
             return result
 
