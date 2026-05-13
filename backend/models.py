@@ -117,6 +117,24 @@ def calculate_sma_series(prices: List[float], period: int) -> List:
     logger.info(f"[SMA{period}] ✓ complete — latest SMA{period}={last_val}")
     return result
 
+
+def calculate_ema_series(prices: List[float], period: int) -> List:
+    """
+    Returns EMA array for given period, None where insufficient data.
+    Uses adjust=False (recursive EMA) and min_periods=period so early
+    values are None until the warm-up window is complete — consistent
+    with how SMA handles the lead-in.
+    """
+    logger.info(
+        f"[EMA{period}] calculate_ema_series — input: {len(prices)} prices, period={period}"
+    )
+    series = pd.Series(prices)
+    ema    = series.ewm(span=period, adjust=False, min_periods=period).mean()
+    result = [round(float(v), 4) if not np.isnan(v) else None for v in ema]
+    last_val = next((v for v in reversed(result) if v is not None), None)
+    logger.info(f"[EMA{period}] ✓ complete — latest EMA{period}={last_val}")
+    return result
+
 @newrelic.agent.function_trace()
 def calculate_rsi_series(prices: List[float], periods: int = 14) -> List:
     """

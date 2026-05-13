@@ -20,7 +20,7 @@ from config import Config, SanitizeHttpxFilter
 from models import (
     calculate_rsi, calculate_rsi_series, run_ensemble_forecast,
     calculate_macd, calculate_bollinger_bands, calculate_sma_series,
-    calculate_support_resistance,
+    calculate_ema_series, calculate_support_resistance,
 )
 from services import (
     DataCleaner, AnalystJuryService, ForecastStore, InfluxService,
@@ -956,12 +956,14 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     # ── Step 4b. Technical indicators (close-based — correct by definition) ──
     logger.debug(
         "[STEP-4b] Computing technical indicators — "
-        "MACD(12,26,9), BB(window=20, std=2), SMA50, SMA200 ..."
+        "MACD(12,26,9), BB(window=20, std=2), SMA50, SMA200, EMA20, EMA50 ..."
     )
     macd_data = calculate_macd(closes)
     bb_data   = calculate_bollinger_bands(closes)
     sma50     = calculate_sma_series(closes, 50)
     sma200    = calculate_sma_series(closes, 200)
+    ema20     = calculate_ema_series(closes, 20)
+    ema50     = calculate_ema_series(closes, 50)
     logger.info(f"[STEP-4b] ✓ All indicator series computed ({len(closes)} points each)")
 
     # ── Step 4c. Fire news fetch concurrently with S/R computation ──────────
@@ -1116,6 +1118,8 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             "bb_lower":    bb_data["lower"][idx],
             "sma50":       sma50[idx],
             "sma200":      sma200[idx],
+            "ema20":       ema20[idx],
+            "ema50":       ema50[idx],
             "macd":        macd_data["macd"][idx],
             "macd_signal": macd_data["signal"][idx],
             "macd_hist":   macd_data["hist"][idx],

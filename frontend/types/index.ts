@@ -25,6 +25,8 @@ export interface HistoryPoint {
   bb_lower?:    number | null;
   sma50?:       number | null;
   sma200?:      number | null;
+  ema20?:       number | null;
+  ema50?:       number | null;
   macd?:        number | null;
   macd_signal?: number | null;
   macd_hist?:   number | null;
@@ -97,7 +99,7 @@ export interface PredictionData {
 
 export type ChartEntry = Record<string, string | number | undefined>;
 
-export type IndicatorKey = 'bb' | 'sma' | 'macd' | 'rsi' | 'volume';
+export type IndicatorKey = 'bb' | 'sma' | 'ema' | 'macd' | 'rsi' | 'volume';
 
 export interface TradeSetupResponse {
   entry_low:    number;

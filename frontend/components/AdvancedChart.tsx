@@ -20,7 +20,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts';
 
-export type IndicatorKey = 'bb' | 'sma' | 'macd' | 'rsi' | 'volume';
+export type IndicatorKey = 'bb' | 'sma' | 'ema' | 'macd' | 'rsi' | 'volume';
 
 export interface AdvHistoryPoint {
   date: string;
@@ -34,6 +34,8 @@ export interface AdvHistoryPoint {
   bb_lower?: number | null;
   sma50?: number | null;
   sma200?: number | null;
+  ema20?: number | null;
+  ema50?: number | null;
   macd?: number | null;
   macd_signal?: number | null;
   macd_hist?: number | null;
@@ -207,6 +209,14 @@ export default function AdvancedChart({
       const sma200 = priceChart.addSeries(LineSeries, { color: '#a855f7', lineWidth: 2 });
       sma50 .setData(histPoints(h => h.sma50));
       sma200.setData(histPoints(h => h.sma200));
+    }
+
+    // EMA 20 / 50 (dashed — visually distinct from solid SMA lines)
+    if (indicators.includes('ema')) {
+      const ema20 = priceChart.addSeries(LineSeries, { color: '#06b6d4', lineWidth: 2, lineStyle: 1 });
+      const ema50 = priceChart.addSeries(LineSeries, { color: '#f43f5e', lineWidth: 2, lineStyle: 1 });
+      ema20.setData(histPoints(h => h.ema20));
+      ema50.setData(histPoints(h => h.ema50));
     }
 
     // Forecast line + band
