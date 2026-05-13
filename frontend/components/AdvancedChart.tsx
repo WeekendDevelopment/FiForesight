@@ -213,8 +213,8 @@ export default function AdvancedChart({
 
     // EMA 20 / 50 (dashed — visually distinct from solid SMA lines)
     if (indicators.includes('ema')) {
-      const ema20 = priceChart.addSeries(LineSeries, { color: '#06b6d4', lineWidth: 2, lineStyle: 1 });
-      const ema50 = priceChart.addSeries(LineSeries, { color: '#f43f5e', lineWidth: 2, lineStyle: 1 });
+      const ema20 = priceChart.addSeries(LineSeries, { color: '#06b6d4', lineWidth: 2, lineStyle: 2 });
+      const ema50 = priceChart.addSeries(LineSeries, { color: '#f43f5e', lineWidth: 2, lineStyle: 2 });
       ema20.setData(histPoints(h => h.ema20));
       ema50.setData(histPoints(h => h.ema50));
     }
