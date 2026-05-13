@@ -20,8 +20,9 @@ import ConfidenceBadge   from '../components/ConfidenceBadge';
 import { ChartSkeleton, SidebarSkeleton } from '../components/Skeletons';
 import AnalystJuryPanel  from '../components/AnalystJuryPanel';
 import PriceChartCard    from '../components/PriceChartCard';
-import FundamentalsPanel from '../components/FundamentalsPanel';
-import TradeSetupCard    from '../components/TradeSetupCard';
+import FundamentalsPanel      from '../components/FundamentalsPanel';
+import PeerComparisonPanel    from '../components/PeerComparisonPanel';
+import TradeSetupCard         from '../components/TradeSetupCard';
 import StockChatPanel    from '../components/StockChatPanel';
 import { useIndicatorSignals } from '../hooks/useIndicatorSignals';
 import type { PredictionData, IndicatorKey, TradeSetupResponse } from '../types';
@@ -374,6 +375,15 @@ export default function QuantumDashboard() {
                     <FundamentalsPanel
                       prediction={prediction}
                       rsiInfo={rsiInfo}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
+                  )}
+
+                  {/* ── Peer Comparison ──────────────────────────────────── */}
+                  {prediction && (
+                    <PeerComparisonPanel
+                      baseSymbol={prediction.symbol}
                       isDark={isDark}
                       primaryColor={primaryColor}
                     />
