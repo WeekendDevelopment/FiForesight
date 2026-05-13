@@ -746,23 +746,36 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     #     (avoids redundant batch writes on repeated requests within 20h)
     #   • InfluxDB write_ohlcv_batch writes the last 29d for downstream analytics
     #   • InfluxDB write_price (Step 7) still tracks intraday live-price history
-    # Steps 1 + 3 in parallel — both are independent yfinance calls
-    logger.info("[STEP-1+3] Fetching 2y OHLCV history + fundamentals concurrently ...")
-    _gather_results = await asyncio.gather(
-        asyncio.to_thread(yf_svc.fetch_history, symbol, "2y"),
-        asyncio.to_thread(yf_svc.fetch_info, symbol),
-        return_exceptions=True,
-    )
-    df = _gather_results[0]
+    # Steps 1 + 3 in parallel — fetch_info is skipped if cached in Redis (1h TTL).
+    info_cache_key = f"info:{symbol.upper()}"
+    cached_info    = await cache_get(info_cache_key)
+
+    if cached_info is not None:
+        logger.info(f"[STEP-1+3] fetch_info cache HIT for {symbol} — fetching history only")
+        df_result = await asyncio.to_thread(yf_svc.fetch_history, symbol, "2y")
+        df         = df_result
+        info: dict = cached_info
+    else:
+        logger.info("[STEP-1+3] fetch_info cache MISS — fetching history + fundamentals concurrently ...")
+        _gather_results = await asyncio.gather(
+            asyncio.to_thread(yf_svc.fetch_history, symbol, "2y"),
+            asyncio.to_thread(yf_svc.fetch_info, symbol),
+            return_exceptions=True,
+        )
+        df         = _gather_results[0]
+        _info_result = _gather_results[1]
+        if isinstance(_info_result, Exception):
+            logger.error(f"[STEP-3] fetch_info failed for {symbol}: {_info_result} — using empty fundamentals")
+            info = {}
+        else:
+            info = _info_result
+            if info:
+                await cache_set(info_cache_key, info, ttl_seconds=3600)
+                logger.info(f"[STEP-3] fetch_info cached for {symbol} (TTL=1h)")
+
     if isinstance(df, Exception):
         logger.error(f"[STEP-1] fetch_history failed for {symbol}: {df}")
         raise HTTPException(status_code=404, detail=f"No data found for {symbol}.")
-    _info_result = _gather_results[1]
-    if isinstance(_info_result, Exception):
-        logger.error(f"[STEP-3] fetch_info failed for {symbol}: {_info_result} — using empty fundamentals")
-        info: dict = {}
-    else:
-        info: dict = _info_result
 
     if df.empty:
         logger.error(f"[STEP-1] yfinance returned empty df for {symbol} — returning 404")
