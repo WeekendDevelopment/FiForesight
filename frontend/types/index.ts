@@ -145,3 +145,23 @@ export interface IndicatorSignal {
 }
 
 export type IndicatorSignals = Record<string, IndicatorSignal | null>;
+
+export interface DCFScenario {
+  wacc:            number;
+  growth_rate:     number;
+  intrinsic_value: number;
+  upside_pct:      number;
+}
+
+export interface DCFResult {
+  symbol:             string;
+  current_price:      number;
+  bear:               DCFScenario;
+  base:               DCFScenario;
+  bull:               DCFScenario;
+  shares_outstanding: number;
+  fcf_billions:       number;
+  wacc_base:          number;
+  growth_rate_base:   number;
+  method:             string;
+}
