@@ -1693,14 +1693,14 @@ async def compare_peers(symbols: str = Query(..., description="Comma-separated t
 
 
 @app.get("/options/{symbol}")
-async def options_chain(symbol: str):
+async def options_chain(symbol: str) -> Dict[str, Any]:
     """
     Returns the nearest-expiry options chain (calls + puts) for the given symbol.
     Filters to strikes within ±25% of current price to keep payload small.
     """
     import yfinance as yf
 
-    def _fetch():
+    def _fetch() -> Optional[Dict[str, Any]]:
         ticker = yf.Ticker(symbol.upper())
         expirations = ticker.options
         if not expirations:
@@ -1715,8 +1715,11 @@ async def options_chain(symbol: str):
             or 0.0
         )
         price = float(price)
+        if price <= 0:
+            logger.warning("[OPTIONS] Unable to retrieve price for %s", symbol)
+            return None
 
-        def _clean(df, is_call: bool):
+        def _clean(df: Any, is_call: bool) -> List[Dict[str, Any]]:
             rows = []
             for _, r in df.iterrows():
                 strike = float(r.get("strike", 0))
@@ -1746,7 +1749,14 @@ async def options_chain(symbol: str):
             "puts":          _clean(chain.puts,  False),
         }
 
-    result = await asyncio.to_thread(_fetch)
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=12.0)
+    except asyncio.TimeoutError:
+        logger.warning("[OPTIONS] timeout fetching chain for %s", symbol)
+        raise HTTPException(status_code=504, detail=f"Options fetch timed out for {symbol}")
+    except Exception as exc:
+        logger.warning("[OPTIONS] fetch failed for %s: %s", symbol, exc, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Options provider error for {symbol}")
     if result is None:
         raise HTTPException(status_code=404, detail=f"No options data for {symbol}")
     return result

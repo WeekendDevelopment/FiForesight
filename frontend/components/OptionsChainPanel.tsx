@@ -33,8 +33,8 @@ function ContractRow({ c, isDark }: { c: OptionContract; isDark: boolean }) {
       <TableCell sx={cell}>{c.last.toFixed(2)}</TableCell>
       <TableCell sx={cell}>{c.bid.toFixed(2)}</TableCell>
       <TableCell sx={cell}>{c.ask.toFixed(2)}</TableCell>
-      <TableCell sx={{ ...cell, color: c.change >= 0 ? green : red }}>
-        {c.change >= 0 ? '+' : ''}{c.change.toFixed(2)}
+      <TableCell sx={{ ...cell, color: c.change_pct >= 0 ? green : red }}>
+        {c.change_pct >= 0 ? '+' : ''}{c.change_pct.toFixed(2)}%
       </TableCell>
       <TableCell sx={cell}>{c.volume.toLocaleString()}</TableCell>
       <TableCell sx={cell}>{c.open_interest.toLocaleString()}</TableCell>
@@ -91,7 +91,7 @@ export default function OptionsChainPanel({ data, isDark, primaryColor, onExpiry
           <Table size="small" stickyHeader>
             <TableHead>
               <TableRow>
-                {['Strike', 'Last', 'Bid', 'Ask', 'Chg', 'Vol', 'OI', 'IV%'].map(h => (
+                {['Strike', 'Last', 'Bid', 'Ask', 'Chg%', 'Vol', 'OI', 'IV%'].map(h => (
                   <TableCell
                     key={h}
                     sx={{

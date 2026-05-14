@@ -106,7 +106,8 @@ export default function QuantumDashboard() {
       setPrediction(response.data);
       fetchTradeSetup(response.data);
       // Fire-and-forget options chain fetch (non-blocking)
-      axios.get(`/api/options/${ticker}`)
+      const optionsSymbol = response.data?.symbol ?? fullSymbol;
+      axios.get(`/api/options/${encodeURIComponent(optionsSymbol)}`)
         .then(r => setOptionsData(r.data))
         .catch(() => setOptionsData(null));
       // Fire-and-forget DCF fetch (non-blocking)
