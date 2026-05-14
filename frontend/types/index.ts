@@ -149,6 +149,29 @@ export interface IndicatorSignal {
 
 export type IndicatorSignals = Record<string, IndicatorSignal | null>;
 
+export interface OptionContract {
+  strike:        number;
+  last:          number;
+  bid:           number;
+  ask:           number;
+  change:        number;
+  change_pct:    number;
+  volume:        number;
+  open_interest: number;
+  implied_vol:   number;
+  in_the_money:  boolean;
+  type:          'call' | 'put';
+}
+
+export interface OptionsChainResult {
+  symbol:        string;
+  expiry:        string;
+  expirations:   string[];
+  current_price: number;
+  calls:         OptionContract[];
+  puts:          OptionContract[];
+}
+
 export interface DCFScenario {
   wacc:            number;
   growth_rate:     number;

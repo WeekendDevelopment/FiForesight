@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import Script from "next/script";
 import EmotionRegistry from "./emotion-registry";
+import ClientProviders from "../components/ClientProviders";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -24,7 +25,9 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
         <EmotionRegistry>
-          {children}
+          <ClientProviders>
+            {children}
+          </ClientProviders>
         </EmotionRegistry>
         <Script id="newrelic" strategy="afterInteractive" src={nrScript} />
       </body>

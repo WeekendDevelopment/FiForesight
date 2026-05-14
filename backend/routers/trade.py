@@ -267,7 +267,7 @@ async def chat_endpoint(req: ChatRequest):
                             continue
         except Exception as exc:
             logger.warning("[CHAT] Groq streaming failed: %s", exc)
-            yield f"data: [ERROR] {exc}\n\n"
+            yield "data: [ERROR] Streaming unavailable\n\n"
 
         yield "data: [DONE]\n\n"
 
