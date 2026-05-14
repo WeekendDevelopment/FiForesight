@@ -33,31 +33,27 @@ export default function AnalystJuryPanel({ analysts }: { analysts: AnalystJuror[
   }, {} as Record<string, number>);
   const consensus = RATING_ORDER.find(r => ratingCounts[r]) ?? analysts[0]?.rating ?? 'Hold';
   const avgConf   = Math.round(analysts.reduce((s, a) => s + a.confidence, 0) / Math.max(analysts.length, 1));
-  const divergent = new Set(analysts.map(a => a.rating)).size > 1;
-
   return (
     <Stack spacing={1.5}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 0.5 }}>
         <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, fontSize: '1rem' }}>
           <Scale size={18} /> Analyst Jury
         </Typography>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-          {divergent && (
-            <Typography sx={{ fontSize: '0.58rem', opacity: 0.3, letterSpacing: '0.07em' }}>SPLIT</Typography>
-          )}
-          <Box sx={{
-            px: 1.2, py: 0.3, borderRadius: 1,
-            background: ratingColor(consensus).bg,
-            border: `1px solid ${ratingColor(consensus).text}44`,
-            display: 'flex', alignItems: 'center', gap: 0.6,
-          }}>
-            <Typography sx={{ fontSize: '0.62rem', fontWeight: 900, color: ratingColor(consensus).text, letterSpacing: '0.07em' }}>
-              {consensus.toUpperCase()}
-            </Typography>
-            <Typography sx={{ fontSize: '0.56rem', opacity: 0.55, color: ratingColor(consensus).text }}>
-              {avgConf}%
-            </Typography>
-          </Box>
+        <Box sx={{
+          px: 1.2, py: 0.3, borderRadius: 1,
+          background: ratingColor(consensus).bg,
+          border: `1px solid ${ratingColor(consensus).text}44`,
+          display: 'flex', alignItems: 'center', gap: 0.6,
+        }}>
+          <Typography sx={{ fontSize: '0.62rem', fontWeight: 900, color: ratingColor(consensus).text, letterSpacing: '0.07em' }}>
+            {consensus.toUpperCase()}
+          </Typography>
+          <Typography sx={{ fontSize: '0.56rem', opacity: 0.55, color: ratingColor(consensus).text }}>
+            {avgConf}%
+          </Typography>
+          <Typography sx={{ fontSize: '0.5rem', opacity: 0.35, color: ratingColor(consensus).text, fontFamily: 'monospace' }}>
+            {ratingCounts[consensus] ?? analysts.length}/{analysts.length}
+          </Typography>
         </Box>
       </Box>
 
