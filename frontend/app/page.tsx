@@ -25,10 +25,11 @@ import PriceChartCard    from '../components/PriceChartCard';
 import FundamentalsPanel      from '../components/FundamentalsPanel';
 import PeerComparisonPanel    from '../components/PeerComparisonPanel';
 import TradeSetupCard         from '../components/TradeSetupCard';
-import DCFCard               from '../components/DCFCard';
+import OptionsChainPanel from '../components/OptionsChainPanel';
 import StockChatPanel    from '../components/StockChatPanel';
 import { useIndicatorSignals } from '../hooks/useIndicatorSignals';
-import type { PredictionData, IndicatorKey, TradeSetupResponse, DCFResult } from '../types';
+import DCFCard               from '../components/DCFCard';
+import type { PredictionData, IndicatorKey, TradeSetupResponse, DCFResult, OptionsChainResult } from '../types';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -61,6 +62,7 @@ export default function QuantumDashboard() {
   const [chartEngine,      setChartEngine]      = useState<'classic' | 'pro'>('classic');
   const [tradeSetup,       setTradeSetup]       = useState<TradeSetupResponse | null>(null);
   const [tradeSetupLoading, setTradeSetupLoading] = useState(false);
+  const [optionsData,      setOptionsData]      = useState<OptionsChainResult | null>(null);
   const [dcfData,          setDcfData]          = useState<DCFResult | null>(null);
   const [chatOpen,         setChatOpen]         = useState(false);
   const [authOpen,         setAuthOpen]         = useState(false);
@@ -95,6 +97,7 @@ export default function QuantumDashboard() {
     setLoading(true);
     setError(null);
     setTradeSetup(null);
+    setOptionsData(null);
     setDcfData(null);
     setChatOpen(false);
     try {
@@ -102,6 +105,11 @@ export default function QuantumDashboard() {
       const response   = await axios.post('/api/predict', { data: fullSymbol });
       setPrediction(response.data);
       fetchTradeSetup(response.data);
+      // Fire-and-forget options chain fetch (non-blocking)
+      const optionsSymbol = response.data?.symbol ?? fullSymbol;
+      axios.get(`/api/options/${encodeURIComponent(optionsSymbol)}`)
+        .then(r => setOptionsData(r.data))
+        .catch(() => setOptionsData(null));
       // Fire-and-forget DCF fetch (non-blocking)
       axios.get(`/api/dcf/${ticker}`)
         .then(r => setDcfData(r.data))
@@ -299,6 +307,15 @@ export default function QuantumDashboard() {
                     isDark={isDark}
                     primaryColor={primaryColor}
                   />
+
+                  {/* ── Options Chain ─────────────────────────────────── */}
+                  {optionsData && (
+                    <OptionsChainPanel
+                      data={optionsData}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
+                  )}
 
                   {/* ── DCF Intrinsic Value ───────────────────────────── */}
                   {dcfData && (

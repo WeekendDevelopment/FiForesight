@@ -1692,6 +1692,74 @@ async def compare_peers(symbols: str = Query(..., description="Comma-separated t
     return {"peers": peers}
 
 
+@app.get("/options/{symbol}")
+async def options_chain(symbol: str) -> Dict[str, Any]:
+    """
+    Returns the nearest-expiry options chain (calls + puts) for the given symbol.
+    Filters to strikes within ±25% of current price to keep payload small.
+    """
+    import yfinance as yf
+
+    def _fetch() -> Optional[Dict[str, Any]]:
+        ticker = yf.Ticker(symbol.upper())
+        expirations = ticker.options
+        if not expirations:
+            return None
+        # Use the nearest expiry
+        expiry = expirations[0]
+        chain  = ticker.option_chain(expiry)
+        price  = (
+            ticker.info.get("currentPrice")
+            or ticker.info.get("regularMarketPrice")
+            or ticker.info.get("previousClose")
+            or 0.0
+        )
+        price = float(price)
+        if price <= 0:
+            logger.warning("[OPTIONS] Unable to retrieve price for %s", symbol)
+            return None
+
+        def _clean(df: Any, is_call: bool) -> List[Dict[str, Any]]:
+            rows = []
+            for _, r in df.iterrows():
+                strike = float(r.get("strike", 0))
+                if price > 0 and abs(strike - price) / price > 0.25:
+                    continue  # filter far OTM
+                rows.append({
+                    "strike":        round(strike, 2),
+                    "last":          round(float(r.get("lastPrice",        0)), 2),
+                    "bid":           round(float(r.get("bid",              0)), 2),
+                    "ask":           round(float(r.get("ask",              0)), 2),
+                    "change":        round(float(r.get("change",           0)), 2),
+                    "change_pct":    round(float(r.get("percentChange",    0)), 2),
+                    "volume":        int(r.get("volume",       0) or 0),
+                    "open_interest": int(r.get("openInterest", 0) or 0),
+                    "implied_vol":   round(float(r.get("impliedVolatility", 0)) * 100, 1),
+                    "in_the_money":  bool(r.get("inTheMoney", False)),
+                    "type":          "call" if is_call else "put",
+                })
+            return rows
+
+        return {
+            "symbol":        symbol.upper(),
+            "expiry":        expiry,
+            "expirations":   list(expirations[:8]),  # first 8 expiries
+            "current_price": round(price, 2),
+            "calls":         _clean(chain.calls, True),
+            "puts":          _clean(chain.puts,  False),
+        }
+
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=12.0)
+    except asyncio.TimeoutError:
+        logger.warning("[OPTIONS] timeout fetching chain for %s", symbol)
+        raise HTTPException(status_code=504, detail=f"Options fetch timed out for {symbol}")
+    except Exception as exc:
+        logger.warning("[OPTIONS] fetch failed for %s: %s", symbol, exc, exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Options provider error for {symbol}")
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No options data for {symbol}")
+    return result
 # ---------------------------------------------------------------------------
 # DCF Intrinsic Value
 # ---------------------------------------------------------------------------
