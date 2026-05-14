@@ -1,4 +1,3 @@
-import pytest
 from backend.models import run_monte_carlo
 
 
