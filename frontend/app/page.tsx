@@ -9,8 +9,10 @@ import {
   Skeleton, IconButton, Autocomplete, Fab,
 } from '@mui/material';
 import {
-  Search, BrainCircuit, Newspaper, BarChart2, Sun, Moon, MessageCircle,
+  Search, BrainCircuit, Newspaper, BarChart2, Sun, Moon, MessageCircle, LogIn, LogOut,
 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import AuthModal from '../components/AuthModal';
 import ModelWeightBar   from '../components/ModelWeightBar';
 import TrendingSparklines from '../components/TrendingSparklines';
 import MonteCarloFanChart from '../components/MonteCarloFanChart';
@@ -61,6 +63,9 @@ export default function QuantumDashboard() {
   const [tradeSetupLoading, setTradeSetupLoading] = useState(false);
   const [dcfData,          setDcfData]          = useState<DCFResult | null>(null);
   const [chatOpen,         setChatOpen]         = useState(false);
+  const [authOpen,         setAuthOpen]         = useState(false);
+
+  const { user, signOut } = useAuth();
 
   const theme = useMemo(() => buildTheme(themeMode), [themeMode]);
 
@@ -182,6 +187,26 @@ export default function QuantumDashboard() {
               >
                 🏁 Portfolio Race
               </Button>
+
+              {/* Auth button */}
+              {user ? (
+                <Button
+                  size="small" variant="outlined" onClick={signOut}
+                  startIcon={<LogOut size={14} />}
+                  sx={{ borderColor: `${primaryColor}55`, color: primaryColor, fontSize: 11, fontWeight: 700, px: 1.5, py: 0.5, borderRadius: 2 }}
+                >
+                  {user.email?.split('@')[0]}
+                </Button>
+              ) : (
+                <Button
+                  size="small" variant="outlined" onClick={() => setAuthOpen(true)}
+                  startIcon={<LogIn size={14} />}
+                  sx={{ borderColor: `${primaryColor}55`, color: primaryColor, fontSize: 11, fontWeight: 700, px: 1.5, py: 0.5, borderRadius: 2 }}
+                >
+                  Sign In
+                </Button>
+              )}
+              <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
 
               {/* Theme toggle */}
               <IconButton
