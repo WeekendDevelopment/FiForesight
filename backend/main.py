@@ -1241,6 +1241,7 @@ class TradeSetupRequest(BaseModel):
     resistance: List[float] = []
     trend: str = "Bullish"
     sentiment_label: str = "Neutral"
+    var_95: Optional[float] = None
 
     @field_validator("current_price")
     @classmethod
@@ -1282,6 +1283,9 @@ class TradeSetupResponse(BaseModel):
     risk_reward: str
     setup_type: str
     rationale: str
+    risk_per_share:         float
+    risk_pct:               float
+    suggested_position_pct: float
 
 
 @app.post("/trade-setup", response_model=TradeSetupResponse)
@@ -1395,6 +1399,10 @@ async def trade_setup(req: TradeSetupRequest):
     except Exception as exc:
         logger.warning("[TRADE-SETUP] Groq rationale failed: %s", exc)
 
+    risk_ps      = round(max(entry_mid - stop_loss, 0.01), 4)
+    risk_pct_val = round(risk_ps / entry_mid * 100, 2)
+    suggested_pct = round(min(1.0 / (risk_pct_val / 100), 5.0) * 100, 1)
+
     return TradeSetupResponse(
         entry_low=entry_low,
         entry_high=entry_high,
@@ -1405,6 +1413,9 @@ async def trade_setup(req: TradeSetupRequest):
         risk_reward=risk_reward,
         setup_type=setup_type,
         rationale=rationale,
+        risk_per_share=risk_ps,
+        risk_pct=risk_pct_val,
+        suggested_position_pct=suggested_pct,
     )
 
 

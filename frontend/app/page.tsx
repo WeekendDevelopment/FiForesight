@@ -77,6 +77,7 @@ export default function QuantumDashboard() {
       resistance:      data.indicators?.resistance ?? [],
       trend:           data.prediction.trend,
       sentiment_label: data.sentiment?.label ?? 'Neutral',
+      var_95:          data.monteCarlo?.var_95 ?? null,
     })
       .then(r  => setTradeSetup(r.data))
       .catch(() => { /* non-fatal */ })

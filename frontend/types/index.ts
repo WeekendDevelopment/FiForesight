@@ -113,15 +113,18 @@ export type ChartEntry = Record<string, string | number | undefined>;
 export type IndicatorKey = 'bb' | 'sma' | 'ema' | 'macd' | 'rsi' | 'volume';
 
 export interface TradeSetupResponse {
-  entry_low:    number;
-  entry_high:   number;
-  stop_loss:    number;
-  target_1:     number;
-  target_2:     number;
-  target_3:     number;
-  risk_reward:  string;
-  setup_type:   string;
-  rationale:    string;
+  entry_low:               number;
+  entry_high:              number;
+  stop_loss:               number;
+  target_1:                number;
+  target_2:                number;
+  target_3:                number;
+  risk_reward:             string;
+  setup_type:              string;
+  rationale:               string;
+  risk_per_share:          number;
+  risk_pct:                number;
+  suggested_position_pct:  number;
 }
 
 export interface ChatMessage {
