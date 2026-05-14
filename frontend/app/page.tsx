@@ -311,6 +311,11 @@ export default function QuantumDashboard() {
                   {optionsData && (
                     <OptionsChainPanel
                       data={optionsData}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
+                  )}
+
                   {/* ── DCF Intrinsic Value ───────────────────────────── */}
                   {dcfData && (
                     <DCFCard

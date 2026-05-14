@@ -170,6 +170,8 @@ export interface OptionsChainResult {
   current_price: number;
   calls:         OptionContract[];
   puts:          OptionContract[];
+}
+
 export interface DCFScenario {
   wacc:            number;
   growth_rate:     number;
