@@ -9,8 +9,10 @@ import {
   Skeleton, IconButton, Autocomplete, Fab,
 } from '@mui/material';
 import {
-  Search, BrainCircuit, Newspaper, BarChart2, Sun, Moon, MessageCircle,
+  Search, BrainCircuit, Newspaper, BarChart2, Sun, Moon, MessageCircle, LogIn, LogOut,
 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import AuthModal from '../components/AuthModal';
 import ModelWeightBar   from '../components/ModelWeightBar';
 import TrendingSparklines from '../components/TrendingSparklines';
 import MonteCarloFanChart from '../components/MonteCarloFanChart';
@@ -26,7 +28,8 @@ import TradeSetupCard         from '../components/TradeSetupCard';
 import OptionsChainPanel from '../components/OptionsChainPanel';
 import StockChatPanel    from '../components/StockChatPanel';
 import { useIndicatorSignals } from '../hooks/useIndicatorSignals';
-import type { PredictionData, IndicatorKey, TradeSetupResponse, OptionsChainResult } from '../types';
+import DCFCard               from '../components/DCFCard';
+import type { PredictionData, IndicatorKey, TradeSetupResponse, DCFResult, OptionsChainResult } from '../types';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -60,7 +63,11 @@ export default function QuantumDashboard() {
   const [tradeSetup,       setTradeSetup]       = useState<TradeSetupResponse | null>(null);
   const [tradeSetupLoading, setTradeSetupLoading] = useState(false);
   const [optionsData,      setOptionsData]      = useState<OptionsChainResult | null>(null);
+  const [dcfData,          setDcfData]          = useState<DCFResult | null>(null);
   const [chatOpen,         setChatOpen]         = useState(false);
+  const [authOpen,         setAuthOpen]         = useState(false);
+
+  const { user, signOut } = useAuth();
 
   const theme = useMemo(() => buildTheme(themeMode), [themeMode]);
 
@@ -79,6 +86,7 @@ export default function QuantumDashboard() {
       resistance:      data.indicators?.resistance ?? [],
       trend:           data.prediction.trend,
       sentiment_label: data.sentiment?.label ?? 'Neutral',
+      var_95:          data.monteCarlo?.var_95 ?? null,
     })
       .then(r  => setTradeSetup(r.data))
       .catch(() => { /* non-fatal */ })
@@ -90,6 +98,7 @@ export default function QuantumDashboard() {
     setError(null);
     setTradeSetup(null);
     setOptionsData(null);
+    setDcfData(null);
     setChatOpen(false);
     try {
       const fullSymbol = exchange ? `${ticker}:${exchange}` : ticker;
@@ -100,6 +109,10 @@ export default function QuantumDashboard() {
       axios.get(`/api/options/${ticker}`)
         .then(r => setOptionsData(r.data))
         .catch(() => setOptionsData(null));
+      // Fire-and-forget DCF fetch (non-blocking)
+      axios.get(`/api/dcf/${ticker}`)
+        .then(r => setDcfData(r.data))
+        .catch(() => setDcfData(null));
     } catch (err: any) {
       setError(err.response?.data?.error || 'Quantum analysis failed.');
     } finally {
@@ -181,6 +194,26 @@ export default function QuantumDashboard() {
               >
                 🏁 Portfolio Race
               </Button>
+
+              {/* Auth button */}
+              {user ? (
+                <Button
+                  size="small" variant="outlined" onClick={signOut}
+                  startIcon={<LogOut size={14} />}
+                  sx={{ borderColor: `${primaryColor}55`, color: primaryColor, fontSize: 11, fontWeight: 700, px: 1.5, py: 0.5, borderRadius: 2 }}
+                >
+                  {user.email?.split('@')[0]}
+                </Button>
+              ) : (
+                <Button
+                  size="small" variant="outlined" onClick={() => setAuthOpen(true)}
+                  startIcon={<LogIn size={14} />}
+                  sx={{ borderColor: `${primaryColor}55`, color: primaryColor, fontSize: 11, fontWeight: 700, px: 1.5, py: 0.5, borderRadius: 2 }}
+                >
+                  Sign In
+                </Button>
+              )}
+              <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
 
               {/* Theme toggle */}
               <IconButton
@@ -278,6 +311,10 @@ export default function QuantumDashboard() {
                   {optionsData && (
                     <OptionsChainPanel
                       data={optionsData}
+                  {/* ── DCF Intrinsic Value ───────────────────────────── */}
+                  {dcfData && (
+                    <DCFCard
+                      dcf={dcfData}
                       isDark={isDark}
                       primaryColor={primaryColor}
                     />
