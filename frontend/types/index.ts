@@ -113,15 +113,18 @@ export type ChartEntry = Record<string, string | number | undefined>;
 export type IndicatorKey = 'bb' | 'sma' | 'ema' | 'macd' | 'rsi' | 'volume';
 
 export interface TradeSetupResponse {
-  entry_low:    number;
-  entry_high:   number;
-  stop_loss:    number;
-  target_1:     number;
-  target_2:     number;
-  target_3:     number;
-  risk_reward:  string;
-  setup_type:   string;
-  rationale:    string;
+  entry_low:               number;
+  entry_high:              number;
+  stop_loss:               number;
+  target_1:                number;
+  target_2:                number;
+  target_3:                number;
+  risk_reward:             string;
+  setup_type:              string;
+  rationale:               string;
+  risk_per_share:          number;
+  risk_pct:                number;
+  suggested_position_pct:  number;
 }
 
 export interface ChatMessage {
@@ -145,3 +148,23 @@ export interface IndicatorSignal {
 }
 
 export type IndicatorSignals = Record<string, IndicatorSignal | null>;
+
+export interface DCFScenario {
+  wacc:            number;
+  growth_rate:     number;
+  intrinsic_value: number;
+  upside_pct:      number;
+}
+
+export interface DCFResult {
+  symbol:             string;
+  current_price:      number;
+  bear:               DCFScenario;
+  base:               DCFScenario;
+  bull:               DCFScenario;
+  shares_outstanding: number;
+  fcf_billions:       number;
+  wacc_base:          number;
+  growth_rate_base:   number;
+  method:             string;
+}

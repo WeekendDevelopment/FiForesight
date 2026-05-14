@@ -23,9 +23,10 @@ import PriceChartCard    from '../components/PriceChartCard';
 import FundamentalsPanel      from '../components/FundamentalsPanel';
 import PeerComparisonPanel    from '../components/PeerComparisonPanel';
 import TradeSetupCard         from '../components/TradeSetupCard';
+import DCFCard               from '../components/DCFCard';
 import StockChatPanel    from '../components/StockChatPanel';
 import { useIndicatorSignals } from '../hooks/useIndicatorSignals';
-import type { PredictionData, IndicatorKey, TradeSetupResponse } from '../types';
+import type { PredictionData, IndicatorKey, TradeSetupResponse, DCFResult } from '../types';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -58,6 +59,7 @@ export default function QuantumDashboard() {
   const [chartEngine,      setChartEngine]      = useState<'classic' | 'pro'>('classic');
   const [tradeSetup,       setTradeSetup]       = useState<TradeSetupResponse | null>(null);
   const [tradeSetupLoading, setTradeSetupLoading] = useState(false);
+  const [dcfData,          setDcfData]          = useState<DCFResult | null>(null);
   const [chatOpen,         setChatOpen]         = useState(false);
 
   const theme = useMemo(() => buildTheme(themeMode), [themeMode]);
@@ -77,6 +79,7 @@ export default function QuantumDashboard() {
       resistance:      data.indicators?.resistance ?? [],
       trend:           data.prediction.trend,
       sentiment_label: data.sentiment?.label ?? 'Neutral',
+      var_95:          data.monteCarlo?.var_95 ?? null,
     })
       .then(r  => setTradeSetup(r.data))
       .catch(() => { /* non-fatal */ })
@@ -87,12 +90,17 @@ export default function QuantumDashboard() {
     setLoading(true);
     setError(null);
     setTradeSetup(null);
+    setDcfData(null);
     setChatOpen(false);
     try {
       const fullSymbol = exchange ? `${ticker}:${exchange}` : ticker;
       const response   = await axios.post('/api/predict', { data: fullSymbol });
       setPrediction(response.data);
       fetchTradeSetup(response.data);
+      // Fire-and-forget DCF fetch (non-blocking)
+      axios.get(`/api/dcf/${ticker}`)
+        .then(r => setDcfData(r.data))
+        .catch(() => setDcfData(null));
     } catch (err: any) {
       setError(err.response?.data?.error || 'Quantum analysis failed.');
     } finally {
@@ -266,6 +274,15 @@ export default function QuantumDashboard() {
                     isDark={isDark}
                     primaryColor={primaryColor}
                   />
+
+                  {/* ── DCF Intrinsic Value ───────────────────────────── */}
+                  {dcfData && (
+                    <DCFCard
+                      dcf={dcfData}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
+                  )}
 
                   {/* ── 5-Day forecast table ──────────────────────────── */}
                   {prediction.forecastDays?.length > 0 && (
