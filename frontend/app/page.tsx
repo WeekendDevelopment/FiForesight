@@ -23,9 +23,10 @@ import PriceChartCard    from '../components/PriceChartCard';
 import FundamentalsPanel      from '../components/FundamentalsPanel';
 import PeerComparisonPanel    from '../components/PeerComparisonPanel';
 import TradeSetupCard         from '../components/TradeSetupCard';
+import OptionsChainPanel from '../components/OptionsChainPanel';
 import StockChatPanel    from '../components/StockChatPanel';
 import { useIndicatorSignals } from '../hooks/useIndicatorSignals';
-import type { PredictionData, IndicatorKey, TradeSetupResponse } from '../types';
+import type { PredictionData, IndicatorKey, TradeSetupResponse, OptionsChainResult } from '../types';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -58,6 +59,7 @@ export default function QuantumDashboard() {
   const [chartEngine,      setChartEngine]      = useState<'classic' | 'pro'>('classic');
   const [tradeSetup,       setTradeSetup]       = useState<TradeSetupResponse | null>(null);
   const [tradeSetupLoading, setTradeSetupLoading] = useState(false);
+  const [optionsData,      setOptionsData]      = useState<OptionsChainResult | null>(null);
   const [chatOpen,         setChatOpen]         = useState(false);
 
   const theme = useMemo(() => buildTheme(themeMode), [themeMode]);
@@ -87,12 +89,17 @@ export default function QuantumDashboard() {
     setLoading(true);
     setError(null);
     setTradeSetup(null);
+    setOptionsData(null);
     setChatOpen(false);
     try {
       const fullSymbol = exchange ? `${ticker}:${exchange}` : ticker;
       const response   = await axios.post('/api/predict', { data: fullSymbol });
       setPrediction(response.data);
       fetchTradeSetup(response.data);
+      // Fire-and-forget options chain fetch (non-blocking)
+      axios.get(`/api/options/${ticker}`)
+        .then(r => setOptionsData(r.data))
+        .catch(() => setOptionsData(null));
     } catch (err: any) {
       setError(err.response?.data?.error || 'Quantum analysis failed.');
     } finally {
@@ -266,6 +273,15 @@ export default function QuantumDashboard() {
                     isDark={isDark}
                     primaryColor={primaryColor}
                   />
+
+                  {/* ── Options Chain ─────────────────────────────────── */}
+                  {optionsData && (
+                    <OptionsChainPanel
+                      data={optionsData}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
+                  )}
 
                   {/* ── 5-Day forecast table ──────────────────────────── */}
                   {prediction.forecastDays?.length > 0 && (
