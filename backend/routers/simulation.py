@@ -3,12 +3,12 @@ import asyncio
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
 from models import run_ensemble_forecast
 from simulation_service import suggest_portfolio, get_portfolio_performance
-from dependencies import influx_svc, yf_svc, analyst_jury_svc
+from dependencies import influx_svc, yf_svc, analyst_jury_svc, get_user_id
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -111,17 +111,13 @@ class SimStateSaveRequest(BaseModel):
 
 
 @router.post("/simulation/state")
-async def simulation_state_save(req: SimStateSaveRequest):
-    # Validate env / sim_id at the route boundary so bad input → 400 (not 500).
+async def simulation_state_save(req: SimStateSaveRequest, user_id: str = Depends(get_user_id)):
     try:
         influx_svc._validate_sim_env(req.env)
         influx_svc._validate_sim_id(req.sim_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    # Canonicalize the state payload id — the record is keyed by sim_id, so the
-    # embedded state.id must agree (otherwise the UI will resume/delete a
-    # different id than the one persisted).
     state = dict(req.state)
     state_id = state.get("id")
     if state_id not in (None, req.sim_id):
@@ -132,7 +128,7 @@ async def simulation_state_save(req: SimStateSaveRequest):
     state["id"] = req.sim_id
 
     ok = await asyncio.to_thread(
-        influx_svc.write_simulation_state, req.sim_id, req.env, state
+        influx_svc.write_simulation_state, req.sim_id, req.env, state, user_id
     )
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to persist simulation state")
@@ -140,23 +136,23 @@ async def simulation_state_save(req: SimStateSaveRequest):
 
 
 @router.get("/simulation/state")
-async def simulation_state_list(env: str = Query(...)):
+async def simulation_state_list(env: str = Query(...), user_id: str = Depends(get_user_id)):
     try:
-        influx_svc._validate_sim_env_read(env)  # accepts "all" for cross-env reads
+        influx_svc._validate_sim_env_read(env)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    sims = await asyncio.to_thread(influx_svc.query_simulation_states, env)
+    sims = await asyncio.to_thread(influx_svc.query_simulation_states, env, user_id)
     return {"simulations": sims}
 
 
 @router.delete("/simulation/state/{sim_id}")
-async def simulation_state_delete(sim_id: str, env: str = Query(...)):
+async def simulation_state_delete(sim_id: str, env: str = Query(...), user_id: str = Depends(get_user_id)):
     try:
         influx_svc._validate_sim_env(env)
         influx_svc._validate_sim_id(sim_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    ok = await asyncio.to_thread(influx_svc.delete_simulation_state, sim_id, env)
+    ok = await asyncio.to_thread(influx_svc.delete_simulation_state, sim_id, env, user_id)
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to delete simulation state")
     return {"deleted": True}

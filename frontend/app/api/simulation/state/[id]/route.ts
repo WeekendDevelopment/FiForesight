@@ -7,11 +7,12 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const env = req.nextUrl.searchParams.get('env') || 'local';
+  const env  = req.nextUrl.searchParams.get('env') || 'local';
+  const auth = req.headers.get('authorization') ?? '';
   try {
     const res = await fetch(
       `${BACKEND_URL}/simulation/state/${encodeURIComponent(id)}?env=${encodeURIComponent(env)}`,
-      { method: 'DELETE' },
+      { method: 'DELETE', headers: auth ? { authorization: auth } : {} },
     );
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });

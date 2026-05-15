@@ -3,9 +3,12 @@ import { NextRequest, NextResponse } from 'next/server';
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000';
 
 export async function GET(req: NextRequest) {
-  const env = req.nextUrl.searchParams.get('env') || 'local';
+  const params = req.nextUrl.searchParams;
+  const env    = params.get('env') || 'local';
+  const auth   = req.headers.get('authorization') ?? '';
+  const url    = `${BACKEND_URL}/simulation/state?env=${encodeURIComponent(env)}`;
   try {
-    const res = await fetch(`${BACKEND_URL}/simulation/state?env=${encodeURIComponent(env)}`);
+    const res  = await fetch(url, { headers: auth ? { authorization: auth } : {} });
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
   } catch {
@@ -15,13 +18,17 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10_000);
+  const timeout    = setTimeout(() => controller.abort(), 10_000);
+  const auth       = req.headers.get('authorization') ?? '';
   try {
     const body = await req.json();
-    const res = await fetch(`${BACKEND_URL}/simulation/state`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+    const res  = await fetch(`${BACKEND_URL}/simulation/state`, {
+      method:  'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(auth ? { authorization: auth } : {}),
+      },
+      body:   JSON.stringify(body),
       signal: controller.signal,
     });
     const data = await res.json();

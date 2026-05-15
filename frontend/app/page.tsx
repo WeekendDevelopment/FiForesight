@@ -10,7 +10,10 @@ import {
 } from '@mui/material';
 import {
   Search, BrainCircuit, Newspaper, BarChart2, Sun, Moon, MessageCircle, LogIn, LogOut,
+  Star, StarOff,
 } from 'lucide-react';
+import AuthGate from '../components/AuthGate';
+import { useWatchlist } from '../hooks/useWatchlist';
 import { useAuth } from '../contexts/AuthContext';
 import AuthModal from '../components/AuthModal';
 import ModelWeightBar   from '../components/ModelWeightBar';
@@ -68,6 +71,7 @@ export default function QuantumDashboard() {
   const [authOpen,         setAuthOpen]         = useState(false);
 
   const { user, signOut } = useAuth();
+  const { watchlist, currentIsSaved, toggle: toggleWatchlist, toggling: watchlistToggling } = useWatchlist(prediction?.symbol ?? ticker);
 
   const theme = useMemo(() => buildTheme(themeMode), [themeMode]);
 
@@ -104,7 +108,11 @@ export default function QuantumDashboard() {
       const fullSymbol = exchange ? `${ticker}:${exchange}` : ticker;
       const response   = await axios.post('/api/predict', { data: fullSymbol });
       setPrediction(response.data);
-      fetchTradeSetup(response.data);
+      if (user) {
+        fetchTradeSetup(response.data);
+      } else {
+        setTradeSetup(null);
+      }
       // Fire-and-forget options chain fetch (non-blocking)
       const optionsSymbol = response.data?.symbol ?? fullSymbol;
       axios.get(`/api/options/${encodeURIComponent(optionsSymbol)}`)
@@ -266,6 +274,18 @@ export default function QuantumDashboard() {
                 >
                   {loading ? <CircularProgress size={20} color="inherit" /> : <Search size={20} />}
                 </Button>
+                {user && prediction && (
+                  <IconButton
+                    size="small"
+                    onClick={() => void toggleWatchlist(prediction.symbol)}
+                    disabled={watchlistToggling}
+                    aria-label={currentIsSaved ? 'Remove from watchlist' : 'Save to watchlist'}
+                    title={currentIsSaved ? 'Remove from watchlist' : 'Save to watchlist'}
+                    sx={{ color: currentIsSaved ? '#f59e0b' : 'text.secondary' }}
+                  >
+                    {currentIsSaved ? <Star size={18} fill="#f59e0b" /> : <StarOff size={18} />}
+                  </IconButton>
+                )}
               </Paper>
             </Stack>
           </Stack>
@@ -301,12 +321,22 @@ export default function QuantumDashboard() {
                   />
 
                   {/* ── Trade Setup ──────────────────────────────────── */}
-                  <TradeSetupCard
-                    setup={tradeSetup}
-                    loading={tradeSetupLoading}
-                    isDark={isDark}
-                    primaryColor={primaryColor}
-                  />
+                  {user ? (
+                    <TradeSetupCard
+                      setup={tradeSetup}
+                      loading={tradeSetupLoading}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
+                  ) : (
+                    <AuthGate
+                      title="Trade Setup"
+                      message="Sign in to see personalized entry zones, stop levels, and position sizing."
+                      onSignIn={() => setAuthOpen(true)}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
+                  )}
 
                   {/* ── Options Chain ─────────────────────────────────── */}
                   {optionsData && (
@@ -430,6 +460,40 @@ export default function QuantumDashboard() {
             <Grid size={{ xs: 12, lg: 4 }}>
               {loading ? <SidebarSkeleton /> : (
                 <Stack spacing={3}>
+                  {/* ── Watchlist ─────────────────────────────────────── */}
+                  {user && watchlist.length > 0 && (
+                    <Paper sx={{
+                      p: 2,
+                      border: `1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'}`,
+                    }}>
+                      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
+                        <Star size={14} color="#f59e0b" fill="#f59e0b" />
+                        <Typography variant="overline" sx={{ opacity: 0.6, lineHeight: 1 }}>
+                          Watchlist
+                        </Typography>
+                      </Stack>
+                      <Stack direction="row" flexWrap="wrap" gap={0.75}>
+                        {watchlist.map(sym => (
+                          <Chip
+                            key={sym}
+                            label={sym}
+                            size="small"
+                            onClick={() => setTicker(sym)}
+                            onDelete={() => void toggleWatchlist(sym)}
+                            sx={{
+                              cursor: 'pointer',
+                              fontWeight: 700,
+                              fontSize: 11,
+                              bgcolor: isDark ? 'rgba(245,158,11,0.1)' : 'rgba(245,158,11,0.15)',
+                              color: '#f59e0b',
+                              '& .MuiChip-deleteIcon': { color: '#f59e0b', opacity: 0.5, '&:hover': { opacity: 1 } },
+                            }}
+                          />
+                        ))}
+                      </Stack>
+                    </Paper>
+                  )}
+
                   {prediction && (
                     <FundamentalsPanel
                       prediction={prediction}
@@ -472,9 +536,9 @@ export default function QuantumDashboard() {
               onClose={() => setChatOpen(false)}
             />
             <Fab
-              onClick={() => setChatOpen(o => !o)}
+              onClick={() => user ? setChatOpen(o => !o) : setAuthOpen(true)}
               size="medium"
-              aria-label={chatOpen ? 'Close chat' : 'Open chat'}
+              aria-label={user ? (chatOpen ? 'Close chat' : 'Open AI chat') : 'Sign in to open AI chat'}
               sx={{
                 position: 'fixed', bottom: 24, right: 24,
                 background: primaryColor,
