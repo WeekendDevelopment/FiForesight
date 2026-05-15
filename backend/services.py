@@ -298,38 +298,54 @@ class InfluxService:
             raise ValueError(f"sim_id must be a UUID v4, got: {sim_id!r}")
         return sim_id.lower()
 
-    def write_simulation_state(self, sim_id: str, env: str, state: dict) -> bool:
+    @staticmethod
+    def _validate_user_id(user_id: str) -> str:
+        """Accepts empty string (anonymous) or a Supabase UUID."""
+        if not user_id:
+            return ""
+        if not _UUID_RE.match(user_id.lower()):
+            raise ValueError(f"user_id must be a UUID v4, got: {user_id!r}")
+        return user_id.lower()
+
+    def write_simulation_state(self, sim_id: str, env: str, state: dict, user_id: str = "") -> bool:
         try:
-            env    = self._validate_sim_env(env)
-            sim_id = self._validate_sim_id(sim_id)
-            point  = (
+            env     = self._validate_sim_env(env)
+            sim_id  = self._validate_sim_id(sim_id)
+            user_id = self._validate_user_id(user_id)
+            point   = (
                 Point("simulation_state")
                 .tag("env",    env)
                 .tag("sim_id", sim_id)
                 .field("state_json", json.dumps(state))
             )
+            if user_id:
+                point = point.tag("user_id", user_id)
             self.write_api.write(
                 bucket=Config.INFLUXDB_BUCKET,
                 org=Config.INFLUXDB_ORG,
                 record=point,
             )
-            logger.info("[INFLUXDB] simulation_state saved: sim_id=%s env=%s", sim_id, env)
+            logger.info("[INFLUXDB] simulation_state saved: sim_id=%s env=%s user=%s", sim_id, env, user_id or "anon")
             return True
         except Exception as exc:
             logger.error("[INFLUXDB] write_simulation_state failed: %s", exc)
             return False
 
-    def query_simulation_states(self, env: str) -> List[dict]:
-        """Return all live (non-deleted) simulations for the given env (or all envs), newest first."""
+    def query_simulation_states(self, env: str, user_id: str = "") -> List[dict]:
+        """Return live (non-deleted) simulations for the given env, optionally filtered by user."""
         try:
             if env not in _VALID_SIM_ENV_READ:
                 raise ValueError(f"Invalid simulation env: {env!r}")
-            env_filter = "" if env == "all" else f'  |> filter(fn: (r) => r.env == "{env}")\n'
+            user_id = self._validate_user_id(user_id)
+            env_filter  = "" if env == "all" else f'  |> filter(fn: (r) => r.env == "{env}")\n'
+            # When a user_id is provided, return only that user's records.
+            # Records without a user_id tag (legacy/anonymous) are excluded.
+            user_filter = f'  |> filter(fn: (r) => r.user_id == "{user_id}")\n' if user_id else ""
             query = f"""
 from(bucket: "{Config.INFLUXDB_BUCKET}")
   |> range(start: -365d)
   |> filter(fn: (r) => r._measurement == "simulation_state")
-{env_filter}  |> filter(fn: (r) => r._field == "state_json")
+{env_filter}{user_filter}  |> filter(fn: (r) => r._field == "state_json")
   |> last()
   |> filter(fn: (r) => r._value != "")
   |> sort(columns: ["_time"], desc: true)
@@ -340,7 +356,6 @@ from(bucket: "{Config.INFLUXDB_BUCKET}")
                 for record in table.records:
                     try:
                         state = json.loads(record.get_value())
-                        # Inject the env tag so the frontend can label cross-env results
                         if "env" not in state:
                             state["env"] = record.values.get("env", env)
                         results.append(state)
@@ -354,23 +369,26 @@ from(bucket: "{Config.INFLUXDB_BUCKET}")
             logger.error("[INFLUXDB] query_simulation_states failed: %s", exc)
             return []
 
-    def delete_simulation_state(self, sim_id: str, env: str) -> bool:
+    def delete_simulation_state(self, sim_id: str, env: str, user_id: str = "") -> bool:
         """Soft-delete: write an empty-string tombstone so `last()` filters it out."""
         try:
-            env    = self._validate_sim_env(env)
-            sim_id = self._validate_sim_id(sim_id)
-            point  = (
+            env     = self._validate_sim_env(env)
+            sim_id  = self._validate_sim_id(sim_id)
+            user_id = self._validate_user_id(user_id)
+            point   = (
                 Point("simulation_state")
                 .tag("env",    env)
                 .tag("sim_id", sim_id)
                 .field("state_json", "")
             )
+            if user_id:
+                point = point.tag("user_id", user_id)
             self.write_api.write(
                 bucket=Config.INFLUXDB_BUCKET,
                 org=Config.INFLUXDB_ORG,
                 record=point,
             )
-            logger.info("[INFLUXDB] simulation_state deleted: sim_id=%s env=%s", sim_id, env)
+            logger.info("[INFLUXDB] simulation_state deleted: sim_id=%s env=%s user=%s", sim_id, env, user_id or "anon")
             return True
         except Exception as exc:
             logger.error("[INFLUXDB] delete_simulation_state failed: %s", exc)

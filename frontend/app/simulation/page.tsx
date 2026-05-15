@@ -11,8 +11,9 @@ import {
 } from '@mui/material';
 import {
   ArrowLeft, Trash2, BarChart2, Trophy, RefreshCw,
-  Target, Brain,
+  Target, Brain, Lock, LogIn,
 } from 'lucide-react';
+import { useAuth } from '../../contexts/AuthContext';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ReferenceLine, Legend,
@@ -325,6 +326,7 @@ function SuggestionCard({
 // ── Main Page ──────────────────────────────────────────────────────────────────
 
 export default function SimulationPage() {
+  const { user, loading: authLoading } = useAuth();
   const [phase, setPhase]                   = useState<Phase>('welcome');
   const [riskLevel, setRiskLevel]           = useState<RiskLevel>('moderate');
   const [selectedSectors, setSelectedSectors] = useState<string[]>([]);
@@ -369,9 +371,10 @@ export default function SimulationPage() {
         const legacy = JSON.parse(legacyRaw) as SimulationState;
         if (legacy && typeof legacy.id === 'string') {
           await axios.post('/api/simulation/state', {
-            sim_id: legacy.id,
-            env:    SIM_ENV,
-            state:  legacy,
+            sim_id:  legacy.id,
+            env:     SIM_ENV,
+            state:   legacy,
+            user_id: user?.id ?? '',
           });
           // Only clear once the DB write succeeded.
           try { localStorage.removeItem(LEGACY_STORAGE_KEY); } catch { /* noop */ }
@@ -388,8 +391,9 @@ export default function SimulationPage() {
     setSimsLoading(true);
     setSimsError('');
     try {
+      const userId = user?.id ?? '';
       const { data } = await axios.get<{ simulations: SimulationState[] }>(
-        `/api/simulation/state?env=${SIM_ENV_READ}`
+        `/api/simulation/state?env=${SIM_ENV_READ}&user_id=${encodeURIComponent(userId)}`
       );
       setSavedSims(data.simulations ?? []);
     } catch (e: unknown) {
@@ -505,7 +509,7 @@ export default function SimulationPage() {
     // Persist to DB (non-blocking — simulation starts regardless). Track the
     // in-flight promise so a subsequent reset can await it before deleting.
     const savePromise = axios
-      .post('/api/simulation/state', { sim_id: sim.id, env: SIM_ENV, state: sim })
+      .post('/api/simulation/state', { sim_id: sim.id, env: SIM_ENV, state: sim, user_id: user?.id ?? '' })
       .then(() => {
         // Guard: if the user has already reset this sim, don't resurrect it.
         if (deletedSims.current.has(sim.id)) return;
@@ -525,7 +529,7 @@ export default function SimulationPage() {
       deletedSims.current.add(simId);
       const pending = pendingSaves.current.get(simId) ?? Promise.resolve();
       void pending.then(() =>
-        axios.delete(`/api/simulation/state/${simId}?env=${normalizeSimEnv(simulation.env)}`)
+        axios.delete(`/api/simulation/state/${simId}?env=${normalizeSimEnv(simulation.env)}&user_id=${encodeURIComponent(user?.id ?? '')}`)
           .then(() => setSavedSims(prev => prev.filter(s => s.id !== simId)))
           .catch(() => { /* silent */ })
       );
@@ -1253,11 +1257,42 @@ export default function SimulationPage() {
         </Box>
 
         <Container maxWidth="lg" sx={{ py: 4 }}>
-          {phase === 'welcome'   && Welcome()}
-          {phase === 'chat'      && Chat()}
-          {phase === 'analyzing' && Analyzing()}
-          {phase === 'portfolio' && Portfolio()}
-          {phase === 'race'      && simulation && Race()}
+          {/* Auth gate — shown while auth resolves or when user is not signed in */}
+          {!authLoading && !user ? (
+            <Box sx={{ textAlign: 'center', py: 10 }}>
+              <Box sx={{ color: 'rgba(0,242,255,0.25)', mb: 3 }}>
+                <Lock size={64} />
+              </Box>
+              <Typography variant="h5" fontWeight={700} sx={{ mb: 1 }}>
+                Sign in to access Portfolio Race
+              </Typography>
+              <Typography color="text.secondary" sx={{ mb: 4 }}>
+                Build an AI-curated portfolio and race it against the S&amp;P 500.
+              </Typography>
+              <Button
+                component="a"
+                href="/"
+                variant="outlined"
+                startIcon={<LogIn size={16} />}
+                sx={{
+                  borderColor: 'rgba(0,242,255,0.5)',
+                  color: '#00f2ff',
+                  fontWeight: 700,
+                  '&:hover': { borderColor: '#00f2ff', background: 'rgba(0,242,255,0.08)' },
+                }}
+              >
+                Go to Sign In
+              </Button>
+            </Box>
+          ) : (
+            <>
+              {phase === 'welcome'   && Welcome()}
+              {phase === 'chat'      && Chat()}
+              {phase === 'analyzing' && Analyzing()}
+              {phase === 'portfolio' && Portfolio()}
+              {phase === 'race'      && simulation && Race()}
+            </>
+          )}
         </Container>
       </Box>
     </ThemeProvider>

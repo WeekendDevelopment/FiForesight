@@ -1,12 +1,12 @@
 # backend/routers/trade.py
 import json
 import logging
-from typing import Any, List, Optional
+from typing import List, Optional
 
 import httpx
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from config import Config
 from dependencies import analyst_jury_svc
@@ -45,13 +45,11 @@ class TradeSetupRequest(BaseModel):
             raise ValueError("rsi must be between 0 and 100")
         return v
 
-    @field_validator("high_range")
-    @classmethod
-    def validate_ranges(cls, v: float, info: Any) -> float:
-        low = info.data.get("low_range")
-        if low is not None and v <= low:
+    @model_validator(mode="after")
+    def validate_ranges(self) -> "TradeSetupRequest":
+        if self.high_range <= self.low_range:
             raise ValueError("high_range must be > low_range")
-        return v
+        return self
 
     @field_validator("support", "resistance")
     @classmethod
