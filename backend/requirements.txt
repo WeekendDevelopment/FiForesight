@@ -19,3 +19,5 @@ langchain-core
 fastmcp
 # Native Redis client with hiredis C extension for faster response parsing
 redis[hiredis]
+# JWT verification for Supabase auth tokens
+PyJWT
