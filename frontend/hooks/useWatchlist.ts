@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { fetchWatchlist, addToWatchlist, removeFromWatchlist } from '../lib/watchlist';
 
@@ -9,16 +9,19 @@ export function useWatchlist(currentSymbol?: string) {
   const [watchlist, setWatchlist]   = useState<string[]>([]);
   const [loading, setLoading]       = useState(false);
   const [toggling, setToggling]     = useState(false);
+  const loadSeqRef                  = useRef(0);
 
   const load = useCallback(async () => {
-    if (!user) { setWatchlist([]); return; }
+    const seq = ++loadSeqRef.current;
+    if (!user) { setWatchlist([]); setLoading(false); return; }
     setLoading(true);
     try {
-      setWatchlist(await fetchWatchlist(user.id));
+      const rows = await fetchWatchlist(user.id);
+      if (seq === loadSeqRef.current) setWatchlist(rows);
     } catch {
       // non-fatal — watchlist feature silently unavailable if table not set up
     } finally {
-      setLoading(false);
+      if (seq === loadSeqRef.current) setLoading(false);
     }
   }, [user]);
 

@@ -356,13 +356,15 @@ export default function SimulationPage() {
   // before re-adding to savedSims.
   const deletedSims  = useRef<Set<string>>(new Set());
 
-  // On mount: migrate any legacy localStorage save to the DB, then load sims.
+  // Wait for auth to settle before migrating/loading — running with user=null
+  // would migrate legacy sims into anonymous scope and never reload after sign-in.
   useEffect(() => {
-    void migrateLegacyAndLoad();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (authLoading) return;
+    if (!user) { setSavedSims([]); setSimsLoading(false); return; }
+    void migrateLegacyAndLoad(user.id);
+  }, [authLoading, user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function migrateLegacyAndLoad() {
+  async function migrateLegacyAndLoad(userId: string) {
     let legacyRaw: string | null = null;
     try { legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY); } catch { /* noop */ }
 
@@ -374,7 +376,7 @@ export default function SimulationPage() {
             sim_id:  legacy.id,
             env:     SIM_ENV,
             state:   legacy,
-            user_id: user?.id ?? '',
+            user_id: userId,
           });
           // Only clear once the DB write succeeded.
           try { localStorage.removeItem(LEGACY_STORAGE_KEY); } catch { /* noop */ }
@@ -384,14 +386,13 @@ export default function SimulationPage() {
         console.warn('[Simulation] legacy save migration failed; retaining localStorage copy:', e);
       }
     }
-    await loadSavedSims();
+    await loadSavedSims(userId);
   }
 
-  async function loadSavedSims() {
+  async function loadSavedSims(userId: string) {
     setSimsLoading(true);
     setSimsError('');
     try {
-      const userId = user?.id ?? '';
       const { data } = await axios.get<{ simulations: SimulationState[] }>(
         `/api/simulation/state?env=${SIM_ENV_READ}&user_id=${encodeURIComponent(userId)}`
       );
@@ -604,7 +605,7 @@ export default function SimulationPage() {
             severity="warning"
             sx={{ mb: 3, textAlign: 'left' }}
             action={
-              <Button size="small" color="inherit" onClick={() => void loadSavedSims()}>
+              <Button size="small" color="inherit" onClick={() => void loadSavedSims(user?.id ?? '')}>
                 Retry
               </Button>
             }
@@ -670,7 +671,7 @@ export default function SimulationPage() {
                         deletedSims.current.add(sim.id);
                         const pending = pendingSaves.current.get(sim.id) ?? Promise.resolve();
                         void pending.then(() =>
-                          axios.delete(`/api/simulation/state/${sim.id}?env=${simEnv}`).catch(() => {})
+                          axios.delete(`/api/simulation/state/${sim.id}?env=${simEnv}&user_id=${encodeURIComponent(user?.id ?? '')}`).catch(() => {})
                         );
                         setSavedSims(prev => prev.filter(s => s.id !== sim.id));
                       }}

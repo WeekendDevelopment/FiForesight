@@ -325,7 +325,7 @@ class InfluxService:
                 org=Config.INFLUXDB_ORG,
                 record=point,
             )
-            logger.info("[INFLUXDB] simulation_state saved: sim_id=%s env=%s user=%s", sim_id, env, user_id or "anon")
+            logger.info("[INFLUXDB] simulation_state saved: sim_id=%s env=%s user=%s", sim_id, env, "authenticated" if user_id else "anon")
             return True
         except Exception as exc:
             logger.error("[INFLUXDB] write_simulation_state failed: %s", exc)
@@ -338,9 +338,12 @@ class InfluxService:
                 raise ValueError(f"Invalid simulation env: {env!r}")
             user_id = self._validate_user_id(user_id)
             env_filter  = "" if env == "all" else f'  |> filter(fn: (r) => r.env == "{env}")\n'
-            # When a user_id is provided, return only that user's records.
-            # Records without a user_id tag (legacy/anonymous) are excluded.
-            user_filter = f'  |> filter(fn: (r) => r.user_id == "{user_id}")\n' if user_id else ""
+            # Authenticated: exact-match on user_id tag.
+            # Anonymous: restrict to legacy rows that have no user_id tag at all.
+            if user_id:
+                user_filter = f'  |> filter(fn: (r) => r.user_id == "{user_id}")\n'
+            else:
+                user_filter = '  |> filter(fn: (r) => not exists r.user_id)\n'
             query = f"""
 from(bucket: "{Config.INFLUXDB_BUCKET}")
   |> range(start: -365d)
@@ -388,7 +391,7 @@ from(bucket: "{Config.INFLUXDB_BUCKET}")
                 org=Config.INFLUXDB_ORG,
                 record=point,
             )
-            logger.info("[INFLUXDB] simulation_state deleted: sim_id=%s env=%s user=%s", sim_id, env, user_id or "anon")
+            logger.info("[INFLUXDB] simulation_state deleted: sim_id=%s env=%s user=%s", sim_id, env, "authenticated" if user_id else "anon")
             return True
         except Exception as exc:
             logger.error("[INFLUXDB] delete_simulation_state failed: %s", exc)

@@ -23,7 +23,7 @@ export async function fetchWatchlist(userId: string): Promise<string[]> {
     .eq('user_id', userId)
     .order('created_at', { ascending: false });
   if (error) throw error;
-  return (data ?? []).map((r: { symbol: string }) => r.symbol);
+  return Array.from(new Set((data ?? []).map((r: { symbol: string }) => (r.symbol ?? '').trim().toUpperCase()).filter(Boolean)));
 }
 
 export async function addToWatchlist(userId: string, symbol: string): Promise<void> {

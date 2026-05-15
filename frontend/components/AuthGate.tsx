@@ -1,7 +1,7 @@
 'use client';
 
 import { Box, Typography, Button, Paper } from '@mui/material';
-import { Lock } from 'lucide-react';
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 
 interface AuthGateProps {
   title:      string;
@@ -23,7 +23,7 @@ export default function AuthGate({ title, message, onSignIn, isDark, primaryColo
       }}
     >
       <Box sx={{ color: isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.2)', mb: 2 }}>
-        <Lock size={36} />
+        <LockOutlinedIcon sx={{ fontSize: 36 }} />
       </Box>
       <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 0.5 }}>
         {title}

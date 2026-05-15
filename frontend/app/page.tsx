@@ -108,7 +108,11 @@ export default function QuantumDashboard() {
       const fullSymbol = exchange ? `${ticker}:${exchange}` : ticker;
       const response   = await axios.post('/api/predict', { data: fullSymbol });
       setPrediction(response.data);
-      fetchTradeSetup(response.data);
+      if (user) {
+        fetchTradeSetup(response.data);
+      } else {
+        setTradeSetup(null);
+      }
       // Fire-and-forget options chain fetch (non-blocking)
       const optionsSymbol = response.data?.symbol ?? fullSymbol;
       axios.get(`/api/options/${encodeURIComponent(optionsSymbol)}`)
@@ -275,6 +279,7 @@ export default function QuantumDashboard() {
                     size="small"
                     onClick={() => void toggleWatchlist(prediction.symbol)}
                     disabled={watchlistToggling}
+                    aria-label={currentIsSaved ? 'Remove from watchlist' : 'Save to watchlist'}
                     title={currentIsSaved ? 'Remove from watchlist' : 'Save to watchlist'}
                     sx={{ color: currentIsSaved ? '#f59e0b' : 'text.secondary' }}
                   >
@@ -533,7 +538,7 @@ export default function QuantumDashboard() {
             <Fab
               onClick={() => user ? setChatOpen(o => !o) : setAuthOpen(true)}
               size="medium"
-              aria-label={chatOpen ? 'Close chat' : 'Open AI chat'}
+              aria-label={user ? (chatOpen ? 'Close chat' : 'Open AI chat') : 'Sign in to open AI chat'}
               sx={{
                 position: 'fixed', bottom: 24, right: 24,
                 background: primaryColor,
