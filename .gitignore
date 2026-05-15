@@ -1,6 +1,7 @@
 .claude/
 frontend/node_modules
 frontend/.next
+*.tsbuildinfo
 frontend/.env.local
 frontend/next-env.d.ts
 .idea
