@@ -93,6 +93,26 @@ export default function TradeSetupCard({ setup, loading, isDark, primaryColor }:
           </Box>
         </Box>
 
+        {/* Position sizing */}
+        <Box sx={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          px: 1.25, py: 0.75, mb: 1.5, borderRadius: 1.5,
+          background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)',
+          border: '1px solid rgba(255,255,255,0.06)',
+        }}>
+          <Typography sx={{ fontSize: '0.65rem', opacity: 0.5, letterSpacing: '0.06em', fontWeight: 700 }}>
+            POSITION SIZE
+          </Typography>
+          <Stack direction="row" spacing={2} alignItems="center">
+            <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, color: primaryColor }}>
+              {setup.suggested_position_pct.toFixed(1)}% of portfolio
+            </Typography>
+            <Typography sx={{ fontSize: '0.6rem', opacity: 0.4, fontFamily: 'monospace' }}>
+              {setup.risk_pct.toFixed(1)}% risk/share · 1% rule
+            </Typography>
+          </Stack>
+        </Box>
+
         {/* Rationale */}
         <Typography sx={{ fontSize: '0.78rem', opacity: 0.7, lineHeight: 1.5 }}>
           {setup.rationale}

@@ -1,7 +1,7 @@
 # FiForesight — CLAUDE.md
 
 ## What This Is
-AI-driven quantitative financial forecasting SaaS. Ticker lookup → ensemble ML forecast (48h price range) + technical indicators + 3-model LLM analyst jury + VADER sentiment + live news. Includes a portfolio simulation engine.
+AI-driven quantitative financial forecasting SaaS. Ticker lookup → ensemble ML forecast (48h price range) + technical indicators + 3-model LLM analyst jury + VADER sentiment + live news. Includes DCF valuation, options chain, trade setup with position sizing, portfolio simulation, and Supabase auth.
 
 ---
 
@@ -16,6 +16,7 @@ AI-driven quantitative financial forecasting SaaS. Ticker lookup → ensemble ML
 | Sentiment | VADER (vaderSentiment) — headline scoring, compound score + label |
 | AI / LLM Jury | Groq API — Llama 4 Scout, Llama 3.3 70B, Qwen3 32B (3-analyst jury via LangGraph) |
 | Time-Series DB | InfluxDB |
+| Auth | Supabase (email/password, free tier) |
 | Observability | New Relic APM (backend + frontend) |
 | Package Manager | pnpm (monorepo) |
 | Infra | Docker, Terraform, GitHub Actions, Koyeb, Oracle Cloud VM |
@@ -27,44 +28,52 @@ AI-driven quantitative financial forecasting SaaS. Ticker lookup → ensemble ML
 ```
 FiForesight/
 ├── backend/
+│   ├── main.py                 # ~50-line entry point (lifespan + include_router × 4)
+│   ├── dependencies.py         # Service singletons shared across routers
+│   ├── routers/
+│   │   ├── predict.py          # /health /debug /predict /sparklines /compare
+│   │   ├── simulation.py       # /simulation/suggest /simulation/performance /simulation/state
+│   │   ├── trade.py            # /trade-setup /chat
+│   │   └── market.py           # /dcf/{symbol} /options/{symbol}
 │   ├── config.py               # Env var loading (InfluxDB, Groq, SerpAPI)
-│   ├── main.py                 # Routes (/predict, /health, /debug, /simulation/*)
-│   ├── models.py               # Pydantic schemas
-│   ├── services.py             # yfinance, InfluxDB, SerpAPI, SentimentService (VADER), AnalystJuryService
+│   ├── models.py               # Pydantic schemas + run_monte_carlo
+│   ├── services.py             # YFinanceService, InfluxService, SerpService, SentimentService, AnalystJuryService
 │   ├── jury_graph.py           # LangGraph StateGraph for parallel analyst fan-out
 │   ├── simulation_service.py   # Portfolio simulation engine (suggest + performance)
 │   ├── mcp_server.py           # FastMCP server — predict/sparklines/health as MCP tools
+│   ├── tests/                  # pytest harness — 22 tests, no network calls
 │   └── newrelic.ini            # New Relic APM config
 ├── frontend/
 │   ├── app/
 │   │   ├── api/
-│   │   │   ├── predict/route.ts              # POST proxy → FastAPI /predict
-│   │   │   ├── compare/route.ts              # GET proxy → FastAPI /compare (stub)
-│   │   │   └── simulation/
-│   │   │       ├── suggest/route.ts          # POST proxy → /simulation/suggest
-│   │   │       ├── performance/route.ts      # POST proxy → /simulation/performance
-│   │   │       └── state/[id]/route.ts       # GET proxy → /simulation/state/{id}
+│   │   │   ├── predict/route.ts
+│   │   │   ├── compare/route.ts
+│   │   │   ├── dcf/[symbol]/route.ts
+│   │   │   ├── options/[symbol]/route.ts
+│   │   │   └── simulation/{suggest,performance,state}/route.ts
 │   │   ├── simulation/page.tsx               # Portfolio simulation page
-│   │   ├── emotion-registry.tsx              # MUI SSR Emotion style registry
-│   │   ├── layout.tsx                        # Root layout + New Relic script injection
-│   │   └── page.tsx                          # Main dashboard (~78KB monolith)
-│   ├── public/
-│   │   ├── newrelic.live.js       # New Relic browser agent (prod)
-│   │   └── newrelic.preview.js    # New Relic browser agent (preview)
+│   │   ├── layout.tsx                        # Root layout (ClientProviders + New Relic)
+│   │   └── page.tsx                          # Main dashboard
+│   ├── components/
+│   │   ├── AnalystJuryPanel.tsx              # 3-analyst verdict cards + consensus badge
+│   │   ├── AuthModal.tsx                     # Supabase sign-in / sign-up MUI dialog
+│   │   ├── ClientProviders.tsx               # 'use client' wrapper for AuthProvider
+│   │   ├── DCFCard.tsx                       # 3-scenario DCF valuation (bear/base/bull)
+│   │   ├── FundamentalsPanel.tsx             # Extended metrics panel
+│   │   ├── MonteCarloFanChart.tsx            # P10/P50/P90 fan chart (Recharts)
+│   │   ├── MonteCarloProbabilitySurface.tsx  # 3D surface (react-plotly.js)
+│   │   ├── OptionsChainPanel.tsx             # Calls/puts table, ITM highlight, expiry selector
+│   │   ├── PeerComparisonPanel.tsx           # Side-by-side peer fundamentals
+│   │   ├── PriceChartCard.tsx                # Candlestick/line + overlays + sub-panels
+│   │   ├── StockChatPanel.tsx                # Groq streaming chat
+│   │   ├── TradeSetupCard.tsx                # Entry/stop/targets + position sizing row
+│   │   └── TrendingSparklines.tsx
+│   ├── contexts/AuthContext.tsx              # AuthProvider + useAuth (Supabase session)
+│   ├── lib/supabase.ts                       # createClient with env-var fallbacks
 │   └── ...config files
 ├── .claude/
 │   └── FiForesight_Roadmap.md     # Source of truth for planned work
-├── .github/
-│   ├── workflows/
-│   │   ├── pull-request.yml       # PR: lint, build, docker, preview deploy
-│   │   ├── merge.yml              # Main: version, release, prod deploy
-│   │   └── docker-logs.yml        # Manual: fetch container logs
-│   ├── actions/                   # Custom composite actions
-│   │   ├── deploy-koyeb/          # Deploy to Koyeb
-│   │   ├── deploy-oracle/         # Deploy to Oracle Cloud VM
-│   │   ├── setup-secrets/         # Secret management
-│   │   └── terraform/             # Terraform plan/apply
-│   └── scripts/                   # Version generation scripts
+├── .github/workflows/             # pull-request.yml, merge.yml, docker-logs.yml
 ├── terraform/                     # Prod infra (Oracle, Koyeb)
 ├── terraform-preview/             # Staging infra
 ├── dockerfile                     # Multi-stage Docker build
@@ -81,31 +90,41 @@ pnpm run app:dev
 
 # Individual
 cd frontend && pnpm run dev     # Next.js on :3000
-# Backend
 python -m uvicorn main:app --app-dir backend --host 0.0.0.0 --port 8000 --reload
 
-# Frontend only
+# Tests
+python -m pytest backend/tests/ -v   # 22 tests, ~1s
+ruff check backend/                   # linter
+
+# Frontend
 pnpm run lint    # ESLint
 pnpm run build   # Next.js production build
 ```
 
 ---
 
-## Environment Variables (backend `.env`)
+## Environment Variables
+
+Backend `backend/.env`:
 
 ```env
+GROQ_API_KEY=            # Required — LLM analyst jury
 INFLUXDB_URL=http://localhost:8086
 INFLUXDB_TOKEN=
 INFLUXDB_ORG=WeekendDevelopment
 INFLUXDB_BUCKET=FiForesightBucket
-GROQ_API_KEY=            # Required — LLM analyst jury (Llama 4 Scout, Llama 3.3 70B, Qwen3 32B)
 SERP_API_KEY=            # Optional — news/trending
 PORT=8000
 ```
 
-Frontend env:
-- `BACKEND_URL=http://localhost:8000` (optional, has default in `route.ts`)
-- `NEXT_PUBLIC_APP_ENV=preview|live` (controls New Relic script loading)
+Frontend `frontend/.env.local`:
+
+```env
+BACKEND_URL=http://localhost:8000
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co   # Optional
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key                 # Optional
+NEXT_PUBLIC_APP_ENV=preview|live                             # New Relic
+```
 
 ---
 
@@ -114,86 +133,79 @@ Frontend env:
 ```
 User enters ticker
   → Frontend /api/predict (Next.js proxy)
-    → FastAPI /predict
-      → Check InfluxDB (cached 2Y OHLCV)
-        → Fallback: yfinance fetch + store
-      → Technical indicators: RSI, MACD, BB, SMA50/200, Support/Resistance
+    → FastAPI /predict (routers/predict.py)
+      → InfluxDB (cached 2Y OHLCV) → fallback: yfinance
+      → Technical indicators: RSI, MACD, BB, SMA50/200, EMA20/50, Support/Resistance, Earnings dates
       → Ensemble forecast: Prophet + SARIMAX + RandomForest → high/low/confidence
+      → Monte Carlo: 1 000 paths, seed=42 → P10/P50/P90, VaR-95, prob_gain
       → SerpAPI: news headlines + trending symbols
-      → VADER SentimentService: score headlines → compound [-1,1] + label (Bullish/Bearish/Neutral)
-      → LLM Analyst Jury (LangGraph StateGraph parallel fan-out via Groq):
-        → Llama 4 Scout (Macro & Risk Lens)
-        → Llama 3.3 70B (Growth Lens)
-        → Qwen3 32B (Quant Lens)
-        → Each node isolated — failures degrade to Hold/25 verdict, not 500
-        → Each returns: verdict, confidence, reasoning, target prices
-      → Response: history, fundamentals, indicators, forecasts, jury verdicts, news, sentiment
-  → Recharts renders: candlestick/line, RSI panel, MACD panel, BB/SMA overlays
-  → TradingView chart (toggleable) + AnalystJuryPanel with 3 analyst cards
+      → VADER SentimentService: compound [-1,1] + label (Bullish/Bearish/Neutral)
+      → LangGraph StateGraph parallel fan-out (Groq):
+          Llama 4 Scout (Macro & Risk) · Llama 3.3 70B (Growth) · Qwen3 32B (Quant)
+          Each isolated — failures degrade to Hold/25, not 500
+      → Response: history, fundamentals, indicators, forecasts, jury verdicts, news, sentiment, monte carlo
 
-Simulation flow:
-  User opens /simulation page
-    → POST /api/simulation/suggest → FastAPI /simulation/suggest
-      → suggest_portfolio(budget, risk_level) → ticker suggestions via SerpAPI/yfinance
-    → POST /api/simulation/performance → FastAPI /simulation/performance
-      → get_portfolio_performance(holdings, start_date, interval) → time-series P&L
-    → Simulation state persisted to InfluxDB via /simulation/state endpoints
+  → Fire-and-forget (non-blocking, after predict resolves):
+      GET /api/dcf/{symbol}     → DCFCard (3-scenario WACC)
+      GET /api/options/{symbol} → OptionsChainPanel (calls/puts)
+      POST /api/trade-setup     → TradeSetupCard (entry/stop/targets + position size)
+
+Simulation flow (/simulation page):
+  POST /api/simulation/suggest     → ticker suggestions by risk level
+  POST /api/simulation/performance → historical P&L time-series
+  GET/POST /api/simulation/state   → InfluxDB persistence
 ```
 
 ---
 
 ## Coding Conventions
 
-- **Backend**: Python snake_case, type hints, logging. `asyncio.to_thread()` for blocking calls.
+- **Backend**: Python snake_case, type hints on all functions, logging. `asyncio.to_thread()` for blocking yfinance/pandas calls. `asyncio.wait_for(timeout=12)` on external fetches.
 - **Frontend**: TypeScript, camelCase, React functional components + hooks, MUI for UI.
-- **Error handling**: Backend services fail gracefully (logged, non-fatal). Global 500 handler returns traceback in dev.
-- **API Proxy**: Frontend→backend calls go through Next.js API proxy routes under `/api/*` (e.g., `/api/predict`, `/api/simulation/*`) for CORS safety.
+- **Error handling**: Backend services fail gracefully (logged, non-fatal). Global 500 handler in `main.py` returns `{"detail": "An internal server error occurred."}` — never exposes tracebacks to clients.
+- **API Proxy**: All frontend→backend calls go through Next.js `/api/*` routes for CORS safety.
+- **Security**: Never yield raw exception messages to SSE streams or HTTP responses.
 
 ---
 
 ## Roadmap Status
 
-See `.claude/FiForesight_Roadmap.md` for full task list. Jira project: **FIFO** on Atlassian.
+See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 
-**7 Epics** (6 stories Done, 14 To Do):
-- **FIFO-5 ML & Forecasting** — Advanced indicators done (FIFO-7), ensemble improvements + forecast tracking pending
-- **FIFO-6 News & Sentiment** — SerpAPI news integration done, VADER sentiment done (FIFO-21), AI analyst notes pending (FIFO-22)
-- **FIFO-32 Infrastructure & DevOps** — HTTPS done (FIFO-36), CI/CD improvements + monitoring pending
-- **FIFO-33 Testing & Quality** — 0% coverage today, target 70%+ (pytest, Vitest, Playwright)
-- **FIFO-34 Frontend Architecture** — Component decomposition of 78KB page.tsx, a11y, performance
-- **FIFO-35 User Auth** — Supabase auth, watchlists, alerts pending
-- **FIFO-101 LLM Analyst Jury** — 3-model jury system done (FIFO-102), self-hosted LLM + fine-tuning pending
+| Feature | PR |
+|---------|-----|
+| Jury consensus badge | #189 |
+| DCF intrinsic value | #190 |
+| Position sizing (1% rule) | #191 |
+| pytest harness (22 tests) | #192 |
+| Supabase email auth | #193 |
+| Options chain panel | #194 |
+| Router split (main.py → routers/) | #195 |
 
 ---
 
 ## Token Efficiency Guidelines
 
-- **Don't re-read files already covered here.** This CLAUDE.md is the project summary — use it instead of re-exploring structure/stack on every task.
-- **Read only what's needed.** Use `Grep` to find specific symbols before reading whole files. Use line offsets when only a section is relevant.
-- **No speculative reads.** Don't read files "just in case" — read when a task directly requires it.
-- **Targeted edits over full rewrites.** Use `Edit` (diff-based) instead of `Write` (full file) unless the change is >50% of the file.
-- **Skip re-summarizing.** After making changes, don't restate what was done — the diff is visible.
-- **Don't explore what git knows.** Use `git log`, `git diff`, `git blame` for history instead of re-reading files.
-- **Roadmap is in `.claude/FiForesight_Roadmap.md`.** Don't ask what's next — check there first.
-- **Backend is 7 files.** `config.py`, `main.py`, `models.py`, `services.py`, `jury_graph.py`, `simulation_service.py`, `mcp_server.py` — know this before deciding what to read.
-- **Frontend entry point is `frontend/app/page.tsx`.** Components live in `frontend/components/`.
+- **Don't re-read files already covered here.** Use this CLAUDE.md instead of re-exploring structure on every task.
+- **Read only what's needed.** Grep for symbols before reading whole files. Use line offsets for large files.
+- **No speculative reads.**
+- **Targeted edits over full rewrites.** Use `Edit` unless change is >50% of file.
+- **Backend entry points**: `main.py` (thin), `routers/predict.py`, `routers/trade.py`, `routers/market.py`, `routers/simulation.py`, `dependencies.py`, `services.py`, `models.py`.
+- **Frontend entry point**: `frontend/app/page.tsx`. Components in `frontend/components/`.
 
 ---
 
 ## Key Decisions & Gotchas
 
-- No `.env.example` exists — document env vars in README manually.
-- InfluxDB is the primary data store; yfinance is fallback only. If InfluxDB is down, data still works but won't persist.
-- LLM jury runs via **LangGraph** (`jury_graph.py`) — parallel StateGraph fan-out, each analyst node isolated so failures degrade to Hold/25 verdict instead of crashing the request. Replaces the old raw `asyncio.gather()` approach.
-- **Kimi K2 replaced by Llama 4 Scout** (`meta-llama/llama-4-scout-17b-16e-instruct`) as the Macro & Risk analyst. Qwen3-32B and Llama 3.3 70B remain unchanged.
-- **VADER sentiment** (`SentimentService` in `services.py`) scores news headlines before the jury runs so each analyst persona receives the compound score + label in context.
-- **FastMCP server** (`mcp_server.py`) — run `fastmcp dev backend/mcp_server.py` to expose predict/sparklines/health as MCP tools for Claude Code sessions.
-- **Portfolio simulation** (`simulation_service.py`) — `/simulation/suggest` and `/simulation/performance` endpoints + `/simulation` frontend page. Simulation state persisted to InfluxDB.
-- `strict: false` in tsconfig — TypeScript is not fully strict.
-- pnpm workspace root has no source — all code is in `frontend/` or `backend/`.
-- `page.tsx` is ~78KB monolith — decomposition is tracked in Jira (FIFO-58).
-- `FINNHUB_API_KEY` and `GOOGLE_GENAI_API_KEY` have been removed — replaced by `GROQ_API_KEY` for the jury system.
-- `frontend/app/api/compare/route.ts` exists but backend `/compare` endpoint is not yet implemented.
-- New Relic APM is active: `newrelic.ini` for backend, conditional script injection in `layout.tsx` based on `NEXT_PUBLIC_APP_ENV`.
-- Deploys: PRs auto-deploy to preview (`fiforesight-preview.duckdns.org`), merges to main deploy to prod (`fiforesight.duckdns.org` + Koyeb).
-- **react-plotly.js exception** — `MonteCarloProbabilitySurface.tsx` uses `react-plotly.js` (+ `plotly.js` peer dep) for 3D surface rendering. This is the only intentional deviation from the Recharts-only guideline; Recharts has no 3D surface capability. All 2D charts (candlestick, RSI, MACD, BB, sparklines) remain Recharts.
+- InfluxDB is primary store; yfinance is fallback only.
+- LLM jury runs via **LangGraph** (`jury_graph.py`) — parallel StateGraph fan-out. Each analyst node isolated so failures → Hold/25, not 500.
+- **Llama 4 Scout** (`meta-llama/llama-4-scout-17b-16e-instruct`) is the Macro & Risk analyst. Kimi K2 was deprecated and removed.
+- **VADER sentiment** (`SentimentService` in `services.py`) scores headlines before the jury runs; compound score + label passed in each analyst's context.
+- **FastMCP server** — `fastmcp dev backend/mcp_server.py` exposes predict/sparklines/health as Claude Code tools.
+- **Backend router split** — `main.py` is now ~50 lines; all routes live in `backend/routers/`. Service singletons in `dependencies.py`.
+- **Supabase auth** — `frontend/lib/supabase.ts` + `frontend/contexts/AuthContext.tsx`. Falls back to placeholder strings if env vars not set (build succeeds without them).
+- **react-plotly.js exception** — `MonteCarloProbabilitySurface.tsx` is the only component using react-plotly.js (3D surface). All 2D charts remain Recharts.
+- `strict: false` in tsconfig.
+- pnpm workspace root has no source — all code in `frontend/` or `backend/`.
+- Deploys: PRs → preview (`fiforesight-preview.duckdns.org`), main → prod (`fiforesight.duckdns.org` + Koyeb).
+- `/compare` frontend route exists; backend endpoint is implemented in `routers/predict.py`.
