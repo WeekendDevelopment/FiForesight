@@ -2,7 +2,6 @@
 Router tests — trade setup, DCF valuation, options chain.
 All external calls are mocked; no network required.
 """
-import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -248,7 +247,6 @@ def _make_options_df(strikes, price, is_call):
 
 
 def _mock_options_ticker(price=150.0):
-    import pandas as pd
     strikes = [130, 140, 145, 150, 155, 160, 170]
     calls_df = _make_options_df(strikes, price, is_call=True)
     puts_df  = _make_options_df(strikes, price, is_call=False)
