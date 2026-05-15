@@ -208,6 +208,7 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           NEW_RELIC_LICENSE_KEY: ${{ secrets.NEW_RELIC_LICENSE_KEY }}
           UPSTASH_REDIS_URL: ${{ env.UPSTASH_REDIS_URL }}
+          SUPABASE_JWT_SECRET: ${{ secrets.SUPABASE_JWT_SECRET }}
 
   deploy-nginx:
     needs:
@@ -276,3 +277,4 @@ jobs:
           GH_NEW_RELIC_API_KEY: ${{ secrets.GH_NEW_RELIC_API_KEY }}
           NEW_RELIC_DEPLOYMENT_ENTITY_GUID: ${{ secrets.NEW_RELIC_DEPLOYMENT_ENTITY_GUID }}
           NEW_RELIC_APP_NAME: "fi-foresight"
+          SUPABASE_JWT_SECRET: ${{ secrets.SUPABASE_JWT_SECRET }}
