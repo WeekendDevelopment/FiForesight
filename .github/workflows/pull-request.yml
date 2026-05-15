@@ -79,6 +79,8 @@ jobs:
         run: pnpm run build
         env:
           NEXT_PUBLIC_APP_ENV: preview
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
   build-backend:
     runs-on: ubuntu-latest
     steps:
@@ -139,6 +141,8 @@ jobs:
           load: true
           build-args: |
             NEXT_PUBLIC_APP_ENV=preview
+            NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+            NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
           tags: |
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
 
