@@ -106,6 +106,8 @@ jobs:
         run: pnpm run build
         env:
           NEXT_PUBLIC_APP_ENV: live
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
   build-backend:
     needs: create-release
     runs-on: ubuntu-latest
@@ -161,6 +163,8 @@ jobs:
           push: true
           build-args: |
             NEXT_PUBLIC_APP_ENV=live
+            NEXT_PUBLIC_SUPABASE_URL=${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+            NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ needs.create-release.outputs.tag }}
