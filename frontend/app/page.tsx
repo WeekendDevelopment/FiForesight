@@ -422,17 +422,81 @@ export default function QuantumDashboard() {
                     <AnalystJuryPanel analysts={prediction.juryAnalysts} />
                   )}
 
-                  {/* ── News ─────────────────────────────────────────────── */}
-                  {(prediction.news?.length > 0 ||
+                </Stack>
+              ) : (
+                <Box sx={{ height: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.15 }}>
+                  <Typography variant="h4">QUANTUM SYSTEM READY</Typography>
+                </Box>
+              )}
+            </Grid>
+
+            {/* ── Right column ──────────────────────────────────────────── */}
+            <Grid size={{ xs: 12, lg: 4 }}>
+              {loading ? <SidebarSkeleton /> : (
+                <Stack spacing={3}>
+                  {/* ── Watchlist ─────────────────────────────────────── */}
+                  {user && watchlist.length > 0 && (
+                    <Paper sx={{
+                      p: 2,
+                      border: `1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'}`,
+                    }}>
+                      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
+                        <Star size={14} color="#f59e0b" fill="#f59e0b" />
+                        <Typography variant="overline" sx={{ opacity: 0.6, lineHeight: 1 }}>
+                          Watchlist
+                        </Typography>
+                      </Stack>
+                      <Stack direction="row" flexWrap="wrap" gap={0.75}>
+                        {watchlist.map(sym => (
+                          <Chip
+                            key={sym}
+                            label={sym}
+                            size="small"
+                            onClick={() => setTicker(sym)}
+                            onDelete={() => void toggleWatchlist(sym)}
+                            sx={{
+                              cursor: 'pointer',
+                              fontWeight: 700,
+                              fontSize: 11,
+                              bgcolor: isDark ? 'rgba(245,158,11,0.1)' : 'rgba(245,158,11,0.15)',
+                              color: '#f59e0b',
+                              '& .MuiChip-deleteIcon': { color: '#f59e0b', opacity: 0.5, '&:hover': { opacity: 1 } },
+                            }}
+                          />
+                        ))}
+                      </Stack>
+                    </Paper>
+                  )}
+
+                  {prediction && (
+                    <FundamentalsPanel
+                      prediction={prediction}
+                      rsiInfo={rsiInfo}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
+                  )}
+
+                  {/* ── Peer Comparison ──────────────────────────────────── */}
+                  {prediction && (
+                    <PeerComparisonPanel
+                      baseSymbol={prediction.symbol}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
+                  )}
+
+                  {/* ── Market Intelligence ──────────────────────────────── */}
+                  {prediction && (
+                    prediction.news?.length > 0 ||
                     (prediction.stocktwits?.bullish ?? 0) + (prediction.stocktwits?.bearish ?? 0) > 0 ||
                     (prediction.sentiment?.headline_count ?? 0) > 0
-                  ) && (
+                  ) && prediction && (
                     <>
                       <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
                         <Newspaper size={20} /> Market Intelligence
                       </Typography>
 
-                      {/* Sentiment + StockTwits row */}
                       {prediction.sentiment && prediction.sentiment.headline_count > 0 && (
                         <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1} sx={{ px: 1 }}>
                           <Chip
@@ -507,69 +571,6 @@ export default function QuantumDashboard() {
                         ))}
                       </Grid>
                     </>
-                  )}
-                </Stack>
-              ) : (
-                <Box sx={{ height: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.15 }}>
-                  <Typography variant="h4">QUANTUM SYSTEM READY</Typography>
-                </Box>
-              )}
-            </Grid>
-
-            {/* ── Right column ──────────────────────────────────────────── */}
-            <Grid size={{ xs: 12, lg: 4 }}>
-              {loading ? <SidebarSkeleton /> : (
-                <Stack spacing={3}>
-                  {/* ── Watchlist ─────────────────────────────────────── */}
-                  {user && watchlist.length > 0 && (
-                    <Paper sx={{
-                      p: 2,
-                      border: `1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'}`,
-                    }}>
-                      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
-                        <Star size={14} color="#f59e0b" fill="#f59e0b" />
-                        <Typography variant="overline" sx={{ opacity: 0.6, lineHeight: 1 }}>
-                          Watchlist
-                        </Typography>
-                      </Stack>
-                      <Stack direction="row" flexWrap="wrap" gap={0.75}>
-                        {watchlist.map(sym => (
-                          <Chip
-                            key={sym}
-                            label={sym}
-                            size="small"
-                            onClick={() => setTicker(sym)}
-                            onDelete={() => void toggleWatchlist(sym)}
-                            sx={{
-                              cursor: 'pointer',
-                              fontWeight: 700,
-                              fontSize: 11,
-                              bgcolor: isDark ? 'rgba(245,158,11,0.1)' : 'rgba(245,158,11,0.15)',
-                              color: '#f59e0b',
-                              '& .MuiChip-deleteIcon': { color: '#f59e0b', opacity: 0.5, '&:hover': { opacity: 1 } },
-                            }}
-                          />
-                        ))}
-                      </Stack>
-                    </Paper>
-                  )}
-
-                  {prediction && (
-                    <FundamentalsPanel
-                      prediction={prediction}
-                      rsiInfo={rsiInfo}
-                      isDark={isDark}
-                      primaryColor={primaryColor}
-                    />
-                  )}
-
-                  {/* ── Peer Comparison ──────────────────────────────────── */}
-                  {prediction && (
-                    <PeerComparisonPanel
-                      baseSymbol={prediction.symbol}
-                      isDark={isDark}
-                      primaryColor={primaryColor}
-                    />
                   )}
 
                   {/* ── Trending Sparklines (real 5-day) ─────────────────── */}
