@@ -423,7 +423,10 @@ export default function QuantumDashboard() {
                   )}
 
                   {/* ── News ─────────────────────────────────────────────── */}
-                  {prediction.news?.length > 0 && (
+                  {(prediction.news?.length > 0 ||
+                    (prediction.stocktwits?.bullish ?? 0) + (prediction.stocktwits?.bearish ?? 0) > 0 ||
+                    (prediction.sentiment?.headline_count ?? 0) > 0
+                  ) && (
                     <>
                       <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
                         <Newspaper size={20} /> Market Intelligence

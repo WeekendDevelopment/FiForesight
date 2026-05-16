@@ -942,18 +942,32 @@ class YFinanceService:
         ticker = self._to_yf_symbol(symbol)
         try:
             raw = yf.Ticker(ticker).news
-            if not raw:
+            if not raw or not isinstance(raw, list):
                 logger.info(f"[YFINANCE] fetch_news — {ticker}: 0 articles returned")
                 return []
             result = []
-            for item in raw[:10]:
-                title = item.get("title", "").strip()
+            for item in raw[:12]:
+                # yfinance 1.x uses a nested 'content' dict; older versions use a flat dict.
+                content = item.get("content") if isinstance(item.get("content"), dict) else item
+                title = (
+                    content.get("title") or item.get("title") or ""
+                ).strip()
                 if not title:
                     continue
+                source = (
+                    (content.get("provider") or {}).get("displayName")
+                    or item.get("publisher")
+                    or "yfinance"
+                )
+                link = (
+                    (content.get("clickThroughUrl") or {}).get("url")
+                    or item.get("link")
+                    or ""
+                )
                 result.append({
                     "title":        title,
-                    "link":         item.get("link", ""),
-                    "source":       item.get("publisher", "yfinance"),
+                    "link":         link,
+                    "source":       source,
                     "thumbnail":    "",
                     "date":         "",
                     "source_label": "yfinance",

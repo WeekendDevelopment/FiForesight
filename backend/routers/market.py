@@ -1,6 +1,7 @@
 # backend/routers/market.py
 import asyncio
 import logging
+import math
 from typing import Any, Dict, List, Optional
 
 import yfinance as yf
@@ -10,6 +11,15 @@ from dependencies import yf_svc
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _safe_int(v: Any) -> int:
+    """Convert v to int, treating None and NaN as 0."""
+    try:
+        f = float(v if v is not None else 0)
+        return 0 if math.isnan(f) else int(f)
+    except (TypeError, ValueError):
+        return 0
 
 # ---------------------------------------------------------------------------
 # DCF Intrinsic Value
@@ -49,7 +59,7 @@ async def dcf_valuation(symbol: str):
     revenue_growth = info.get("revenue_growth")
     current_price = info.get("current_price", 0)
 
-    # Shares outstanding — fetch separately
+    # Shares outstanding + cashflow fallback — single yfinance Ticker call
     ticker_obj = await asyncio.to_thread(lambda: yf.Ticker(symbol.upper()))
     ticker_info = await asyncio.to_thread(lambda: ticker_obj.info)
     shares = (
@@ -58,8 +68,40 @@ async def dcf_valuation(symbol: str):
         or 1
     )
 
+    # FCF fallback: info may not carry freeCashflow in newer yfinance builds.
+    # Try the cashflow statement before giving up.
+    def _is_valid_fcf(v: Any) -> bool:
+        try:
+            return isinstance(v, (int, float)) and not math.isnan(float(v)) and float(v) > 0
+        except (TypeError, ValueError):
+            return False
+
+    if not _is_valid_fcf(fcf):
+        # Attempt 1: raw freeCashflow from ticker.info (may differ from fetch_info)
+        raw_fcf = ticker_info.get("freeCashflow") or ticker_info.get("freeCashFlow")
+        if _is_valid_fcf(raw_fcf):
+            fcf = raw_fcf
+            logger.info(f"[DCF] {symbol.upper()} — freeCashflow from ticker.info: {fcf:.0f}")
+        else:
+            # Attempt 2: cashflow statement (Free Cash Flow row)
+            try:
+                cf_stmt = await asyncio.to_thread(lambda: ticker_obj.cashflow)
+                if cf_stmt is not None and not cf_stmt.empty:
+                    for row_label in ("Free Cash Flow", "FreeCashFlow"):
+                        if row_label in cf_stmt.index:
+                            val = float(cf_stmt.loc[row_label].iloc[0])
+                            if _is_valid_fcf(val):
+                                fcf = val
+                                logger.info(
+                                    f"[DCF] {symbol.upper()} — FCF from cashflow statement "
+                                    f"({row_label}): {fcf:.0f}"
+                                )
+                                break
+            except Exception as cf_err:
+                logger.debug(f"[DCF] cashflow statement fallback failed: {cf_err}")
+
     # Validate: need positive FCF and shares
-    if not fcf or not isinstance(fcf, (int, float)) or fcf <= 0 or not shares or shares <= 0:
+    if not _is_valid_fcf(fcf) or not shares or shares <= 0:
         raise HTTPException(
             status_code=422,
             detail="Insufficient data for DCF (negative/zero FCF or missing shares)",
@@ -149,8 +191,8 @@ async def options_chain(symbol: str) -> Dict[str, Any]:
                     "ask":           round(float(r.get("ask",              0)), 2),
                     "change":        round(float(r.get("change",           0)), 2),
                     "change_pct":    round(float(r.get("percentChange",    0)), 2),
-                    "volume":        int(r.get("volume",       0) or 0),
-                    "open_interest": int(r.get("openInterest", 0) or 0),
+                    "volume":        _safe_int(r.get("volume",       0)),
+                    "open_interest": _safe_int(r.get("openInterest", 0)),
                     "implied_vol":   round(float(r.get("impliedVolatility", 0)) * 100, 1),
                     "in_the_money":  bool(r.get("inTheMoney", False)),
                     "type":          "call" if is_call else "put",
