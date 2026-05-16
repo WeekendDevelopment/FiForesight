@@ -14,6 +14,9 @@ from services import (
     YFinanceService,
     AnalystJuryService,
     SentimentService,
+    FinnhubService,
+    StockTwitsService,
+    YahooRSSService,
 )
 from config import Config
 
@@ -25,6 +28,9 @@ serp_svc         = SerpService()
 yf_svc           = YFinanceService()
 analyst_jury_svc = AnalystJuryService()
 sentiment_svc    = SentimentService()
+finnhub_svc      = FinnhubService()
+stocktwits_svc   = StockTwitsService()
+yahoo_rss_svc    = YahooRSSService()
 
 
 def get_user_id(authorization: str = Header(default="")) -> str:

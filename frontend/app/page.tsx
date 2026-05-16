@@ -422,32 +422,6 @@ export default function QuantumDashboard() {
                     <AnalystJuryPanel analysts={prediction.juryAnalysts} />
                   )}
 
-                  {/* ── News ─────────────────────────────────────────────── */}
-                  {prediction.news?.length > 0 && (
-                    <>
-                      <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
-                        <Newspaper size={20} /> Market Intelligence
-                      </Typography>
-                      <Grid container spacing={2}>
-                        {prediction.news.map((item, i) => (
-                          <Grid size={12} key={i}>
-                            <Card sx={{ background: 'transparent' }}>
-                              <CardContent sx={{ display: 'flex', gap: 2, p: '16px !important' }}>
-                                {item.thumbnail && <Avatar src={item.thumbnail} variant="rounded" sx={{ width: 60, height: 60 }} />}
-                                <Box>
-                                  <Link href={item.link} target="_blank" underline="none" sx={{ '&:hover': { color: 'primary.main' } }}>
-                                    <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>{item.title}</Typography>
-                                  </Link>
-                                  <Typography variant="caption" sx={{ color: 'primary.main', mr: 2 }}>{item.source}</Typography>
-                                  <Typography variant="caption" sx={{ opacity: 0.5 }}>{item.date}</Typography>
-                                </Box>
-                              </CardContent>
-                            </Card>
-                          </Grid>
-                        ))}
-                      </Grid>
-                    </>
-                  )}
                 </Stack>
               ) : (
                 <Box sx={{ height: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.15 }}>
@@ -510,6 +484,93 @@ export default function QuantumDashboard() {
                       isDark={isDark}
                       primaryColor={primaryColor}
                     />
+                  )}
+
+                  {/* ── Market Intelligence ──────────────────────────────── */}
+                  {prediction && (
+                    prediction.news?.length > 0 ||
+                    (prediction.stocktwits?.bullish ?? 0) + (prediction.stocktwits?.bearish ?? 0) > 0 ||
+                    (prediction.sentiment?.headline_count ?? 0) > 0
+                  ) && prediction && (
+                    <>
+                      <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1 }}>
+                        <Newspaper size={20} /> Market Intelligence
+                      </Typography>
+
+                      {prediction.sentiment && prediction.sentiment.headline_count > 0 && (
+                        <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1} sx={{ px: 1 }}>
+                          <Chip
+                            label={`VADER: ${prediction.sentiment.label} (${prediction.sentiment.compound >= 0 ? '+' : ''}${prediction.sentiment.compound.toFixed(3)})`}
+                            size="small"
+                            sx={{
+                              fontWeight: 700,
+                              bgcolor: prediction.sentiment.label === 'Bullish'
+                                ? (isDark ? 'rgba(0,255,163,0.15)' : 'rgba(22,163,74,0.15)')
+                                : prediction.sentiment.label === 'Bearish'
+                                ? (isDark ? 'rgba(255,0,85,0.15)' : 'rgba(220,38,38,0.15)')
+                                : undefined,
+                              color: prediction.sentiment.label === 'Bullish'
+                                ? (isDark ? '#00ffa3' : '#16a34a')
+                                : prediction.sentiment.label === 'Bearish'
+                                ? (isDark ? '#ff0055' : '#dc2626')
+                                : 'text.secondary',
+                            }}
+                          />
+                          <Typography variant="caption" sx={{ opacity: 0.5 }}>
+                            {prediction.sentiment.headline_count} headlines scored
+                          </Typography>
+                          {prediction.stocktwits &&
+                            (prediction.stocktwits.bullish + prediction.stocktwits.bearish) > 0 && (
+                            <>
+                              <Typography variant="caption" sx={{ opacity: 0.3, mx: 0.5 }}>·</Typography>
+                              <Chip
+                                label={`↑ ${prediction.stocktwits.bullish}`}
+                                size="small"
+                                sx={{ bgcolor: isDark ? 'rgba(0,255,163,0.12)' : 'rgba(22,163,74,0.12)', color: isDark ? '#00ffa3' : '#16a34a', fontWeight: 700 }}
+                              />
+                              <Chip
+                                label={`↓ ${prediction.stocktwits.bearish}`}
+                                size="small"
+                                sx={{ bgcolor: isDark ? 'rgba(255,0,85,0.12)' : 'rgba(220,38,38,0.12)', color: isDark ? '#ff0055' : '#dc2626', fontWeight: 700 }}
+                              />
+                              <Typography variant="caption" sx={{ opacity: 0.5 }}>StockTwits</Typography>
+                            </>
+                          )}
+                        </Stack>
+                      )}
+
+                      <Grid container spacing={2}>
+                        {prediction.news.map((item, i) => (
+                          <Grid size={12} key={i}>
+                            <Card sx={{ background: 'transparent' }}>
+                              <CardContent sx={{ display: 'flex', gap: 2, p: '16px !important' }}>
+                                {item.thumbnail && <Avatar src={item.thumbnail} variant="rounded" sx={{ width: 60, height: 60 }} />}
+                                <Box sx={{ flex: 1, minWidth: 0 }}>
+                                  {item.link ? (
+                                    <Link href={item.link} target="_blank" rel="noopener noreferrer" underline="none" sx={{ '&:hover': { color: 'primary.main' } }}>
+                                      <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>{item.title}</Typography>
+                                    </Link>
+                                  ) : (
+                                    <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>{item.title}</Typography>
+                                  )}
+                                  <Stack direction="row" alignItems="center" gap={0.75} sx={{ mt: 0.5, flexWrap: 'wrap' }}>
+                                    <Typography variant="caption" sx={{ color: 'primary.main' }}>{item.source}</Typography>
+                                    {item.date && <Typography variant="caption" sx={{ opacity: 0.5 }}>{item.date}</Typography>}
+                                    {item.source_label && (
+                                      <Chip
+                                        label={item.source_label}
+                                        size="small"
+                                        sx={{ height: 16, fontSize: 9, fontWeight: 700, opacity: 0.6, '& .MuiChip-label': { px: 0.75 } }}
+                                      />
+                                    )}
+                                  </Stack>
+                                </Box>
+                              </CardContent>
+                            </Card>
+                          </Grid>
+                        ))}
+                      </Grid>
+                    </>
                   )}
 
                   {/* ── Trending Sparklines (real 5-day) ─────────────────── */}

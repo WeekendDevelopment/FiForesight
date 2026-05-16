@@ -185,11 +185,13 @@ async def trade_setup(req: TradeSetupRequest):
     except Exception as exc:
         logger.warning("[TRADE-SETUP] Groq rationale failed: %s", exc)
 
-    # Position sizing — 1% portfolio-risk rule
+    # Position sizing — 1% portfolio-risk rule.
+    # 1.0 / risk_pct_decimal already yields position_pct (e.g. 5% risk → 20% position).
+    # Cap at 50% so a very tight stop doesn't suggest an outsized allocation.
     entry_mid_final = (entry_low + entry_high) / 2
     risk_ps  = round(max(abs(entry_mid_final - stop_loss), 0.01), 4)
     risk_pct_val = round(risk_ps / entry_mid_final * 100, 2)
-    suggested_pct = round(min(1.0 / (risk_pct_val / 100), 5.0) * 100, 1)
+    suggested_pct = round(min(1.0 / (risk_pct_val / 100), 50.0), 1)
 
     return TradeSetupResponse(
         entry_low=entry_low,
