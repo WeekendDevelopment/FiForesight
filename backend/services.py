@@ -931,6 +931,40 @@ class YFinanceService:
             return []
 
     @newrelic.agent.function_trace()
+    def fetch_news(self, symbol: str) -> List[dict]:
+        """
+        Fetch recent news headlines from yfinance (free, no API key).
+        Returns list of dicts with title, source, source_label.
+        """
+        if not YFINANCE_AVAILABLE:
+            logger.warning("[YFINANCE] fetch_news SKIPPED — yfinance not installed")
+            return []
+        ticker = self._to_yf_symbol(symbol)
+        try:
+            raw = yf.Ticker(ticker).news
+            if not raw:
+                logger.info(f"[YFINANCE] fetch_news — {ticker}: 0 articles returned")
+                return []
+            result = []
+            for item in raw[:10]:
+                title = item.get("title", "").strip()
+                if not title:
+                    continue
+                result.append({
+                    "title":        title,
+                    "link":         item.get("link", ""),
+                    "source":       item.get("publisher", "yfinance"),
+                    "thumbnail":    "",
+                    "date":         "",
+                    "source_label": "yfinance",
+                })
+            logger.info(f"[YFINANCE] ✓ fetch_news — {ticker}: {len(result)} articles")
+            return result
+        except Exception as e:
+            logger.warning(f"[YFINANCE] fetch_news failed for {ticker}: {e}")
+            return []
+
+    @newrelic.agent.function_trace()
     def get_live_price(self, symbol: str) -> float:
         """Fast path to get the latest price from yfinance."""
         if not YFINANCE_AVAILABLE:
@@ -1169,6 +1203,99 @@ class SerpService:
         except Exception as e:
             logger.warning(f"[SERP] fetch_data failed ('{query}'): {e} → fallback: 0 articles, empty markets")
             return {"news_results": [], "markets": {}}
+
+
+# ---------------------------------------------------------------------------
+# Finnhub Service  —  company news via Finnhub REST API
+# ---------------------------------------------------------------------------
+
+class FinnhubService:
+    """
+    Fetches company news from Finnhub (last 7 days).
+    Requires FINNHUB_API_KEY; gracefully skips if not set.
+    """
+    _BASE_URL = "https://finnhub.io/api/v1/company-news"
+
+    async def fetch_company_news(self, symbol: str) -> List[dict]:
+        if not Config.FINNHUB_API_KEY:
+            logger.info("[FINNHUB] API key not set — company news fetch SKIPPED")
+            return []
+        sym = symbol.split(":")[0].upper()
+        to_date   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        from_date = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
+        params = {
+            "symbol": sym,
+            "from":   from_date,
+            "to":     to_date,
+            "token":  Config.FINNHUB_API_KEY,
+        }
+        logger.debug(f"[FINNHUB] fetch_company_news — symbol={sym}, from={from_date}, to={to_date}")
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(self._BASE_URL, params=params)
+                resp.raise_for_status()
+                articles = resp.json()
+            result = []
+            for a in (articles or [])[:10]:
+                headline = a.get("headline", "").strip()
+                if not headline:
+                    continue
+                result.append({
+                    "title":        headline,
+                    "link":         a.get("url", ""),
+                    "source":       a.get("source", "Finnhub"),
+                    "thumbnail":    a.get("image", ""),
+                    "date":         "",
+                    "source_label": "Finnhub",
+                })
+            logger.info(f"[FINNHUB] ✓ fetch_company_news — {sym}: {len(result)} articles")
+            return result
+        except Exception as e:
+            logger.warning(f"[FINNHUB] fetch_company_news failed for {sym}: {e} — returning []")
+            return []
+
+
+# ---------------------------------------------------------------------------
+# StockTwits Service  —  social sentiment from StockTwits feed
+# ---------------------------------------------------------------------------
+
+class StockTwitsService:
+    """
+    Fetches the public StockTwits symbol stream (no auth required).
+    Counts Bullish/Bearish tags on the last N messages and returns a
+    ratio in [-1, 1]: +1 = all bullish, -1 = all bearish.
+    """
+    _BASE_URL = "https://api.stocktwits.com/api/2/streams/symbol/{symbol}.json"
+
+    async def fetch_sentiment(self, symbol: str) -> dict:
+        empty = {"bullish": 0, "bearish": 0, "sentiment": 0.0}
+        sym = symbol.split(":")[0].upper()
+        url = self._BASE_URL.format(symbol=sym)
+        logger.debug(f"[STOCKTWITS] fetch_sentiment — symbol={sym}")
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                data = resp.json()
+            messages = data.get("messages", [])
+            bullish = sum(
+                1 for m in messages
+                if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bullish"
+            )
+            bearish = sum(
+                1 for m in messages
+                if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bearish"
+            )
+            total = bullish + bearish
+            ratio = round((bullish - bearish) / total, 3) if total > 0 else 0.0
+            logger.info(
+                f"[STOCKTWITS] ✓ {sym}: {len(messages)} msgs | "
+                f"bullish={bullish}, bearish={bearish}, ratio={ratio:+.3f}"
+            )
+            return {"bullish": bullish, "bearish": bearish, "sentiment": ratio}
+        except Exception as e:
+            logger.warning(f"[STOCKTWITS] fetch_sentiment failed for {sym}: {e} — returning empty")
+            return empty
 
 
 # ---------------------------------------------------------------------------

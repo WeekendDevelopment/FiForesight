@@ -18,7 +18,7 @@ from models import (
 from services import DataCleaner, ANALYST_PERSONAS
 from dependencies import (
     influx_svc, forecast_store, serp_svc, yf_svc,
-    analyst_jury_svc, sentiment_svc,
+    analyst_jury_svc, sentiment_svc, finnhub_svc, stocktwits_svc,
 )
 from jury_graph import run_jury_graph
 from redis_cache import cache_get, cache_set
@@ -72,6 +72,7 @@ class PredictionResponse(BaseModel):
     juryAnalysts:  List[dict]
     modelWeights:  dict
     sentiment:     dict
+    stocktwits:    dict           = {}
     monteCarlo:    Optional[dict] = None
     earningsDates: List[str]      = []
 
@@ -107,6 +108,27 @@ def _fmt_ratio(val, decimals: int = 2, suffix: str = "") -> str:
         return f"{float(val):.{decimals}f}{suffix}"
     except Exception:
         return "N/A"
+
+
+def _dedup_news(items: List[dict]) -> List[dict]:
+    """Deduplicate news items by lowercased title, preserving insertion order."""
+    seen: set = set()
+    out: List[dict] = []
+    for item in items:
+        key = item.get("title", "").lower().strip()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(item)
+    return out
+
+
+async def _safe_fetch(coro, *, empty, name: str):
+    """Await a coroutine with 10 s timeout; return empty on any failure."""
+    try:
+        return await asyncio.wait_for(coro, timeout=10.0)
+    except Exception as e:
+        logger.warning(f"[{name}] fetch failed or timed out: {e} — returning empty")
+        return empty
 
 
 def _safe_background(coro_or_future, *, name: str = "background"):
@@ -181,6 +203,7 @@ async def _run_analyst_jury(
     news_headlines: Optional[List[str]] = None,
     track_record: str = "",
     sentiment: Optional[dict] = None,
+    stocktwits: Optional[dict] = None,
 ) -> List[dict]:
     """
     Run all 3 analyst personas concurrently via AnalystJuryService.
@@ -292,9 +315,18 @@ async def _run_analyst_jury(
 
     sentiment_line = ""
     if sentiment and sentiment.get("headline_count", 0) > 0:
+        st_suffix = ""
+        if stocktwits:
+            total_st = stocktwits.get("bullish", 0) + stocktwits.get("bearish", 0)
+            if total_st > 0:
+                st_suffix = (
+                    f" | StockTwits: {stocktwits['bullish']}B / {stocktwits['bearish']}Be "
+                    f"(ratio={stocktwits['sentiment']:+.2f})"
+                )
         sentiment_line = (
             f"News Sentiment (VADER, {sentiment['headline_count']} headlines): "
-            f"compound={sentiment['compound']:+.3f} [{sentiment['label']}]\n"
+            f"compound={sentiment['compound']:+.3f} [{sentiment['label']}]"
+            f"{st_suffix}\n"
         )
 
     _mc = forecast.get("monte_carlo")
@@ -962,8 +994,27 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     if cached_news_payload is not None:
         logger.info(f"[STEP-4c] News cache HIT for {symbol}")
     else:
-        logger.info("[STEP-4c] News cache MISS — launching SerpAPI task")
+        logger.info(
+            "[STEP-4c] News cache MISS — launching SerpAPI, yfinance news, "
+            "Finnhub, and StockTwits tasks"
+        )
         serp_task = asyncio.create_task(serp_svc.fetch_data(symbol))
+        yf_news_task = asyncio.create_task(
+            _safe_fetch(
+                asyncio.to_thread(yf_svc.fetch_news, symbol),
+                empty=[], name="YF-NEWS",
+            )
+        )
+        finnhub_task = asyncio.create_task(
+            _safe_fetch(finnhub_svc.fetch_company_news(symbol), empty=[], name="FINNHUB")
+        )
+        stocktwits_task = asyncio.create_task(
+            _safe_fetch(
+                stocktwits_svc.fetch_sentiment(symbol),
+                empty={"bullish": 0, "bearish": 0, "sentiment": 0.0},
+                name="STOCKTWITS",
+            )
+        )
 
     earnings_task = asyncio.create_task(
         asyncio.to_thread(yf_svc.fetch_earnings_dates, symbol)
@@ -977,30 +1028,34 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     sr_levels = calculate_support_resistance(closes, highs=highs, lows=lows)
 
     # ── Step 4e. Resolve news + score VADER sentiment ─────────────────────────
-    news: list      = []
-    trending: list  = []
-    sentiment: dict = {"compound": 0.0, "label": "Neutral", "scores": [], "headline_count": 0}
+    news: list           = []
+    trending: list       = []
+    sentiment: dict      = {"compound": 0.0, "label": "Neutral", "scores": [], "headline_count": 0}
+    stocktwits_data: dict = {"bullish": 0, "bearish": 0, "sentiment": 0.0}
+
     if cached_news_payload is not None:
-        news      = cached_news_payload.get("news", [])
-        trending  = cached_news_payload.get("trending", [])
-        sentiment = cached_news_payload.get("sentiment", {"compound": 0.0, "label": "Neutral", "count": 0})
-        logger.info(f"[STEP-4e] Using cached news/sentiment for {symbol}")
+        news           = cached_news_payload.get("news", [])
+        trending       = cached_news_payload.get("trending", [])
+        sentiment      = cached_news_payload.get("sentiment", {"compound": 0.0, "label": "Neutral", "count": 0})
+        stocktwits_data = cached_news_payload.get("stocktwits", {"bullish": 0, "bearish": 0, "sentiment": 0.0})
+        logger.info(f"[STEP-4e] Using cached news/sentiment/stocktwits for {symbol}")
     else:
-        logger.info("[STEP-4e] Awaiting SerpAPI + scoring VADER sentiment ...")
+        logger.info("[STEP-4e] Awaiting SerpAPI, yfinance news, Finnhub, StockTwits ...")
         serp_data: dict = {"news_results": [], "markets": {}}
         try:
             serp_data = await serp_task
-            news = [
+            serp_news = [
                 {
-                    "title":     n.get("title",  ""),
-                    "link":      n.get("link",   ""),
-                    "source":    (
+                    "title":        n.get("title",  ""),
+                    "link":         n.get("link",   ""),
+                    "source":       (
                         n.get("source", {}).get("name", "")
                         if isinstance(n.get("source"), dict)
                         else str(n.get("source", ""))
                     ),
-                    "thumbnail": n.get("thumbnail", ""),
-                    "date":      n.get("date",   ""),
+                    "thumbnail":    n.get("thumbnail", ""),
+                    "date":         n.get("date",   ""),
+                    "source_label": "SerpAPI",
                 }
                 for n in serp_data.get("news_results", [])[:8]
             ]
@@ -1015,18 +1070,52 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
                             "category": category,
                         })
             logger.info(
-                f"[STEP-4e] ✓ SerpAPI — news={len(news)} articles, "
+                f"[STEP-4e] ✓ SerpAPI — news={len(serp_news)} articles, "
                 f"trending={len(trending)} tickers"
             )
-            headlines = [n["title"] for n in news if n.get("title")]
-            sentiment = await asyncio.to_thread(sentiment_svc.score_headlines, headlines)
+        except Exception as e:
+            logger.warning(f"[STEP-4e] SerpAPI failed: {e}")
+            serp_news = []
+
+        # Await yfinance, Finnhub, and StockTwits results (all non-blocking tasks)
+        yf_news: List[dict]    = await yf_news_task
+        finnhub_news: List[dict] = await finnhub_task
+        stocktwits_data        = await stocktwits_task
+
+        logger.info(
+            f"[STEP-4e] Sources — serp={len(serp_news)}, "
+            f"yfinance={len(yf_news)}, finnhub={len(finnhub_news)}, "
+            f"stocktwits bullish={stocktwits_data['bullish']} bearish={stocktwits_data['bearish']}"
+        )
+
+        # Merge and deduplicate: SerpAPI first (has thumbnail/date), then yfinance, then Finnhub
+        combined = _dedup_news(serp_news + yf_news + finnhub_news)
+        news = combined[:12]
+
+        # Score VADER on combined headline set
+        all_headlines = [n["title"] for n in news if n.get("title")]
+        try:
+            sentiment = await asyncio.to_thread(sentiment_svc.score_headlines, all_headlines)
             logger.info(
                 f"[STEP-4e] ✓ VADER sentiment — compound={sentiment['compound']:.4f} "
                 f"({sentiment['label']}), headlines_scored={sentiment['headline_count']}"
             )
-            await cache_set(news_cache_key, {"news": news, "trending": trending, "sentiment": sentiment}, ttl_seconds=1800)
         except Exception as e:
-            logger.warning(f"[STEP-4e] SerpAPI/sentiment failed: {e}")
+            logger.warning(f"[STEP-4e] VADER scoring failed: {e}")
+
+        try:
+            await cache_set(
+                news_cache_key,
+                {
+                    "news":       news,
+                    "trending":   trending,
+                    "sentiment":  sentiment,
+                    "stocktwits": stocktwits_data,
+                },
+                ttl_seconds=1800,
+            )
+        except Exception as e:
+            logger.warning(f"[STEP-4e] cache_set failed: {e}")
 
     # Resolve earnings dates (fired concurrently at Step 4c)
     try:
@@ -1066,6 +1155,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
                 news_headlines=[n["title"] for n in news if n.get("title")],
                 track_record=track_record,
                 sentiment=sentiment,
+                stocktwits=stocktwits_data,
             ),
         )
         if jury:
@@ -1170,6 +1260,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         juryAnalysts  = jury,
         modelWeights  = forecast.get("weights", {"prophet": 0.0, "sarima": 0.0, "rf": 0.0}),
         sentiment    = sentiment,
+        stocktwits   = stocktwits_data,
         monteCarlo   = forecast.get("monte_carlo"),
         earningsDates = earnings_dates,
     )
