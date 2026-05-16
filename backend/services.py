@@ -3,6 +3,7 @@ import re
 import json
 import logging
 import httpx
+import xml.etree.ElementTree as ET
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
@@ -1310,6 +1311,55 @@ class StockTwitsService:
         except Exception as e:
             logger.warning(f"[STOCKTWITS] fetch_sentiment failed for {sym}: {e} — returning empty")
             return empty
+
+
+# ---------------------------------------------------------------------------
+# Yahoo Finance RSS Service  —  free headline feed, no API key required
+# ---------------------------------------------------------------------------
+
+class YahooRSSService:
+    """
+    Fetches stock news from Yahoo Finance's public RSS feed.
+    No API key needed — works anywhere Yahoo Finance is reachable.
+    Falls back gracefully (logs + returns []) on any network error.
+    """
+    _BASE_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline"
+
+    async def fetch_news(self, symbol: str) -> List[dict]:
+        sym = symbol.split(":")[0].upper()
+        params = {"s": sym, "region": "US", "lang": "en-US"}
+        logger.debug(f"[YAHOORSE] fetch_news — symbol={sym}")
+        try:
+            async with httpx.AsyncClient(
+                timeout=10.0,
+                follow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; FiForesight/1.0)"},
+            ) as client:
+                resp = await client.get(self._BASE_URL, params=params)
+                resp.raise_for_status()
+            root = ET.fromstring(resp.text)
+            channel = root.find("channel")
+            if channel is None:
+                logger.info(f"[YAHOORSE] {sym}: RSS channel element missing")
+                return []
+            result = []
+            for item in channel.findall("item")[:10]:
+                title = (item.findtext("title") or "").strip()
+                if not title:
+                    continue
+                result.append({
+                    "title":        title,
+                    "link":         item.findtext("link") or "",
+                    "source":       "Yahoo Finance",
+                    "thumbnail":    "",
+                    "date":         item.findtext("pubDate") or "",
+                    "source_label": "Yahoo RSS",
+                })
+            logger.info(f"[YAHOORSE] ✓ fetch_news — {sym}: {len(result)} articles")
+            return result
+        except Exception as e:
+            logger.warning(f"[YAHOORSE] fetch_news failed for {sym}: {e} — returning []")
+            return []
 
 
 # ---------------------------------------------------------------------------

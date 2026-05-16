@@ -18,7 +18,7 @@ from models import (
 from services import DataCleaner, ANALYST_PERSONAS
 from dependencies import (
     influx_svc, forecast_store, serp_svc, yf_svc,
-    analyst_jury_svc, sentiment_svc, finnhub_svc, stocktwits_svc,
+    analyst_jury_svc, sentiment_svc, finnhub_svc, stocktwits_svc, yahoo_rss_svc,
 )
 from jury_graph import run_jury_graph
 from redis_cache import cache_get, cache_set
@@ -1008,6 +1008,9 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         finnhub_task = asyncio.create_task(
             _safe_fetch(finnhub_svc.fetch_company_news(symbol), empty=[], name="FINNHUB")
         )
+        yahoo_rss_task = asyncio.create_task(
+            _safe_fetch(yahoo_rss_svc.fetch_news(symbol), empty=[], name="YAHOORSE")
+        )
         stocktwits_task = asyncio.create_task(
             _safe_fetch(
                 stocktwits_svc.fetch_sentiment(symbol),
@@ -1077,19 +1080,22 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             logger.warning(f"[STEP-4e] SerpAPI failed: {e}")
             serp_news = []
 
-        # Await yfinance, Finnhub, and StockTwits results (all non-blocking tasks)
-        yf_news: List[dict]    = await yf_news_task
+        # Await all non-blocking tasks
+        yf_news: List[dict]      = await yf_news_task
         finnhub_news: List[dict] = await finnhub_task
-        stocktwits_data        = await stocktwits_task
+        yahoo_rss: List[dict]    = await yahoo_rss_task
+        stocktwits_data          = await stocktwits_task
 
         logger.info(
             f"[STEP-4e] Sources — serp={len(serp_news)}, "
             f"yfinance={len(yf_news)}, finnhub={len(finnhub_news)}, "
+            f"yahoo_rss={len(yahoo_rss)}, "
             f"stocktwits bullish={stocktwits_data['bullish']} bearish={stocktwits_data['bearish']}"
         )
 
-        # Merge and deduplicate: SerpAPI first (has thumbnail/date), then yfinance, then Finnhub
-        combined = _dedup_news(serp_news + yf_news + finnhub_news)
+        # Merge and deduplicate: SerpAPI first (has thumbnail/date), then yfinance,
+        # Finnhub, then Yahoo RSS (free fallback active when no API keys are set)
+        combined = _dedup_news(serp_news + yf_news + finnhub_news + yahoo_rss)
         news = combined[:12]
 
         # Score VADER on combined headline set
