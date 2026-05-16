@@ -175,10 +175,7 @@ export default function QuantumDashboard() {
             <Box>
               <Typography variant="h4" sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
                 <BrainCircuit size={32} color={primaryColor} />
-                FiForesight <Box component="span" sx={{ color: 'secondary.main' }}>QUANTUM</Box>
-              </Typography>
-              <Typography variant="caption" sx={{ letterSpacing: 4, color: 'primary.main', opacity: 0.8 }}>
-                AI-POWERED QUANTITATIVE ENGINE
+                FiForesight
               </Typography>
             </Box>
 
@@ -425,7 +422,7 @@ export default function QuantumDashboard() {
                 </Stack>
               ) : (
                 <Box sx={{ height: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.15 }}>
-                  <Typography variant="h4">QUANTUM SYSTEM READY</Typography>
+                  <Typography variant="body1" sx={{ letterSpacing: 2, opacity: 0.5 }}>Enter a ticker above to begin</Typography>
                 </Box>
               )}
             </Grid>
