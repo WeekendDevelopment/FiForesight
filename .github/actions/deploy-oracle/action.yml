@@ -60,7 +60,7 @@ runs:
           IMAGE_TAG=${{ env.IMAGE_TAG }}
 
           # Log in to GHCR
-          echo "${{ env.GH_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          echo "${{ env.GH_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin 2>&1
 
           # Stop and remove existing container (if any)
           docker stop fiforesight || true
