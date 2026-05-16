@@ -160,7 +160,7 @@ export default function QuantumDashboard() {
   const indicatorSignals = useIndicatorSignals(prediction, isDark, chartStats);
 
   const bgGradient = isDark
-    ? 'radial-gradient(circle at 50% -20%, #2d1b4e 0%, #1a1b2e 60%)'
+    ? 'none'
     : 'radial-gradient(circle at 50% -20%, #e8e4f8 0%, #f2f0eb 60%)';
 
   // ── Render ─────────────────────────────────────────────────────────────────
