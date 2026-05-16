@@ -547,7 +547,7 @@ export default function QuantumDashboard() {
                                 {item.thumbnail && <Avatar src={item.thumbnail} variant="rounded" sx={{ width: 60, height: 60 }} />}
                                 <Box sx={{ flex: 1, minWidth: 0 }}>
                                   {item.link ? (
-                                    <Link href={item.link} target="_blank" underline="none" sx={{ '&:hover': { color: 'primary.main' } }}>
+                                    <Link href={item.link} target="_blank" rel="noopener noreferrer" underline="none" sx={{ '&:hover': { color: 'primary.main' } }}>
                                       <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>{item.title}</Typography>
                                     </Link>
                                   ) : (

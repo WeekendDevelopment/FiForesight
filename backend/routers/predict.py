@@ -123,9 +123,9 @@ def _dedup_news(items: List[dict]) -> List[dict]:
 
 
 async def _safe_fetch(coro, *, empty, name: str):
-    """Await a coroutine with 10 s timeout; return empty on any failure."""
+    """Await a coroutine with 12 s timeout; return empty on any failure."""
     try:
-        return await asyncio.wait_for(coro, timeout=10.0)
+        return await asyncio.wait_for(coro, timeout=12.0)
     except Exception as e:
         logger.warning(f"[{name}] fetch failed or timed out: {e} — returning empty")
         return empty
@@ -1039,7 +1039,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     if cached_news_payload is not None:
         news           = cached_news_payload.get("news", [])
         trending       = cached_news_payload.get("trending", [])
-        sentiment      = cached_news_payload.get("sentiment", {"compound": 0.0, "label": "Neutral", "count": 0})
+        sentiment      = cached_news_payload.get("sentiment", {"compound": 0.0, "label": "Neutral", "headline_count": 0})
         stocktwits_data = cached_news_payload.get("stocktwits", {"bullish": 0, "bearish": 0, "sentiment": 0.0})
         logger.info(f"[STEP-4e] Using cached news/sentiment/stocktwits for {symbol}")
     else:
