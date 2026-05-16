@@ -154,13 +154,13 @@ export default function QuantumDashboard() {
     };
   }, [prediction?.history, isDark]);
 
-  const trendColor   = chartStats?.color ?? (isDark ? '#00f2ff' : '#0077ff');
-  const primaryColor = isDark ? '#00f2ff' : '#0077ff';
+  const trendColor   = chartStats?.color ?? (isDark ? '#2de2e6' : '#0077ff');
+  const primaryColor = isDark ? '#f92aad' : '#0077ff';
 
   const indicatorSignals = useIndicatorSignals(prediction, isDark, chartStats);
 
   const bgGradient = isDark
-    ? 'radial-gradient(circle at 50% -20%, #1a237e 0%, #050a10 60%)'
+    ? 'radial-gradient(circle at 50% -20%, #2d1b4e 0%, #1a1b2e 60%)'
     : 'radial-gradient(circle at 50% -20%, #dbeafe 0%, #f0f4f8 60%)';
 
   // ── Render ─────────────────────────────────────────────────────────────────
