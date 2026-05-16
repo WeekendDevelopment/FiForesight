@@ -123,7 +123,7 @@ export default function QuantumDashboard() {
         .then(r => setDcfData(r.data))
         .catch(() => setDcfData(null));
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Quantum analysis failed.');
+      setError(err.response?.data?.error || 'Analysis failed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -317,6 +317,16 @@ export default function QuantumDashboard() {
                     indicatorSignals={indicatorSignals}
                   />
 
+                  {/* ── Ensemble model weights ───────────────────────── */}
+                  {prediction.modelWeights && (
+                    <ModelWeightBar weights={prediction.modelWeights} isDark={isDark} />
+                  )}
+
+                  {/* ── Analyst Jury ──────────────────────────────────── */}
+                  {prediction.juryAnalysts && prediction.juryAnalysts.length > 0 && (
+                    <AnalystJuryPanel analysts={prediction.juryAnalysts} />
+                  )}
+
                   {/* ── Trade Setup ──────────────────────────────────── */}
                   {user ? (
                     <TradeSetupCard
@@ -328,37 +338,19 @@ export default function QuantumDashboard() {
                   ) : (
                     <AuthGate
                       title="Trade Setup"
-                      message="Sign in to see personalized entry zones, stop levels, and position sizing."
+                      message="Sign in to see entry zones, stop levels, and position sizing."
                       onSignIn={() => setAuthOpen(true)}
                       isDark={isDark}
                       primaryColor={primaryColor}
                     />
                   )}
 
-                  {/* ── Options Chain ─────────────────────────────────── */}
-                  {optionsData && (
-                    <OptionsChainPanel
-                      data={optionsData}
-                      isDark={isDark}
-                      primaryColor={primaryColor}
-                    />
-                  )}
-
-                  {/* ── DCF Intrinsic Value ───────────────────────────── */}
-                  {dcfData && (
-                    <DCFCard
-                      dcf={dcfData}
-                      isDark={isDark}
-                      primaryColor={primaryColor}
-                    />
-                  )}
-
-                  {/* ── 5-Day forecast table ──────────────────────────── */}
+                  {/* ── Price Forecast ────────────────────────────────── */}
                   {prediction.forecastDays?.length > 0 && (
                     <Card>
                       <CardContent>
                         <Typography variant="overline" sx={{ opacity: 0.5, display: 'flex', alignItems: 'center', gap: 1 }}>
-                          <BarChart2 size={14} /> 5-Day Forecast Breakdown
+                          <BarChart2 size={14} /> Price Forecast
                         </Typography>
                         <Box sx={{ mt: 2, display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 1.5 }}>
                           {prediction.forecastDays.map((day, i) => {
@@ -409,20 +401,20 @@ export default function QuantumDashboard() {
                     </Card>
                   )}
 
-                  {/* ── Ensemble Model Weights ────────────────────────────── */}
-                  {prediction.modelWeights && (
-                    <ModelWeightBar weights={prediction.modelWeights} isDark={isDark} />
-                  )}
-
-                  {/* ── Analyst Jury ──────────────────────────────────────── */}
-                  {prediction.juryAnalysts && prediction.juryAnalysts.length > 0 && (
-                    <AnalystJuryPanel analysts={prediction.juryAnalysts} />
+                  {/* ── DCF Intrinsic Value ───────────────────────────── */}
+                  {dcfData && (
+                    <DCFCard
+                      dcf={dcfData}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
                   )}
 
                 </Stack>
               ) : (
-                <Box sx={{ height: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.15 }}>
-                  <Typography variant="body1" sx={{ letterSpacing: 2, opacity: 0.5 }}>Enter a ticker above to begin</Typography>
+                <Box sx={{ height: '60vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, opacity: 0.2 }}>
+                  <BrainCircuit size={52} color={primaryColor} />
+                  <Typography variant="h6" sx={{ fontWeight: 300, letterSpacing: 3 }}>Enter a ticker above to begin</Typography>
                 </Box>
               )}
             </Grid>
@@ -474,6 +466,15 @@ export default function QuantumDashboard() {
                     />
                   )}
 
+                  {/* ── Options Chain ─────────────────────────────────── */}
+                  {optionsData && (
+                    <OptionsChainPanel
+                      data={optionsData}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
+                  )}
+
                   {/* ── Peer Comparison ──────────────────────────────────── */}
                   {prediction && (
                     <PeerComparisonPanel
@@ -497,7 +498,7 @@ export default function QuantumDashboard() {
                       {prediction.sentiment && prediction.sentiment.headline_count > 0 && (
                         <Stack direction="row" flexWrap="wrap" alignItems="center" gap={1} sx={{ px: 1 }}>
                           <Chip
-                            label={`VADER: ${prediction.sentiment.label} (${prediction.sentiment.compound >= 0 ? '+' : ''}${prediction.sentiment.compound.toFixed(3)})`}
+                            label={`Sentiment: ${prediction.sentiment.label} (${prediction.sentiment.compound >= 0 ? '+' : ''}${prediction.sentiment.compound.toFixed(3)})`}
                             size="small"
                             sx={{
                               fontWeight: 700,
