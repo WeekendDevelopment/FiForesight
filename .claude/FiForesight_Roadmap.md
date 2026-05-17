@@ -1,7 +1,7 @@
 # FiForesight Roadmap
 
 > Source of truth for planned work. Feature-based, free-tier only.
-> Last synced: 2026-05-16
+> Last synced: 2026-05-17 — All "Next Up" items shipped; moving to Feature Ideas backlog.
 
 ---
 
@@ -52,19 +52,23 @@
 Pull beta, EV/EBITDA, P/B, forwardPE, PEG, FCF, revenueGrowth, totalDebt, industry from yfinance.
 Unblocks peer comps + DCF. ~½ day, single function edit.
 **File:** `backend/services.py:802`
+✅ **Shipped** — `services.py:864-884`
 
 ### 2. Implement `/compare` backend (peer comparison)
 Frontend proxy `frontend/app/api/compare/route.ts` exists but backend handler is missing — currently a dead proxy.
 Peer comp panel: same-sector tickers, side-by-side P/E, EV/EBITDA, beta, revenue growth.
 Depends on #1.
+✅ **Shipped** — `routers/predict.py:1284` + `PeerComparisonPanel.tsx`
 
 ### 3. Cache `fetch_info` in Redis (1h TTL)
 Every `/predict` re-hits yfinance for static fundamentals. Redis is already wired.
 Independent of #1/#2 — can ship in parallel.
+✅ **Shipped** — `routers/predict.py:741-764` (1h TTL, also in `/compare`)
 
 ### 4. Earnings calendar markers on chart
 `yf.Ticker().calendar` → date marker overlay on `PriceChartCard`. ~30 LOC backend + small frontend.
 High UX value for retail users.
+✅ **Shipped** — `services.py:900`, `predict.py:1023`, `PriceChartCard.tsx:505` (yellow dashed markers)
 
 ### 5. Jury consensus row
 Add weighted aggregate verdict + agreement level to `AnalystJuryPanel` ("3/3 Buy, avg confidence 72").
