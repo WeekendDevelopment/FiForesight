@@ -1,7 +1,7 @@
 # FiForesight Roadmap
 
 > Source of truth for planned work. Feature-based, free-tier only.
-> Last synced: 2026-05-13
+> Last synced: 2026-05-16
 
 ---
 
@@ -26,6 +26,15 @@
 - Dark/light theme, loading skeletons, ticker autocomplete
 - Portfolio simulation page (`/simulation/suggest`, `/simulation/performance`, state persistence)
 - `page.tsx` decomposed: 423 lines + 13 components in `frontend/components/`
+- Jury consensus badge — weighted aggregate verdict + agreement level in `AnalystJuryPanel` (#189)
+- DCF intrinsic value — `GET /dcf/{symbol}` 3-scenario WACC valuation card (#190)
+- Position sizing (1% rule) — Monte Carlo VaR-based % of portfolio risk in Trade Setup Card (#191)
+- Options chain panel — calls/puts table, ITM highlight, expiry selector (#194)
+
+### Auth & Backend
+- Supabase email/password auth — `AuthContext`, `AuthModal`, watchlist groundwork (#193)
+- Backend pytest harness — 22 tests, no network calls (`backend/tests/`) (#192)
+- Router split — `main.py` → `routers/predict.py`, `simulation.py`, `trade.py`, `market.py` (#195)
 
 ### Infra
 - Redis caching layer (`redis_cache.py`)
@@ -60,25 +69,31 @@ High UX value for retail users.
 ### 5. Jury consensus row
 Add weighted aggregate verdict + agreement level to `AnalystJuryPanel` ("3/3 Buy, avg confidence 72").
 Pure frontend change.
+✅ **Shipped** — PR #189
 
 ### 6. DCF intrinsic value endpoint
 `GET /dcf/{symbol}` — 3-scenario WACC-based valuation card. Pairs with Monte Carlo VaR.
 Depends on #1.
+✅ **Shipped** — PR #190
 
 ### 7. Supabase auth + watchlists
 Free tier. Unlocks personalization, persistent watchlists, daily briefings, alerts.
 Bigger scope — break into auth-only PR first, watchlist UI second.
+✅ **Shipped** (auth) — PR #193
 
 ### 8. Backend pytest harness
 Minimum: tests for `run_monte_carlo`, `run_ensemble_forecast`, `score_headlines`, `fetch_info`.
 Block more features until basic coverage exists.
+✅ **Shipped** — PR #192
 
 ### 9. Position sizing in Trade Setup Card
 Use Monte Carlo VaR to suggest % of portfolio to risk. Pure addition to existing endpoint.
+✅ **Shipped** — PR #191
 
 ### 10. Split `main.py` into routers
 1593 lines is unwieldy. Split into `routers/predict.py`, `routers/simulation.py`, `routers/jury.py`, `routers/chat.py`.
 Pure refactor — do after auth lands so router auth wiring is single-pass.
+✅ **Shipped** — PR #195
 
 ---
 
@@ -88,7 +103,7 @@ Pure refactor — do after auth lands so router auth wiring is single-pass.
 |---|---|---|---|
 | Morning briefing email/digest | High | Med | Needs auth (#7) |
 | "Why did this move?" auto-explainer on >3% gaps | High | Med | News + jury delta |
-| Options chain panel | Med | Med | `yf.Ticker().option_chain` is free |
+| ~~Options chain panel~~ | ~~Med~~ | ~~Med~~ | ✅ Shipped — PR #194 |
 | Sector heatmap (discovery) | Med | Med | Pre-baked sector ETFs |
 | Custom alert rule builder | High | High | Needs auth + worker |
 | Reddit/X sentiment delta | Med | High | PRAW free, X is paid → Reddit only |
