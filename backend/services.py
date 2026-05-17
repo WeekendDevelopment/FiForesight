@@ -3,6 +3,7 @@ import re
 import json
 import logging
 import httpx
+import xml.etree.ElementTree as ET
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional
@@ -298,38 +299,57 @@ class InfluxService:
             raise ValueError(f"sim_id must be a UUID v4, got: {sim_id!r}")
         return sim_id.lower()
 
-    def write_simulation_state(self, sim_id: str, env: str, state: dict) -> bool:
+    @staticmethod
+    def _validate_user_id(user_id: str) -> str:
+        """Accepts empty string (anonymous) or a Supabase UUID."""
+        if not user_id:
+            return ""
+        if not _UUID_RE.match(user_id.lower()):
+            raise ValueError(f"user_id must be a UUID v4, got: {user_id!r}")
+        return user_id.lower()
+
+    def write_simulation_state(self, sim_id: str, env: str, state: dict, user_id: str = "") -> bool:
         try:
-            env    = self._validate_sim_env(env)
-            sim_id = self._validate_sim_id(sim_id)
-            point  = (
+            env     = self._validate_sim_env(env)
+            sim_id  = self._validate_sim_id(sim_id)
+            user_id = self._validate_user_id(user_id)
+            point   = (
                 Point("simulation_state")
                 .tag("env",    env)
                 .tag("sim_id", sim_id)
                 .field("state_json", json.dumps(state))
             )
+            if user_id:
+                point = point.tag("user_id", user_id)
             self.write_api.write(
                 bucket=Config.INFLUXDB_BUCKET,
                 org=Config.INFLUXDB_ORG,
                 record=point,
             )
-            logger.info("[INFLUXDB] simulation_state saved: sim_id=%s env=%s", sim_id, env)
+            logger.info("[INFLUXDB] simulation_state saved: sim_id=%s env=%s user=%s", sim_id, env, "authenticated" if user_id else "anon")
             return True
         except Exception as exc:
             logger.error("[INFLUXDB] write_simulation_state failed: %s", exc)
             return False
 
-    def query_simulation_states(self, env: str) -> List[dict]:
-        """Return all live (non-deleted) simulations for the given env (or all envs), newest first."""
+    def query_simulation_states(self, env: str, user_id: str = "") -> List[dict]:
+        """Return live (non-deleted) simulations for the given env, optionally filtered by user."""
         try:
             if env not in _VALID_SIM_ENV_READ:
                 raise ValueError(f"Invalid simulation env: {env!r}")
-            env_filter = "" if env == "all" else f'  |> filter(fn: (r) => r.env == "{env}")\n'
+            user_id = self._validate_user_id(user_id)
+            env_filter  = "" if env == "all" else f'  |> filter(fn: (r) => r.env == "{env}")\n'
+            # Authenticated: exact-match on user_id tag.
+            # Anonymous: restrict to legacy rows that have no user_id tag at all.
+            if user_id:
+                user_filter = f'  |> filter(fn: (r) => r.user_id == "{user_id}")\n'
+            else:
+                user_filter = '  |> filter(fn: (r) => not exists r.user_id)\n'
             query = f"""
 from(bucket: "{Config.INFLUXDB_BUCKET}")
   |> range(start: -365d)
   |> filter(fn: (r) => r._measurement == "simulation_state")
-{env_filter}  |> filter(fn: (r) => r._field == "state_json")
+{env_filter}{user_filter}  |> filter(fn: (r) => r._field == "state_json")
   |> last()
   |> filter(fn: (r) => r._value != "")
   |> sort(columns: ["_time"], desc: true)
@@ -340,7 +360,6 @@ from(bucket: "{Config.INFLUXDB_BUCKET}")
                 for record in table.records:
                     try:
                         state = json.loads(record.get_value())
-                        # Inject the env tag so the frontend can label cross-env results
                         if "env" not in state:
                             state["env"] = record.values.get("env", env)
                         results.append(state)
@@ -354,23 +373,26 @@ from(bucket: "{Config.INFLUXDB_BUCKET}")
             logger.error("[INFLUXDB] query_simulation_states failed: %s", exc)
             return []
 
-    def delete_simulation_state(self, sim_id: str, env: str) -> bool:
+    def delete_simulation_state(self, sim_id: str, env: str, user_id: str = "") -> bool:
         """Soft-delete: write an empty-string tombstone so `last()` filters it out."""
         try:
-            env    = self._validate_sim_env(env)
-            sim_id = self._validate_sim_id(sim_id)
-            point  = (
+            env     = self._validate_sim_env(env)
+            sim_id  = self._validate_sim_id(sim_id)
+            user_id = self._validate_user_id(user_id)
+            point   = (
                 Point("simulation_state")
                 .tag("env",    env)
                 .tag("sim_id", sim_id)
                 .field("state_json", "")
             )
+            if user_id:
+                point = point.tag("user_id", user_id)
             self.write_api.write(
                 bucket=Config.INFLUXDB_BUCKET,
                 org=Config.INFLUXDB_ORG,
                 record=point,
             )
-            logger.info("[INFLUXDB] simulation_state deleted: sim_id=%s env=%s", sim_id, env)
+            logger.info("[INFLUXDB] simulation_state deleted: sim_id=%s env=%s user=%s", sim_id, env, "authenticated" if user_id else "anon")
             return True
         except Exception as exc:
             logger.error("[INFLUXDB] delete_simulation_state failed: %s", exc)
@@ -910,6 +932,54 @@ class YFinanceService:
             return []
 
     @newrelic.agent.function_trace()
+    def fetch_news(self, symbol: str) -> List[dict]:
+        """
+        Fetch recent news headlines from yfinance (free, no API key).
+        Returns list of dicts with title, source, source_label.
+        """
+        if not YFINANCE_AVAILABLE:
+            logger.warning("[YFINANCE] fetch_news SKIPPED — yfinance not installed")
+            return []
+        ticker = self._to_yf_symbol(symbol)
+        try:
+            raw = yf.Ticker(ticker).news
+            if not raw or not isinstance(raw, list):
+                logger.info(f"[YFINANCE] fetch_news — {ticker}: 0 articles returned")
+                return []
+            result = []
+            for item in raw[:12]:
+                # yfinance 1.x uses a nested 'content' dict; older versions use a flat dict.
+                content = item.get("content") if isinstance(item.get("content"), dict) else item
+                title = (
+                    content.get("title") or item.get("title") or ""
+                ).strip()
+                if not title:
+                    continue
+                source = (
+                    (content.get("provider") or {}).get("displayName")
+                    or item.get("publisher")
+                    or "yfinance"
+                )
+                link = (
+                    (content.get("clickThroughUrl") or {}).get("url")
+                    or item.get("link")
+                    or ""
+                )
+                result.append({
+                    "title":        title,
+                    "link":         link,
+                    "source":       source,
+                    "thumbnail":    "",
+                    "date":         "",
+                    "source_label": "yfinance",
+                })
+            logger.info(f"[YFINANCE] ✓ fetch_news — {ticker}: {len(result)} articles")
+            return result
+        except Exception as e:
+            logger.warning(f"[YFINANCE] fetch_news failed for {ticker}: {e}")
+            return []
+
+    @newrelic.agent.function_trace()
     def get_live_price(self, symbol: str) -> float:
         """Fast path to get the latest price from yfinance."""
         if not YFINANCE_AVAILABLE:
@@ -1148,6 +1218,148 @@ class SerpService:
         except Exception as e:
             logger.warning(f"[SERP] fetch_data failed ('{query}'): {e} → fallback: 0 articles, empty markets")
             return {"news_results": [], "markets": {}}
+
+
+# ---------------------------------------------------------------------------
+# Finnhub Service  —  company news via Finnhub REST API
+# ---------------------------------------------------------------------------
+
+class FinnhubService:
+    """
+    Fetches company news from Finnhub (last 7 days).
+    Requires FINNHUB_API_KEY; gracefully skips if not set.
+    """
+    _BASE_URL = "https://finnhub.io/api/v1/company-news"
+
+    async def fetch_company_news(self, symbol: str) -> List[dict]:
+        if not Config.FINNHUB_API_KEY:
+            logger.info("[FINNHUB] API key not set — company news fetch SKIPPED")
+            return []
+        sym = symbol.split(":")[0].upper()
+        to_date   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        from_date = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
+        params = {
+            "symbol": sym,
+            "from":   from_date,
+            "to":     to_date,
+            "token":  Config.FINNHUB_API_KEY,
+        }
+        logger.debug(f"[FINNHUB] fetch_company_news — symbol={sym}, from={from_date}, to={to_date}")
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(self._BASE_URL, params=params)
+                resp.raise_for_status()
+                articles = resp.json()
+            result = []
+            for a in (articles or [])[:10]:
+                headline = a.get("headline", "").strip()
+                if not headline:
+                    continue
+                result.append({
+                    "title":        headline,
+                    "link":         a.get("url", ""),
+                    "source":       a.get("source", "Finnhub"),
+                    "thumbnail":    a.get("image", ""),
+                    "date":         "",
+                    "source_label": "Finnhub",
+                })
+            logger.info(f"[FINNHUB] ✓ fetch_company_news — {sym}: {len(result)} articles")
+            return result
+        except Exception as e:
+            logger.warning(f"[FINNHUB] fetch_company_news failed for {sym}: {e} — returning []")
+            return []
+
+
+# ---------------------------------------------------------------------------
+# StockTwits Service  —  social sentiment from StockTwits feed
+# ---------------------------------------------------------------------------
+
+class StockTwitsService:
+    """
+    Fetches the public StockTwits symbol stream (no auth required).
+    Counts Bullish/Bearish tags on the last N messages and returns a
+    ratio in [-1, 1]: +1 = all bullish, -1 = all bearish.
+    """
+    _BASE_URL = "https://api.stocktwits.com/api/2/streams/symbol/{symbol}.json"
+
+    async def fetch_sentiment(self, symbol: str) -> dict:
+        empty = {"bullish": 0, "bearish": 0, "sentiment": 0.0}
+        sym = symbol.split(":")[0].upper()
+        url = self._BASE_URL.format(symbol=sym)
+        logger.debug(f"[STOCKTWITS] fetch_sentiment — symbol={sym}")
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                data = resp.json()
+            messages = data.get("messages", [])
+            bullish = sum(
+                1 for m in messages
+                if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bullish"
+            )
+            bearish = sum(
+                1 for m in messages
+                if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bearish"
+            )
+            total = bullish + bearish
+            ratio = round((bullish - bearish) / total, 3) if total > 0 else 0.0
+            logger.info(
+                f"[STOCKTWITS] ✓ {sym}: {len(messages)} msgs | "
+                f"bullish={bullish}, bearish={bearish}, ratio={ratio:+.3f}"
+            )
+            return {"bullish": bullish, "bearish": bearish, "sentiment": ratio}
+        except Exception as e:
+            logger.warning(f"[STOCKTWITS] fetch_sentiment failed for {sym}: {e} — returning empty")
+            return empty
+
+
+# ---------------------------------------------------------------------------
+# Yahoo Finance RSS Service  —  free headline feed, no API key required
+# ---------------------------------------------------------------------------
+
+class YahooRSSService:
+    """
+    Fetches stock news from Yahoo Finance's public RSS feed.
+    No API key needed — works anywhere Yahoo Finance is reachable.
+    Falls back gracefully (logs + returns []) on any network error.
+    """
+    _BASE_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline"
+
+    async def fetch_news(self, symbol: str) -> List[dict]:
+        sym = symbol.split(":")[0].upper()
+        params = {"s": sym, "region": "US", "lang": "en-US"}
+        logger.debug(f"[YAHOORSE] fetch_news — symbol={sym}")
+        try:
+            async with httpx.AsyncClient(
+                timeout=10.0,
+                follow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; FiForesight/1.0)"},
+            ) as client:
+                resp = await client.get(self._BASE_URL, params=params)
+                resp.raise_for_status()
+            root = ET.fromstring(resp.text)
+            channel = root.find("channel")
+            if channel is None:
+                logger.info(f"[YAHOORSE] {sym}: RSS channel element missing")
+                return []
+            result = []
+            for item in channel.findall("item")[:10]:
+                title = (item.findtext("title") or "").strip()
+                if not title:
+                    continue
+                result.append({
+                    "title":        title,
+                    "link":         item.findtext("link") or "",
+                    "source":       "Yahoo Finance",
+                    "thumbnail":    "",
+                    "date":         item.findtext("pubDate") or "",
+                    "source_label": "Yahoo RSS",
+                })
+            logger.info(f"[YAHOORSE] ✓ fetch_news — {sym}: {len(result)} articles")
+            return result
+        except Exception as e:
+            logger.warning(f"[YAHOORSE] fetch_news failed for {sym}: {e} — returning []")
+            return []
 
 
 # ---------------------------------------------------------------------------

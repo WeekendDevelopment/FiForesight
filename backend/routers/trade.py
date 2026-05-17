@@ -1,12 +1,12 @@
 # backend/routers/trade.py
 import json
 import logging
-from typing import Any, List, Optional
+from typing import List, Optional
 
 import httpx
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from config import Config
 from dependencies import analyst_jury_svc
@@ -45,13 +45,11 @@ class TradeSetupRequest(BaseModel):
             raise ValueError("rsi must be between 0 and 100")
         return v
 
-    @field_validator("high_range")
-    @classmethod
-    def validate_ranges(cls, v: float, info: Any) -> float:
-        low = info.data.get("low_range")
-        if low is not None and v <= low:
+    @model_validator(mode="after")
+    def validate_ranges(self) -> "TradeSetupRequest":
+        if self.high_range <= self.low_range:
             raise ValueError("high_range must be > low_range")
-        return v
+        return self
 
     @field_validator("support", "resistance")
     @classmethod
@@ -187,11 +185,13 @@ async def trade_setup(req: TradeSetupRequest):
     except Exception as exc:
         logger.warning("[TRADE-SETUP] Groq rationale failed: %s", exc)
 
-    # Position sizing — 1% portfolio-risk rule
+    # Position sizing — 1% portfolio-risk rule.
+    # 1.0 / risk_pct_decimal already yields position_pct (e.g. 5% risk → 20% position).
+    # Cap at 50% so a very tight stop doesn't suggest an outsized allocation.
     entry_mid_final = (entry_low + entry_high) / 2
     risk_ps  = round(max(abs(entry_mid_final - stop_loss), 0.01), 4)
     risk_pct_val = round(risk_ps / entry_mid_final * 100, 2)
-    suggested_pct = round(min(1.0 / (risk_pct_val / 100), 5.0) * 100, 1)
+    suggested_pct = round(min(1.0 / (risk_pct_val / 100), 50.0), 1)
 
     return TradeSetupResponse(
         entry_low=entry_low,

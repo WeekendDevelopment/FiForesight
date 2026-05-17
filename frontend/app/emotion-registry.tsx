@@ -18,7 +18,7 @@ import { CacheProvider } from '@emotion/react';
  */
 export default function EmotionRegistry({ children }: { children: React.ReactNode }) {
   const [{ cache, flush }] = useState(() => {
-    const c = createCache({ key: 'css' });
+    const c = createCache({ key: 'css', prepend: true });
     const prevInsert = c.insert.bind(c);
     let inserted: string[] = [];
 

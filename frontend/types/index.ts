@@ -97,12 +97,13 @@ export interface PredictionData {
     revenue_growth?: string;
     total_debt?:    string;
   };
-  news:      { title: string; link: string; source: string; thumbnail: string; date: string }[];
+  news:      { title: string; link: string; source: string; thumbnail: string; date: string; source_label?: string }[];
   trending:  { symbol: string; name?: string; price: string | number; change: string; category?: string }[];
   indicators?: { rsi_series?: number[]; support?: number[]; resistance?: number[] };
   juryAnalysts?: AnalystJuror[];
   modelWeights?: { prophet: number; sarima: number; rf: number };
   sentiment?:    { compound: number; label: string; headline_count: number };
+  stocktwits?:   { bullish: number; bearish: number; sentiment: number };
   monteCarlo?:   MonteCarloResult | null;
   earningsDates?: string[];
   lastUpdated: string;

@@ -13,7 +13,9 @@ class Config:
     INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "FiForesightBucket")
     SERP_API_KEY = os.getenv("SERP_API_KEY")
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+    FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
     PORT = int(os.getenv("PORT", 8000))
+    SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
 
 class SanitizeHttpxFilter(logging.Filter):
     SENSITIVE_PARAMS = {"api_key", "token", "secret", "password", "key"}
