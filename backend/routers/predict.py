@@ -72,9 +72,10 @@ class PredictionResponse(BaseModel):
     juryAnalysts:  List[dict]
     modelWeights:  dict
     sentiment:     dict
-    stocktwits:    dict           = {}
-    monteCarlo:    Optional[dict] = None
-    earningsDates: List[str]      = []
+    stocktwits:      dict           = {}
+    monteCarlo:      Optional[dict] = None
+    earningsDates:   List[str]      = []
+    moveExplanation: Optional[str]  = None
 
 
 # ---------------------------------------------------------------------------
@@ -1130,6 +1131,39 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         logger.warning(f"[STEP-4e] earnings_task failed: {e}")
         earnings_dates = []
 
+    # ── Step 4f. "Why did this move?" explainer (async, runs concurrently) ─────
+    _cur   = info.get("current_price", 0) or 0
+    _prev  = info.get("prev_close", 0)
+    try:
+        _prev_f = float(_prev) if _prev not in (None, "N/A") else 0.0
+    except (ValueError, TypeError):
+        _prev_f = 0.0
+    price_change_pct = ((_cur - _prev_f) / _prev_f * 100) if _prev_f else 0.0
+
+    move_explanation_task = None
+    if abs(price_change_pct) >= 3.0:
+        news_headlines_str = " | ".join(
+            n["title"] for n in news[:3] if n.get("title")
+        )
+        _move_system = "You are a concise financial analyst. Reply in 2 sentences max."
+        _move_user   = (
+            f"{symbol} moved {price_change_pct:+.1f}% today "
+            f"(from ${_prev_f:.2f} to ${_cur:.2f}). "
+            f"Top headlines: {news_headlines_str}. "
+            f"What is the most likely catalyst?"
+        )
+        move_explanation_task = asyncio.create_task(
+            analyst_jury_svc.call_groq(
+                "llama-3.3-70b-versatile",
+                _move_system,
+                _move_user,
+                max_tokens=120,
+            )
+        )
+        logger.info(
+            f"[STEP-4f] Move explainer task launched — {symbol} {price_change_pct:+.1f}%"
+        )
+
     # ── Step 5. AI analyst note + jury (concurrent) ──────────────────────────
     logger.info(
         f"[STEP-5] Dispatching AI header note (Groq llama-3.3-70b) + "
@@ -1175,6 +1209,15 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             f"[STEP-5] [JURY/{v['id']}] rating={v['rating']}, "
             f"confidence={v['confidence']}%, model={v['model']}"
         )
+
+    # ── Step 5b. Await move explainer if running ─────────────────────────────
+    move_explanation: Optional[str] = None
+    if move_explanation_task is not None:
+        try:
+            move_explanation = await asyncio.wait_for(move_explanation_task, timeout=8.0)
+            logger.info(f"[STEP-5b] Move explanation received ({len(move_explanation)} chars)")
+        except Exception as _me:
+            logger.warning(f"[STEP-5b] Move explanation failed: {_me}")
 
     # ── Step 6. (News/trending already resolved at 4e — nothing to await) ────
     logger.debug(
@@ -1267,8 +1310,9 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         modelWeights  = forecast.get("weights", {"prophet": 0.0, "sarima": 0.0, "rf": 0.0}),
         sentiment    = sentiment,
         stocktwits   = stocktwits_data,
-        monteCarlo   = forecast.get("monte_carlo"),
-        earningsDates = earnings_dates,
+        monteCarlo      = forecast.get("monte_carlo"),
+        earningsDates   = earnings_dates,
+        moveExplanation = move_explanation,
     )
 
 

@@ -219,3 +219,100 @@ async def options_chain(symbol: str) -> Dict[str, Any]:
     if result is None:
         raise HTTPException(status_code=404, detail=f"No options data for {symbol}")
     return result
+
+
+# ---------------------------------------------------------------------------
+# Sector Heatmap
+# ---------------------------------------------------------------------------
+
+SECTOR_ETFS = [
+    ("XLK",  "Technology"),
+    ("XLF",  "Financials"),
+    ("XLE",  "Energy"),
+    ("XLV",  "Health Care"),
+    ("XLY",  "Cons. Discret."),
+    ("XLP",  "Cons. Staples"),
+    ("XLI",  "Industrials"),
+    ("XLB",  "Materials"),
+    ("XLRE", "Real Estate"),
+    ("XLU",  "Utilities"),
+    ("XLC",  "Comm. Services"),
+]
+
+
+@router.get("/sectors")
+async def sector_heatmap():
+    """Returns 1-day % change for 11 SPDR sector ETFs. Cached 15 min."""
+    from redis_cache import cache_get, cache_set
+    CACHE_KEY = "sectors:heatmap"
+    cached = await cache_get(CACHE_KEY)
+    if cached:
+        return cached
+
+    def _fetch_sectors():
+        results = []
+        for ticker, label in SECTOR_ETFS:
+            try:
+                hist = yf.Ticker(ticker).history(period="5d", interval="1d")
+                if hist is None or len(hist) < 2:
+                    results.append({"ticker": ticker, "label": label, "change_pct": None})
+                    continue
+                prev_close = float(hist["Close"].iloc[-2])
+                last_close = float(hist["Close"].iloc[-1])
+                change_pct = round((last_close - prev_close) / prev_close * 100, 2) if prev_close else None
+                results.append({"ticker": ticker, "label": label, "change_pct": change_pct, "price": round(last_close, 2)})
+            except Exception:
+                results.append({"ticker": ticker, "label": label, "change_pct": None})
+        return results
+
+    data = await asyncio.to_thread(_fetch_sectors)
+    payload = {"sectors": data}
+    await cache_set(CACHE_KEY, payload, ttl_seconds=900)
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# Morning Briefing
+# ---------------------------------------------------------------------------
+
+MARKET_OVERVIEW_TICKERS = [
+    ("SPY",  "S&P 500"),
+    ("QQQ",  "NASDAQ"),
+    ("DIA",  "Dow Jones"),
+    ("IWM",  "Russell 2000"),
+    ("^VIX", "VIX"),
+    ("^TNX", "10Y Yield"),
+    ("GLD",  "Gold"),
+    ("USO",  "Oil"),
+]
+
+
+@router.get("/briefing")
+async def morning_briefing():
+    """Market overview: % change for key indices + ETFs. Cached 15 min."""
+    from redis_cache import cache_get, cache_set
+    CACHE_KEY = "briefing:market"
+    cached = await cache_get(CACHE_KEY)
+    if cached:
+        return cached
+
+    def _fetch_overview():
+        results = []
+        for ticker, label in MARKET_OVERVIEW_TICKERS:
+            try:
+                hist = yf.Ticker(ticker).history(period="5d", interval="1d")
+                if hist is None or len(hist) < 2:
+                    results.append({"ticker": ticker, "label": label, "change_pct": None, "price": None})
+                    continue
+                prev_close = float(hist["Close"].iloc[-2])
+                last_close = float(hist["Close"].iloc[-1])
+                change_pct = round((last_close - prev_close) / prev_close * 100, 2) if prev_close else None
+                results.append({"ticker": ticker, "label": label, "change_pct": change_pct, "price": round(last_close, 2)})
+            except Exception:
+                results.append({"ticker": ticker, "label": label, "change_pct": None, "price": None})
+        return results
+
+    data = await asyncio.to_thread(_fetch_overview)
+    payload = {"indices": data}
+    await cache_set(CACHE_KEY, payload, ttl_seconds=900)
+    return payload
