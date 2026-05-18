@@ -445,10 +445,11 @@ export default function QuantumDashboard() {
 
             {/* ── Right column ──────────────────────────────────────────── */}
             <Grid size={{ xs: 12, lg: 4 }}>
+              <Stack spacing={3}>
+                {/* ── Sector Overview (always visible, outside loading gate) ── */}
+                <SectorHeatmap isDark={isDark} primaryColor={primaryColor} />
               {loading ? <SidebarSkeleton /> : (
-                <Stack spacing={3}>
-                  {/* ── Sector Overview (always visible) ─────────────── */}
-                  <SectorHeatmap isDark={isDark} primaryColor={primaryColor} />
+                <>
 
                   {/* ── Watchlist ─────────────────────────────────────── */}
                   {user && watchlist.length > 0 && (
@@ -603,8 +604,9 @@ export default function QuantumDashboard() {
                     <TrendingSparklines tickers={prediction.trending} isDark={isDark} />
                   )}
 
-                </Stack>
+                </>
               )}
+              </Stack>
             </Grid>
 
           </Grid>

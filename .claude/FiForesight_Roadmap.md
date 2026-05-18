@@ -1,7 +1,7 @@
 # FiForesight Roadmap
 
 > Source of truth for planned work. Feature-based, free-tier only.
-> Last synced: 2026-05-17 — All "Next Up" items shipped; moving to Feature Ideas backlog.
+> Last synced: 2026-05-18 — All "Next Up" items shipped; moving to Feature Ideas backlog.
 
 ---
 
@@ -105,10 +105,10 @@ Pure refactor — do after auth lands so router auth wiring is single-pass.
 
 | Feature | Value | Effort | Notes |
 |---|---|---|---|
-| Morning briefing email/digest | High | Med | Needs auth (#7) |
-| "Why did this move?" auto-explainer on >3% gaps | High | Med | News + jury delta |
+| Morning briefing (in-app Market Pulse panel) | High | Med | ✅ Shipped — PR #205 (`MorningBriefingPanel`, `/briefing`) |
+| ~~"Why did this move?" auto-explainer on >3% gaps~~ | ~~High~~ | ~~Med~~ | ✅ Shipped — PR #205 (`WhyDidMoveCard`, `predict.py:moveExplanation`) |
 | ~~Options chain panel~~ | ~~Med~~ | ~~Med~~ | ✅ Shipped — PR #194 |
-| Sector heatmap (discovery) | Med | Med | Pre-baked sector ETFs |
+| ~~Sector heatmap (discovery)~~ | ~~Med~~ | ~~Med~~ | ✅ Shipped — PR #205 (`SectorHeatmap`, `/sectors`) |
 | Custom alert rule builder | High | High | Needs auth + worker |
 | Reddit/X sentiment delta | Med | High | PRAW free, X is paid → Reddit only |
 | Walk-forward backtester | High | High | Validate jury historically |

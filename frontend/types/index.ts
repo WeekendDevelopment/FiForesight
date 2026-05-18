@@ -106,7 +106,7 @@ export interface PredictionData {
   stocktwits?:   { bullish: number; bearish: number; sentiment: number };
   monteCarlo?:      MonteCarloResult | null;
   earningsDates?:   string[];
-  moveExplanation?: string;
+  moveExplanation?: string | null;
   lastUpdated: string;
 }
 

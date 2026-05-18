@@ -255,17 +255,21 @@ async def sector_heatmap():
             try:
                 hist = yf.Ticker(ticker).history(period="5d", interval="1d")
                 if hist is None or len(hist) < 2:
-                    results.append({"ticker": ticker, "label": label, "change_pct": None})
+                    results.append({"ticker": ticker, "label": label, "change_pct": None, "price": None})
                     continue
                 prev_close = float(hist["Close"].iloc[-2])
                 last_close = float(hist["Close"].iloc[-1])
                 change_pct = round((last_close - prev_close) / prev_close * 100, 2) if prev_close else None
                 results.append({"ticker": ticker, "label": label, "change_pct": change_pct, "price": round(last_close, 2)})
             except Exception:
-                results.append({"ticker": ticker, "label": label, "change_pct": None})
+                results.append({"ticker": ticker, "label": label, "change_pct": None, "price": None})
         return results
 
-    data = await asyncio.to_thread(_fetch_sectors)
+    try:
+        data = await asyncio.wait_for(asyncio.to_thread(_fetch_sectors), timeout=12.0)
+    except asyncio.TimeoutError:
+        logger.warning("[SECTORS] upstream fetch timed out")
+        raise HTTPException(status_code=504, detail="Market data temporarily unavailable")
     payload = {"sectors": data}
     await cache_set(CACHE_KEY, payload, ttl_seconds=900)
     return payload
@@ -312,7 +316,11 @@ async def morning_briefing():
                 results.append({"ticker": ticker, "label": label, "change_pct": None, "price": None})
         return results
 
-    data = await asyncio.to_thread(_fetch_overview)
+    try:
+        data = await asyncio.wait_for(asyncio.to_thread(_fetch_overview), timeout=12.0)
+    except asyncio.TimeoutError:
+        logger.warning("[BRIEFING] upstream fetch timed out")
+        raise HTTPException(status_code=504, detail="Market data temporarily unavailable")
     payload = {"indices": data}
     await cache_set(CACHE_KEY, payload, ttl_seconds=900)
     return payload

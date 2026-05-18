@@ -1132,13 +1132,16 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         earnings_dates = []
 
     # ── Step 4f. "Why did this move?" explainer (async, runs concurrently) ─────
-    _cur   = info.get("current_price", 0) or 0
+    try:
+        _cur_f = float(live_price)
+    except (TypeError, ValueError):
+        _cur_f = 0.0
     _prev  = info.get("prev_close", 0)
     try:
         _prev_f = float(_prev) if _prev not in (None, "N/A") else 0.0
     except (ValueError, TypeError):
         _prev_f = 0.0
-    price_change_pct = ((_cur - _prev_f) / _prev_f * 100) if _prev_f else 0.0
+    price_change_pct = ((_cur_f - _prev_f) / _prev_f * 100) if _prev_f else 0.0
 
     move_explanation_task = None
     if abs(price_change_pct) >= 3.0:
@@ -1148,7 +1151,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         _move_system = "You are a concise financial analyst. Reply in 2 sentences max."
         _move_user   = (
             f"{symbol} moved {price_change_pct:+.1f}% today "
-            f"(from ${_prev_f:.2f} to ${_cur:.2f}). "
+            f"(from ${_prev_f:.2f} to ${_cur_f:.2f}). "
             f"Top headlines: {news_headlines_str}. "
             f"What is the most likely catalyst?"
         )
