@@ -1157,7 +1157,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         )
         move_explanation_task = asyncio.create_task(
             analyst_jury_svc.call_groq(
-                "llama-3.3-70b-versatile",
+                "llama-3.1-8b-instant",
                 _move_system,
                 _move_user,
                 max_tokens=120,
