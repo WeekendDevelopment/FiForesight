@@ -1221,6 +1221,15 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             logger.info(f"[STEP-5b] Move explanation received ({len(move_explanation)} chars)")
         except Exception as _me:
             logger.warning(f"[STEP-5b] Move explanation failed: {_me}")
+        # Guaranteed fallback: card always shows on big moves even if Groq fails
+        if not move_explanation:
+            direction = "up" if price_change_pct > 0 else "down"
+            top_headline = news[0]["title"] if news else "no headlines available"
+            move_explanation = (
+                f"{symbol} is {direction} {abs(price_change_pct):.1f}% today. "
+                f"Top story: {top_headline}"
+            )
+            logger.info("[STEP-5b] Using fallback move explanation")
 
     # ── Step 6. (News/trending already resolved at 4e — nothing to await) ────
     logger.debug(
