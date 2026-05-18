@@ -101,6 +101,19 @@ Pure refactor — do after auth lands so router auth wiring is single-pass.
 
 ---
 
+## Next Up
+
+### 1. Dynamic chart time intervals + contextual metrics
+Chart currently always shows 2Y daily data. Add a 1D / 5D / 1M / 3M / 6M / 1Y / 2Y selector that:
+- Re-fetches history at the appropriate yfinance `period` + `interval` (e.g. 1D → `period="1d", interval="5m"`)
+- Updates **CHANGE**, **PERIOD HIGH**, **PERIOD LOW**, **SMA 20**, **ANN. VOL** to match the selected window
+- Recalculates RSI series, MACD, Bollinger Bands for the active interval
+- Frontend: segmented button row on `PriceChartCard`; backend: add `period` + `interval` params to `/predict` (or new `/history?symbol=&period=&interval=` endpoint to avoid re-running ML)
+
+**Files:** `frontend/components/PriceChartCard.tsx`, `backend/routers/predict.py` (or new `GET /history`)
+
+---
+
 ## Feature Ideas (not yet picked up)
 
 | Feature | Value | Effort | Notes |
