@@ -32,6 +32,9 @@ import OptionsChainPanel from '../components/OptionsChainPanel';
 import StockChatPanel    from '../components/StockChatPanel';
 import { useIndicatorSignals } from '../hooks/useIndicatorSignals';
 import DCFCard               from '../components/DCFCard';
+import WhyDidMoveCard        from '../components/WhyDidMoveCard';
+import SectorHeatmap         from '../components/SectorHeatmap';
+import MorningBriefingPanel  from '../components/MorningBriefingPanel';
 import type { PredictionData, IndicatorKey, TradeSetupResponse, DCFResult, OptionsChainResult } from '../types';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -158,6 +161,13 @@ export default function QuantumDashboard() {
   const primaryColor = isDark ? '#f92aad' : '#1e3a8a';
 
   const indicatorSignals = useIndicatorSignals(prediction, isDark, chartStats);
+
+  const priceChangePct = useMemo(() => {
+    if (!prediction) return 0;
+    const cur  = parseFloat(prediction.currentPrice) || 0;
+    const prev = parseFloat(prediction.metrics?.prev_close ?? '') || 0;
+    return prev > 0 ? ((cur - prev) / prev) * 100 : 0;
+  }, [prediction]);
 
   const bgGradient = isDark
     ? 'none'
@@ -287,6 +297,9 @@ export default function QuantumDashboard() {
             </Stack>
           </Stack>
 
+          {/* ── Market Pulse (always visible) ───────────────────────── */}
+          <MorningBriefingPanel isDark={isDark} primaryColor={primaryColor} />
+
           {error && <Alert severity="error" sx={{ mb: 4, borderRadius: 3 }}>{error}</Alert>}
 
           <Grid container spacing={3}>
@@ -316,6 +329,17 @@ export default function QuantumDashboard() {
                     chartStats={chartStats}
                     indicatorSignals={indicatorSignals}
                   />
+
+                  {/* ── Why did this move? ───────────────────────────── */}
+                  {prediction.moveExplanation && (
+                    <WhyDidMoveCard
+                      symbol={prediction.symbol}
+                      explanation={prediction.moveExplanation}
+                      priceChange={priceChangePct}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
+                  )}
 
                   {/* ── Ensemble model weights ───────────────────────── */}
                   {prediction.modelWeights && (
@@ -421,8 +445,12 @@ export default function QuantumDashboard() {
 
             {/* ── Right column ──────────────────────────────────────────── */}
             <Grid size={{ xs: 12, lg: 4 }}>
+              <Stack spacing={3}>
+                {/* ── Sector Overview (always visible, outside loading gate) ── */}
+                <SectorHeatmap isDark={isDark} primaryColor={primaryColor} />
               {loading ? <SidebarSkeleton /> : (
-                <Stack spacing={3}>
+                <>
+
                   {/* ── Watchlist ─────────────────────────────────────── */}
                   {user && watchlist.length > 0 && (
                     <Paper sx={{
@@ -576,8 +604,9 @@ export default function QuantumDashboard() {
                     <TrendingSparklines tickers={prediction.trending} isDark={isDark} />
                   )}
 
-                </Stack>
+                </>
               )}
+              </Stack>
             </Grid>
 
           </Grid>

@@ -104,8 +104,9 @@ export interface PredictionData {
   modelWeights?: { prophet: number; sarima: number; rf: number };
   sentiment?:    { compound: number; label: string; headline_count: number };
   stocktwits?:   { bullish: number; bearish: number; sentiment: number };
-  monteCarlo?:   MonteCarloResult | null;
-  earningsDates?: string[];
+  monteCarlo?:      MonteCarloResult | null;
+  earningsDates?:   string[];
+  moveExplanation?: string | null;
   lastUpdated: string;
 }
 
