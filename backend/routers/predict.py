@@ -1141,6 +1141,9 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         _prev_f = float(_prev) if _prev not in (None, "N/A") else 0.0
     except (ValueError, TypeError):
         _prev_f = 0.0
+    # Fall back to closes[-2] (yesterday's bar) when fetch_info prev_close is unavailable
+    if _prev_f <= 0 and len(closes) >= 2:
+        _prev_f = float(closes[-2])
     price_change_pct = ((_cur_f - _prev_f) / _prev_f * 100) if _prev_f else 0.0
 
     move_explanation_task = None
