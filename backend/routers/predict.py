@@ -1220,7 +1220,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     move_explanation: Optional[str] = None
     if move_explanation_task is not None:
         try:
-            move_explanation = await asyncio.wait_for(move_explanation_task, timeout=8.0)
+            move_explanation = await asyncio.wait_for(move_explanation_task, timeout=12.0)
             logger.info(f"[STEP-5b] Move explanation received ({len(move_explanation)} chars)")
         except Exception as _me:
             logger.warning(f"[STEP-5b] Move explanation failed: {_me}")
