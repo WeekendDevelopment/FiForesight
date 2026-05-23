@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import axios from 'axios';
 import {
-  Box, Card, CardContent, Chip, Collapse, Stack, Typography,
+  Box, Card, CardContent, Chip, Collapse, CircularProgress, Stack, Typography,
   ToggleButton, ToggleButtonGroup, Button,
 } from '@mui/material';
 import { Info, ChevronDown, ChevronUp } from 'lucide-react';
@@ -13,14 +14,26 @@ import {
 } from 'recharts';
 import dynamic from 'next/dynamic';
 import VolumeProfile from './VolumeProfile';
-import type { PredictionData, IndicatorKey, ChartEntry, ChartStats, IndicatorSignals } from '../types';
+import type { PredictionData, IndicatorKey, ChartEntry, ChartStats, IndicatorSignals, IntervalHistoryData } from '../types';
 
 const AdvancedChart = dynamic(() => import('./AdvancedChart'), { ssr: false });
+
+// UI label → { period, interval } for the /history endpoint
+const INTERVAL_MAP: Record<string, { period: string; interval: string }> = {
+  '1d': { period: '1d',  interval: '5m'  },
+  '5d': { period: '5d',  interval: '15m' },
+  '1m': { period: '1mo', interval: '1h'  },
+  '3m': { period: '3mo', interval: '1d'  },
+  '6m': { period: '6mo', interval: '1d'  },
+  '1y': { period: '1y',  interval: '1d'  },
+  '2y': { period: '2y',  interval: '1d'  },
+} as const;
 
 const CHART_HEIGHT = 380;
 
 interface Props {
   prediction:      PredictionData;
+  symbol:          string;
   indicators:      IndicatorKey[];
   setIndicators:   (v: IndicatorKey[]) => void;
   chartMode:       'line' | 'candle';
@@ -35,13 +48,75 @@ interface Props {
 }
 
 export default function PriceChartCard({
-  prediction, indicators, setIndicators,
+  prediction, symbol, indicators, setIndicators,
   chartMode, setChartMode, chartEngine, setChartEngine,
   isDark, primaryColor, trendColor, chartStats, indicatorSignals,
 }: Props) {
-  const [legendOpen, setLegendOpen] = useState(false);
+  const [legendOpen,       setLegendOpen]       = useState(false);
+  const [selectedInterval, setSelectedInterval] = useState<string>('2y');
+  const [intervalData,     setIntervalData]     = useState<IntervalHistoryData | null>(null);
+  const [historyLoading,   setHistoryLoading]   = useState(false);
+  // Track the last symbol we rendered for — reset interval when it changes
+  const [lastSymbol, setLastSymbol] = useState(prediction.symbol);
+  if (lastSymbol !== prediction.symbol) {
+    setLastSymbol(prediction.symbol);
+    setSelectedInterval('2y');
+    setIntervalData(null);
+  }
   const chartBoxRef = useRef<HTMLDivElement>(null);
   const [clipBox, setClipBox] = useState<{ l: number; t: number; w: number; h: number } | null>(null);
+
+  const fetchIntervalHistory = useCallback((iv: string) => {
+    if (iv === '2y') {
+      setIntervalData(null);
+      return;
+    }
+    const { period, interval } = INTERVAL_MAP[iv];
+    setHistoryLoading(true);
+    axios
+      .get(`/api/history?symbol=${encodeURIComponent(symbol)}&period=${encodeURIComponent(period)}&interval=${encodeURIComponent(interval)}`)
+      .then(r => setIntervalData(r.data))
+      .catch(() => setIntervalData(null))
+      .finally(() => setHistoryLoading(false));
+  }, [symbol]);
+
+  const handleIntervalChange = useCallback((iv: string) => {
+    setSelectedInterval(iv);
+    fetchIntervalHistory(iv);
+  }, [fetchIntervalHistory]);
+
+  // Active history — interval fetch takes precedence over prediction.history
+  const activeHistory = useMemo(() => {
+    if (intervalData && selectedInterval !== '2y') return intervalData.history;
+    return prediction.history;
+  }, [intervalData, selectedInterval, prediction.history]);
+
+  // Stats for the active interval
+  const activeStats = useMemo(() => {
+    if (intervalData && selectedInterval !== '2y') {
+      const s = intervalData.stats;
+      const isUp  = s.change_pct >= 0;
+      return {
+        changePct:   s.change_pct,
+        isUp,
+        high:        s.period_high,
+        low:         s.period_low,
+        sma20:       s.sma20,
+        annVol:      s.ann_vol,
+        color:       isUp ? (isDark ? '#00ffa3' : '#16a34a') : (isDark ? '#ff0055' : '#dc2626'),
+      };
+    }
+    if (!chartStats) return null;
+    return {
+      changePct: chartStats.changePct,
+      isUp:      chartStats.isUp,
+      high:      chartStats.high,
+      low:       chartStats.low,
+      sma20:     prediction.modelStats?.sma_20   ?? null,
+      annVol:    prediction.modelStats?.ann_volatility_pct ?? null,
+      color:     chartStats.color,
+    };
+  }, [intervalData, selectedInterval, chartStats, prediction.modelStats, isDark]);
 
   useEffect(() => {
     if (chartMode !== 'candle') return;
@@ -63,7 +138,7 @@ export default function PriceChartCard({
   }, [chartMode, prediction, chartEngine]);
 
   const chartData = useMemo(() => {
-    const hist = prediction.history.map(h => {
+    const hist = activeHistory.map(h => {
       const bbU = h.bb_upper ?? undefined;
       const bbL = h.bb_lower ?? undefined;
       return {
@@ -77,27 +152,32 @@ export default function PriceChartCard({
         sma200:    h.sma200 ?? undefined,
         ema20:     h.ema20  ?? undefined,
         ema50:     h.ema50  ?? undefined,
+        vwap:      (h as any).vwap ?? undefined,
         predicted: undefined as number | undefined,
         foreHigh:  undefined as number | undefined,
         foreLow:   undefined as number | undefined,
         fore_band: undefined as number | undefined,
       };
     });
-    const fore = (prediction.forecastDays || []).map(f => ({
-      date:      f.date,
-      price:     undefined as number | undefined,
-      bb_upper:  undefined, bb_middle: undefined, bb_lower: undefined, bb_band: undefined,
-      sma50:     undefined, sma200:    undefined, ema20: undefined, ema50: undefined,
-      predicted: f.predicted,
-      foreHigh:  f.high,
-      foreLow:   f.low,
-      fore_band: f.high != null && f.low != null ? f.high - f.low : undefined,
-    }));
+    // Forecast days only shown on 2Y (they come from prediction, not interval fetch)
+    const fore = selectedInterval === '2y'
+      ? (prediction.forecastDays || []).map(f => ({
+          date:      f.date,
+          price:     undefined as number | undefined,
+          bb_upper:  undefined, bb_middle: undefined, bb_lower: undefined, bb_band: undefined,
+          sma50:     undefined, sma200:    undefined, ema20: undefined, ema50: undefined,
+          vwap:      undefined,
+          predicted: f.predicted,
+          foreHigh:  f.high,
+          foreLow:   f.low,
+          fore_band: f.high != null && f.low != null ? f.high - f.low : undefined,
+        }))
+      : [];
     return [...hist, ...fore];
-  }, [prediction]);
+  }, [activeHistory, prediction.forecastDays, selectedInterval]);
 
   const candleChartData = useMemo(() => {
-    const hist = prediction.history.map(h => {
+    const hist = activeHistory.map(h => {
       const bbU = h.bb_upper ?? undefined;
       const bbL = h.bb_lower ?? undefined;
       return {
@@ -114,47 +194,57 @@ export default function PriceChartCard({
         sma200:    h.sma200 ?? undefined,
         ema20:     h.ema20  ?? undefined,
         ema50:     h.ema50  ?? undefined,
+        vwap:      (h as any).vwap ?? undefined,
         predicted: undefined as number | undefined,
         foreHigh:  undefined as number | undefined,
         foreLow:   undefined as number | undefined,
         fore_band: undefined as number | undefined,
       };
     });
-    const fore = (prediction.forecastDays || []).map(f => ({
-      date: f.date, open: undefined as number | undefined,
-      high: undefined as number | undefined, low: undefined as number | undefined,
-      close: undefined as number | undefined,
-      bb_upper: undefined, bb_middle: undefined, bb_lower: undefined, bb_band: undefined,
-      sma50: undefined, sma200: undefined, ema20: undefined, ema50: undefined,
-      predicted: f.predicted, foreHigh: f.high, foreLow: f.low,
-      fore_band: f.high != null && f.low != null ? f.high - f.low : undefined,
-    }));
+    const fore = selectedInterval === '2y'
+      ? (prediction.forecastDays || []).map(f => ({
+          date: f.date, open: undefined as number | undefined,
+          high: undefined as number | undefined, low: undefined as number | undefined,
+          close: undefined as number | undefined,
+          bb_upper: undefined, bb_middle: undefined, bb_lower: undefined, bb_band: undefined,
+          sma50: undefined, sma200: undefined, ema20: undefined, ema50: undefined,
+          vwap: undefined,
+          predicted: f.predicted, foreHigh: f.high, foreLow: f.low,
+          fore_band: f.high != null && f.low != null ? f.high - f.low : undefined,
+        }))
+      : [];
     return [...hist, ...fore];
-  }, [prediction]);
+  }, [activeHistory, prediction.forecastDays, selectedInterval]);
 
   const macdData = useMemo(() =>
-    prediction.history.map(h => ({
+    activeHistory.map(h => ({
       date:   h.date,
       macd:   h.macd        ?? null,
       signal: h.macd_signal ?? null,
       hist:   h.macd_hist   ?? null,
     }))
-  , [prediction]);
+  , [activeHistory]);
 
   const rsiData = useMemo(() => {
+    if (intervalData && selectedInterval !== '2y') {
+      return activeHistory.map((h, i) => ({
+        date: h.date,
+        rsi:  intervalData.rsi_series[i] ?? (h as any).rsi ?? null,
+      }));
+    }
     const rsiSeries = prediction.indicators?.rsi_series ?? [];
-    return prediction.history.map((h, i) => ({
+    return activeHistory.map((h, i) => ({
       date: h.date,
       rsi:  rsiSeries[i] ?? null,
     }));
-  }, [prediction]);
+  }, [activeHistory, intervalData, selectedInterval, prediction.indicators]);
 
   const volumeData = useMemo(() =>
-    prediction.history.map(h => ({
+    activeHistory.map(h => ({
       date:   h.date,
       volume: h.volume ?? 0,
     }))
-  , [prediction]);
+  , [activeHistory]);
 
   const chartDomain = useMemo((): [number, number] | ['auto', 'auto'] => {
     const data = chartMode === 'line' ? chartData : candleChartData;
@@ -178,7 +268,7 @@ export default function PriceChartCard({
 
   // Detect notable trading days: large price moves (>1.5σ) or volume spikes (>2× median)
   const eventMarkers = useMemo(() => {
-    const hist = prediction.history;
+    const hist = activeHistory;
     if (hist.length < 10) return [];
 
     const returns = hist.slice(1).map((h, i) => (h.price - hist[i].price) / hist[i].price);
@@ -214,13 +304,14 @@ export default function PriceChartCard({
       if (kept.length >= 5) break;
     }
     return kept;
-  }, [prediction.history]);
+  }, [activeHistory]);
 
   const SERIES_LABEL_MAP: Record<string, string> = {
     price: 'Close', close: 'Close (OHLC)', predicted: 'Forecast',
     foreHigh: 'Fore. High', foreLow: 'Fore. Low',
     bb_upper: 'BB Upper', bb_middle: 'BB Mid', bb_lower: 'BB Lower',
     sma50: 'SMA 50', sma200: 'SMA 200', ema20: 'EMA 20', ema50: 'EMA 50',
+    vwap: 'VWAP',
   };
 
   const toggleSx = {
@@ -262,14 +353,18 @@ export default function PriceChartCard({
         </Box>
 
         {/* Stats bar */}
-        {chartStats && (
+        {activeStats && (
           <Stack direction="row" spacing={3} sx={{ mb: 2, flexWrap: 'wrap', gap: 1 }}>
             {[
-              { label: 'CHANGE',      val: `${chartStats.isUp ? '+' : ''}${chartStats.change.toFixed(2)} (${chartStats.isUp ? '+' : ''}${chartStats.changePct.toFixed(2)}%)`, col: trendColor },
-              { label: 'PERIOD HIGH', val: `$${chartStats.high.toFixed(2)}`, col: isDark ? '#00ffa3' : '#16a34a' },
-              { label: 'PERIOD LOW',  val: `$${chartStats.low.toFixed(2)}`,  col: isDark ? '#ff0055' : '#dc2626' },
-              { label: 'SMA 20',      val: `$${prediction.modelStats?.sma_20 ?? '—'}`, col: '#f59e0b' },
-              { label: 'ANN. VOL',    val: `${prediction.modelStats?.ann_volatility_pct ?? '—'}%`, col: 'text.secondary' },
+              {
+                label: 'CHANGE',
+                val: `${activeStats.isUp ? '+' : ''}${activeStats.changePct.toFixed(2)}%`,
+                col: activeStats.color,
+              },
+              { label: 'PERIOD HIGH', val: `$${activeStats.high.toFixed(2)}`, col: isDark ? '#00ffa3' : '#16a34a' },
+              { label: 'PERIOD LOW',  val: `$${activeStats.low.toFixed(2)}`,  col: isDark ? '#ff0055' : '#dc2626' },
+              { label: 'SMA 20',      val: activeStats.sma20 != null ? `$${Number(activeStats.sma20).toFixed(2)}` : '—', col: '#f59e0b' },
+              { label: 'ANN. VOL',    val: activeStats.annVol != null ? `${Number(activeStats.annVol).toFixed(2)}%` : '—', col: 'text.secondary' },
             ].map(s => (
               <Box key={s.label}>
                 <Typography variant="caption" sx={{ opacity: 0.4, display: 'block', letterSpacing: 1 }}>{s.label}</Typography>
@@ -278,6 +373,21 @@ export default function PriceChartCard({
             ))}
           </Stack>
         )}
+
+        {/* Time interval selector */}
+        <ToggleButtonGroup
+          exclusive
+          value={selectedInterval}
+          onChange={(_e, val) => val && handleIntervalChange(val)}
+          size="small"
+          sx={{ mb: 2, ...toggleSx }}
+        >
+          {(['1d', '5d', '1m', '3m', '6m', '1y', '2y'] as const).map(iv => (
+            <ToggleButton key={iv} value={iv}>
+              {iv.toUpperCase()}
+            </ToggleButton>
+          ))}
+        </ToggleButtonGroup>
 
         {/* Indicator toggles */}
         <ToggleButtonGroup
@@ -397,8 +507,8 @@ export default function PriceChartCard({
 
         {chartEngine === 'pro' ? (
           <AdvancedChart
-            history={prediction.history}
-            forecast={prediction.forecastDays}
+            history={activeHistory}
+            forecast={selectedInterval === '2y' ? prediction.forecastDays : []}
             rsiSeries={prediction.indicators?.rsi_series ?? []}
             indicators={indicators}
             mode={chartMode}
@@ -410,7 +520,17 @@ export default function PriceChartCard({
           />
         ) : (<>
           {/* Main price + overlay chart */}
-          <Box sx={{ display: 'flex', gap: 1, minWidth: 0 }}>
+          <Box sx={{ display: 'flex', gap: 1, minWidth: 0, position: 'relative' }}>
+            {historyLoading && (
+              <Box sx={{
+                position: 'absolute', inset: 0, zIndex: 10, borderRadius: 2,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: isDark ? 'rgba(13,21,32,0.75)' : 'rgba(255,255,255,0.75)',
+                backdropFilter: 'blur(4px)',
+              }}>
+                <CircularProgress size={36} sx={{ color: primaryColor }} />
+              </Box>
+            )}
             <Box ref={chartBoxRef} sx={{ height: 380, position: 'relative', flex: 1, minWidth: 0 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <ComposedChart data={(chartMode === 'line' ? chartData : candleChartData) as ChartEntry[]} margin={{ top: 5, right: 10, bottom: 5, left: 10 }}>
@@ -450,9 +570,9 @@ export default function PriceChartCard({
                     formatter={(value) => SERIES_LABEL_MAP[value] ?? value}
                   />
 
-                  {Number.isFinite(prediction.modelStats?.sma_20) && (
-                    <ReferenceLine y={prediction.modelStats.sma_20} stroke="#f59e0b" strokeDasharray="4 4" strokeOpacity={0.5}
-                      label={{ value: `SMA20 $${prediction.modelStats.sma_20}`, fill: '#f59e0b', fontSize: 9, position: 'insideTopRight' }}
+                  {activeStats?.sma20 != null && Number.isFinite(activeStats.sma20) && (
+                    <ReferenceLine y={activeStats.sma20} stroke="#f59e0b" strokeDasharray="4 4" strokeOpacity={0.5}
+                      label={{ value: `SMA20 $${Number(activeStats.sma20).toFixed(2)}`, fill: '#f59e0b', fontSize: 9, position: 'insideTopRight' }}
                     />
                   )}
 
@@ -538,6 +658,11 @@ export default function PriceChartCard({
                     <Line type="monotone" dataKey="ema50" stroke="#f43f5e" strokeWidth={1.5} strokeDasharray="4 2" dot={false} connectNulls isAnimationActive={false} />
                   </>}
 
+                  {/* VWAP — only present for intraday intervals */}
+                  {(selectedInterval === '1d' || selectedInterval === '5d') && intervalData && (
+                    <Line type="monotone" dataKey="vwap" stroke="#facc15" strokeWidth={1.5} strokeDasharray="6 2" dot={false} connectNulls isAnimationActive={false} />
+                  )}
+
                   {chartMode === 'line' && (
                     <Area type="monotone" dataKey="price" stroke={trendColor} strokeWidth={2.5} fill="url(#histGrad)" dot={false} connectNulls={false} activeDot={{ r: 4, strokeWidth: 0 }} isAnimationActive={false} />
                   )}
@@ -584,7 +709,7 @@ export default function PriceChartCard({
                 );
               })()}
             </Box>
-            <VolumeProfile history={prediction.history.map(h => ({ price: h.price, high: h.high, low: h.low, volume: h.volume }))} isDark={isDark} height={380} />
+            <VolumeProfile history={activeHistory.map(h => ({ price: h.price, high: h.high, low: h.low, volume: h.volume }))} isDark={isDark} height={380} />
           </Box>
 
           {/* MACD sub-chart */}

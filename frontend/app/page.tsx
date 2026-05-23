@@ -317,6 +317,7 @@ export default function QuantumDashboard() {
                   {/* Price chart card */}
                   <PriceChartCard
                     prediction={prediction}
+                    symbol={prediction.symbol}
                     indicators={indicators}
                     setIndicators={setIndicators}
                     chartMode={chartMode}
