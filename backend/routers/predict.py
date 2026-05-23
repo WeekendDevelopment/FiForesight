@@ -1225,6 +1225,9 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
                     v["note"] = f"[Cached] {v.get('note', '')}"
                 jury = stale_jury
                 logger.info(f"[STEP-5] Using stale jury for {symbol} — Groq quota likely exhausted")
+            # Cache fallback/stale result for 5 min to prevent re-hammering Groq on every request
+            await cache_set(jury_cache_key, jury, ttl_seconds=300)
+            logger.info(f"[STEP-5] Jury failure cached for {symbol} (5 min — quota likely exhausted)")
     logger.info(
         f"[STEP-5] ✓ AI layer complete — "
         f"note={len(note)} chars | jury={len(jury)} verdicts"
