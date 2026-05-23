@@ -236,6 +236,9 @@ async def get_history(
             bar["vwap"] = vwap_s[i]
         history_bars.append(bar)
 
+    valid_highs = [v for v in highs if np.isfinite(v) and v > 0]
+    valid_lows  = [v for v in lows  if np.isfinite(v) and v > 0]
+
     log_returns = [
         float(np.log(closes[i] / closes[i - 1]))
         for i in range(1, len(closes))
@@ -249,8 +252,8 @@ async def get_history(
 
     stats: dict[str, Any] = {
         "change_pct":  round((last - first) / first * 100, 4) if first > 0 else 0.0,
-        "period_high": round(max(highs), 4),
-        "period_low":  round(min(lows),  4),
+        "period_high": round(max(valid_highs), 4) if valid_highs else None,
+        "period_low":  round(min(valid_lows),  4) if valid_lows  else None,
         "sma20":       round(sma20_last, 4) if sma20_last is not None else None,
         "ann_vol":     round(ann_vol, 2),
     }

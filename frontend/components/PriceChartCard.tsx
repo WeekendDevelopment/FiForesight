@@ -361,8 +361,8 @@ export default function PriceChartCard({
                 val: `${activeStats.isUp ? '+' : ''}${activeStats.changePct.toFixed(2)}%`,
                 col: activeStats.color,
               },
-              { label: 'PERIOD HIGH', val: `$${activeStats.high.toFixed(2)}`, col: isDark ? '#00ffa3' : '#16a34a' },
-              { label: 'PERIOD LOW',  val: `$${activeStats.low.toFixed(2)}`,  col: isDark ? '#ff0055' : '#dc2626' },
+              { label: 'PERIOD HIGH', val: activeStats.high != null && activeStats.high > 0 ? `$${Number(activeStats.high).toFixed(2)}` : '—', col: isDark ? '#00ffa3' : '#16a34a' },
+              { label: 'PERIOD LOW',  val: activeStats.low  != null && activeStats.low  > 0 ? `$${Number(activeStats.low).toFixed(2)}`  : '—', col: isDark ? '#ff0055' : '#dc2626' },
               { label: 'SMA 20',      val: activeStats.sma20 != null ? `$${Number(activeStats.sma20).toFixed(2)}` : '—', col: '#f59e0b' },
               { label: 'ANN. VOL',    val: activeStats.annVol != null ? `${Number(activeStats.annVol).toFixed(2)}%` : '—', col: 'text.secondary' },
             ].map(s => (
@@ -505,10 +505,12 @@ export default function PriceChartCard({
           </Collapse>
         </Box>
 
-        {chartEngine === 'pro' ? (
+        {/* AdvancedChart (PRO) only works for 2Y — its buildTimestamps parses MM/DD strings
+            which is the format prediction.history uses. Interval bars use different formats. */}
+        {chartEngine === 'pro' && selectedInterval === '2y' ? (
           <AdvancedChart
             history={activeHistory}
-            forecast={selectedInterval === '2y' ? prediction.forecastDays : []}
+            forecast={prediction.forecastDays}
             rsiSeries={prediction.indicators?.rsi_series ?? []}
             indicators={indicators}
             mode={chartMode}
