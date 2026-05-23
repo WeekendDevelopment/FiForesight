@@ -189,7 +189,7 @@ export interface IntervalHistoryData {
   period:     string;
   interval:   string;
   history:    HistoryPoint[];
-  rsi_series: number[];
+  rsi_series: Array<number | null>;
   stats:      IntervalStats;
 }
 

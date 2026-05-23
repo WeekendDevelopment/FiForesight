@@ -658,8 +658,8 @@ export default function PriceChartCard({
                     <Line type="monotone" dataKey="ema50" stroke="#f43f5e" strokeWidth={1.5} strokeDasharray="4 2" dot={false} connectNulls isAnimationActive={false} />
                   </>}
 
-                  {/* VWAP — only present for intraday intervals */}
-                  {(selectedInterval === '1d' || selectedInterval === '5d') && intervalData && (
+                  {/* VWAP — present for all intraday intervals (1d/5d/1m) */}
+                  {(selectedInterval === '1d' || selectedInterval === '5d' || selectedInterval === '1m') && intervalData && (
                     <Line type="monotone" dataKey="vwap" stroke="#facc15" strokeWidth={1.5} strokeDasharray="6 2" dot={false} connectNulls isAnimationActive={false} />
                   )}
 

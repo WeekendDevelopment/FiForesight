@@ -13,6 +13,7 @@ from models import (
     calculate_rsi_series,
     calculate_sma_series,
 )
+from dependencies import influx_svc
 from redis_cache import cache_get, cache_set
 
 router = APIRouter()
@@ -38,9 +39,16 @@ PERIODS_PER_YEAR: dict[str, int] = {
 }
 
 INTRADAY_INTERVALS = {"5m", "15m", "1h"}
-INTRADAY_PERIODS   = {"1d", "5d"}
 INTRADAY_TTL       = 300   # 5 min
 DAILY_TTL          = 900   # 15 min
+
+# Minimum bar count needed to accept InfluxDB data as "sufficient" for each period
+_INFLUX_MIN_ROWS: dict[str, int] = {
+    "3mo": 50,
+    "6mo": 110,
+    "1y":  220,
+    "2y":  450,
+}
 
 
 def _compute_vwap(df: pd.DataFrame) -> list:
@@ -135,16 +143,48 @@ async def get_history(
         return cached
 
     logger.info(f"[HISTORY] Cache MISS — fetching {symbol} {period}/{interval}")
-    try:
-        df = await asyncio.wait_for(
-            asyncio.to_thread(_fetch_df, symbol, period, interval),
-            timeout=25,
-        )
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="History fetch timed out.")
-    except Exception as exc:
-        logger.error(f"[HISTORY] unexpected error for {symbol}: {exc}")
-        raise HTTPException(status_code=502, detail="Failed to fetch historical data.")
+
+    ticker = symbol.split(":")[0].upper()
+
+    # InfluxDB-first for daily-interval requests (intraday bars not stored in Influx)
+    df = pd.DataFrame()
+    if not is_intraday:
+        period_to_days = {"3mo": 93, "6mo": 183, "1y": 365, "2y": 730}
+        days = period_to_days.get(period, 730)
+        try:
+            influx_rows = await asyncio.to_thread(influx_svc.query_history, ticker, days)
+            min_rows    = _INFLUX_MIN_ROWS.get(period, 0)
+            if len(influx_rows) >= min_rows:
+                tmp = pd.DataFrame(influx_rows)
+                tmp["_time"] = pd.to_datetime(tmp["_time"])
+                tmp = tmp.set_index("_time").rename(columns={
+                    "close": "Close", "open": "Open",
+                    "high": "High", "low": "Low", "volume": "Volume",
+                })
+                if tmp.index.tz is None:
+                    tmp.index = tmp.index.tz_localize("UTC")
+                df = tmp.dropna(subset=["Close"])
+                logger.info(f"[HISTORY] InfluxDB HIT — {len(df)} rows for {symbol} ({period})")
+            else:
+                logger.info(
+                    f"[HISTORY] InfluxDB insufficient ({len(influx_rows)} rows, "
+                    f"need ≥{min_rows}) — falling back to yfinance"
+                )
+        except Exception as exc:
+            logger.warning(f"[HISTORY] InfluxDB query failed for {ticker}: {exc} — falling back to yfinance")
+
+    # yfinance fallback — always used for intraday; fallback for daily when Influx data is sparse
+    if df.empty:
+        try:
+            df = await asyncio.wait_for(
+                asyncio.to_thread(_fetch_df, ticker, period, interval),
+                timeout=12,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="History fetch timed out.")
+        except Exception as exc:
+            logger.error(f"[HISTORY] yfinance error for {ticker}: {exc}")
+            raise HTTPException(status_code=502, detail="Failed to fetch historical data.")
 
     if df.empty:
         raise HTTPException(status_code=404, detail=f"No data for symbol '{symbol}'.")
@@ -161,7 +201,7 @@ async def get_history(
     sma20_s  = calculate_sma_series(closes, 20)
 
     vwap_s: list = []
-    if period in INTRADAY_PERIODS:
+    if is_intraday:
         vwap_s = _compute_vwap(df)
 
     # Date strings — intraday uses Eastern, daily stays UTC date
