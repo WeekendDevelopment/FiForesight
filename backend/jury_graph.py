@@ -58,6 +58,12 @@ def _make_analyst_node(persona: dict, analyst_jury_svc):
             return {"verdicts": {pid: verdict}}
         except Exception as exc:
             logger.error(f"[JURY-GRAPH/{pid}] ✗ node failed: {exc}", exc_info=True)
+            # Surface a useful message: 429 = daily quota exhausted, else generic
+            exc_str = str(exc)
+            if "429" in exc_str or "rate_limit" in exc_str.lower() or "rate limit" in exc_str.lower():
+                fallback_note = "Rate limit reached — daily Groq quota exhausted."
+            else:
+                fallback_note = "Analysis unavailable."
             fallback = {
                 "id":          persona["id"],
                 "avatar":      persona["avatar"],
@@ -65,7 +71,7 @@ def _make_analyst_node(persona: dict, analyst_jury_svc):
                 "model_label": persona["model_label"],
                 "color":       persona["color"],
                 "rating":      "Hold",
-                "note":        "Analysis unavailable.",
+                "note":        fallback_note,
                 "confidence":  25,
                 "model":       "error",
             }

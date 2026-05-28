@@ -1183,7 +1183,9 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     _jury_fp = hashlib.md5(
         f"{rsi:.1f}|{forecast['high']:.2f}|{forecast['low']:.2f}|{closes[-1]:.2f}|{sentiment.get('label', '')}".encode()
     ).hexdigest()[:12]
-    jury_cache_key = f"jury:{symbol.upper()}:{_jury_fp}"
+    jury_cache_key       = f"jury:{symbol.upper()}:{_jury_fp}"
+    jury_stale_cache_key = f"jury_stale:{symbol.upper()}"   # symbol-level, 8h TTL
+
     cached_jury = await cache_get(jury_cache_key)
     if cached_jury is not None:
         logger.info(f"[STEP-5] Jury cache HIT for {symbol} — skipping Groq jury calls")
@@ -1204,8 +1206,28 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
                 stocktwits=stocktwits_data,
             ),
         )
-        if jury:
-            await cache_set(jury_cache_key, jury, ttl_seconds=1200)  # 20 min
+
+        all_fallback = jury and all(
+            v.get("note") in ("Analysis unavailable.", "Rate limit reached — daily Groq quota exhausted.")
+            for v in jury
+        )
+
+        if jury and not all_fallback:
+            # Successful jury — warm both hot cache (2h) and stale fallback (8h)
+            await cache_set(jury_cache_key,       jury, ttl_seconds=7200)   # 2h hot
+            await cache_set(jury_stale_cache_key, jury, ttl_seconds=28800)  # 8h stale
+            logger.info(f"[STEP-5] Jury cached for {symbol} (hot=2h, stale=8h)")
+        elif all_fallback:
+            # All analysts hit rate-limit / error — check for a recent stale verdict
+            stale_jury = await cache_get(jury_stale_cache_key)
+            if stale_jury:
+                for v in stale_jury:
+                    v["note"] = f"[Cached] {v.get('note', '')}"
+                jury = stale_jury
+                logger.info(f"[STEP-5] Using stale jury for {symbol} — Groq quota likely exhausted")
+            # Cache fallback/stale result for 5 min to prevent re-hammering Groq on every request
+            await cache_set(jury_cache_key, jury, ttl_seconds=300)
+            logger.info(f"[STEP-5] Jury failure cached for {symbol} (5 min — quota likely exhausted)")
     logger.info(
         f"[STEP-5] ✓ AI layer complete — "
         f"note={len(note)} chars | jury={len(jury)} verdicts"

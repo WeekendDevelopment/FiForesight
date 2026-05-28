@@ -30,6 +30,8 @@ export interface HistoryPoint {
   macd?:        number | null;
   macd_signal?: number | null;
   macd_hist?:   number | null;
+  rsi?:         number | null;
+  vwap?:        number | null;
 }
 
 export interface AnalystJuror {
@@ -172,6 +174,23 @@ export interface OptionsChainResult {
   current_price: number;
   calls:         OptionContract[];
   puts:          OptionContract[];
+}
+
+export interface IntervalStats {
+  change_pct:  number;
+  period_high: number;
+  period_low:  number;
+  sma20:       number | null;
+  ann_vol:     number;
+}
+
+export interface IntervalHistoryData {
+  symbol:     string;
+  period:     string;
+  interval:   string;
+  history:    HistoryPoint[];
+  rsi_series: Array<number | null>;
+  stats:      IntervalStats;
 }
 
 export interface DCFScenario {
