@@ -4,9 +4,11 @@ import logging
 import math
 from typing import Any, Dict, List, Optional
 
+import httpx
 import yfinance as yf
 from fastapi import APIRouter, HTTPException
 
+from config import Config
 from dependencies import yf_svc
 
 router = APIRouter()
@@ -324,3 +326,115 @@ async def morning_briefing():
     payload = {"indices": data}
     await cache_set(CACHE_KEY, payload, ttl_seconds=900)
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Level 2 Order Book (Alpaca Markets — free paper-trading / IEX feed)
+# ---------------------------------------------------------------------------
+
+ALPACA_DATA_URL = "https://data.alpaca.markets/v2"
+ORDERBOOK_TTL_SECONDS = 10
+
+
+def _build_orderbook(symbol: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Shape an Alpaca latest-quote payload into the order-book response.
+
+    The free IEX feed exposes top-of-book (one bid + one ask level). The
+    response keeps the multi-level ``bids``/``asks`` array shape so richer
+    feeds (SIP subscription) can drop in extra levels without an API change.
+    """
+    quote = payload.get("quote") or {}
+    bid_price = float(quote.get("bp") or 0.0)
+    ask_price = float(quote.get("ap") or 0.0)
+    bid_size = _safe_int(quote.get("bs"))
+    ask_size = _safe_int(quote.get("as"))
+    timestamp = quote.get("t") or ""
+
+    if bid_price <= 0 and ask_price <= 0:
+        return None
+
+    bids: List[Dict[str, Any]] = (
+        [{"price": round(bid_price, 2), "size": bid_size}] if bid_price > 0 else []
+    )
+    asks: List[Dict[str, Any]] = (
+        [{"price": round(ask_price, 2), "size": ask_size}] if ask_price > 0 else []
+    )
+
+    if bid_price > 0 and ask_price > 0:
+        spread = round(ask_price - bid_price, 4)
+        mid = (ask_price + bid_price) / 2
+    else:
+        spread = 0.0
+        mid = ask_price or bid_price
+
+    spread_pct = round(spread / mid * 100, 4) if mid else 0.0
+
+    total_size = bid_size + ask_size
+    imbalance = round(bid_size / total_size, 4) if total_size else 0.5
+
+    return {
+        "symbol": symbol,
+        "timestamp": timestamp,
+        "mid_price": round(mid, 2) if mid else 0.0,
+        "bids": bids,
+        "asks": asks,
+        "spread": spread,
+        "spread_pct": spread_pct,
+        "bid_ask_imbalance": imbalance,
+    }
+
+
+@router.get("/orderbook/{symbol}")
+async def order_book(symbol: str) -> Dict[str, Any]:
+    """Level-2 style order book snapshot from Alpaca Markets.
+
+    Uses the free IEX feed's latest-quote endpoint to return the current
+    top-of-book bid/ask with spread + bid/ask imbalance metrics. Cached in
+    Redis for 10s. Returns 503 when Alpaca credentials are not configured.
+    """
+    if not Config.ALPACA_API_KEY or not Config.ALPACA_SECRET_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Order book unavailable — Alpaca API key not configured",
+        )
+
+    sym = symbol.upper()
+
+    from redis_cache import cache_get, cache_set
+    cache_key = f"orderbook:{sym}"
+    cached = await cache_get(cache_key)
+    if cached:
+        return cached
+
+    headers = {
+        "APCA-API-KEY-ID": Config.ALPACA_API_KEY,
+        "APCA-API-SECRET-KEY": Config.ALPACA_SECRET_KEY,
+    }
+    url = f"{ALPACA_DATA_URL}/stocks/{sym}/quotes/latest"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, headers=headers, params={"feed": "iex"})
+            resp.raise_for_status()
+            payload = resp.json()
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status in (401, 403):
+            raise HTTPException(
+                status_code=503,
+                detail="Order book unavailable — Alpaca authentication failed",
+            )
+        if status == 404:
+            raise HTTPException(status_code=404, detail=f"No order book data for {sym}")
+        logger.warning("[ORDERBOOK] Alpaca returned %s for %s", status, sym)
+        raise HTTPException(status_code=502, detail="Order book provider error")
+    except Exception as exc:
+        logger.warning("[ORDERBOOK] fetch failed for %s: %s", sym, exc)
+        raise HTTPException(status_code=502, detail="Order book provider error")
+
+    result = _build_orderbook(sym, payload)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No order book data for {sym}")
+
+    await cache_set(cache_key, result, ttl_seconds=ORDERBOOK_TTL_SECONDS)
+    return result

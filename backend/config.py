@@ -14,6 +14,8 @@ class Config:
     SERP_API_KEY = os.getenv("SERP_API_KEY")
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
     FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
+    ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
+    ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
     PORT = int(os.getenv("PORT", 8000))
     SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
 

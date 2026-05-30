@@ -29,6 +29,7 @@ import FundamentalsPanel      from '../components/FundamentalsPanel';
 import PeerComparisonPanel    from '../components/PeerComparisonPanel';
 import TradeSetupCard         from '../components/TradeSetupCard';
 import OptionsChainPanel from '../components/OptionsChainPanel';
+import OrderBookPanel    from '../components/OrderBookPanel';
 import StockChatPanel    from '../components/StockChatPanel';
 import { useIndicatorSignals } from '../hooks/useIndicatorSignals';
 import DCFCard               from '../components/DCFCard';
@@ -502,6 +503,11 @@ export default function QuantumDashboard() {
                       isDark={isDark}
                       primaryColor={primaryColor}
                     />
+                  )}
+
+                  {/* ── Level 2 Order Book ───────────────────────────── */}
+                  {prediction && (
+                    <OrderBookPanel symbol={prediction.symbol} />
                   )}
 
                   {/* ── Peer Comparison ──────────────────────────────────── */}
