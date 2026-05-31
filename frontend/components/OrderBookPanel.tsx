@@ -18,6 +18,7 @@ interface OrderBook {
   spread: number;
   spread_pct: number;
   bid_ask_imbalance: number;
+  source?: string;
 }
 
 const POLL_MS = 3000;
@@ -185,9 +186,27 @@ export default function OrderBookPanel({ symbol }: { symbol: string }) {
   return (
     <Paper sx={{ p: 2, borderRadius: 2 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', mb: 1 }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-          Order Book — {book.symbol}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+            Order Book — {book.symbol}
+          </Typography>
+          {book.source && (
+            <Typography
+              variant="caption"
+              sx={{
+                px: 0.75,
+                py: '1px',
+                borderRadius: 1,
+                bgcolor: 'action.hover',
+                color: 'text.secondary',
+                fontSize: 10,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {book.source}
+            </Typography>
+          )}
+        </Box>
         <Typography variant="caption" color="text.secondary">
           spread {fmtPrice(book.spread)} ({book.spread_pct.toFixed(3)}%)
         </Typography>

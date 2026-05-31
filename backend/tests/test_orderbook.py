@@ -1,4 +1,7 @@
-"""Tests for the Alpaca Level-2 order book endpoint (GET /orderbook/{symbol})."""
+"""Tests for the order book endpoint (GET /orderbook/{symbol}).
+
+Crypto pairs route to Coinbase (free L2 depth); stocks route to Alpaca (L1).
+"""
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock, AsyncMock
@@ -82,3 +85,55 @@ class TestBuildOrderBook:
 
     def test_no_prices_returns_none(self):
         assert market._build_orderbook("AAPL", {"quote": {}}) is None
+
+
+class TestCryptoRouting:
+    def test_is_crypto_symbol(self):
+        assert market._is_crypto_symbol("BTC-USD")
+        assert market._is_crypto_symbol("eth-usdt")
+        assert not market._is_crypto_symbol("NVDA")
+        assert not market._is_crypto_symbol("BRK-B")  # B is not a quote currency
+
+    def test_crypto_uses_coinbase_without_alpaca_key(self, client):
+        # No Alpaca key, but a crypto pair must still succeed via Coinbase.
+        payload = {
+            "time": "2026-05-31T00:00:00Z",
+            "bids": [["60000.12", "0.5", 2], ["59999.00", "1.2", 5]],
+            "asks": [["60001.00", "0.3", 1], ["60002.50", "0.8", 3]],
+        }
+        with patch.object(market.Config, "ALPACA_API_KEY", ""), \
+             patch.object(market.Config, "ALPACA_SECRET_KEY", ""), \
+             patch("routers.market.httpx.AsyncClient", return_value=_mock_async_client(payload)):
+            resp = client.get("/orderbook/BTC-USD")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["symbol"] == "BTC-USD"
+        assert data["source"] == "Coinbase (L2)"
+        assert len(data["bids"]) == 2 and len(data["asks"]) == 2
+        assert data["bids"][0] == {"price": 60000.12, "size": 0.5}
+        assert data["spread"] == round(60001.00 - 60000.12, 4)
+        assert data["mid_price"] == round((60001.00 + 60000.12) / 2, 2)
+
+
+class TestBuildCoinbaseBook:
+    def test_depth_imbalance(self):
+        payload = {
+            "bids": [["100.0", "8", 1]],
+            "asks": [["100.5", "2", 1]],
+        }
+        result = market._build_coinbase_book("ETH-USD", payload)
+        assert result is not None
+        # bid_vol / (bid_vol + ask_vol) = 8 / 10
+        assert result["bid_ask_imbalance"] == 0.8
+        assert result["source"] == "Coinbase (L2)"
+
+    def test_depth_is_capped(self):
+        rows = [[str(100 - i), "1", 1] for i in range(50)]
+        result = market._build_coinbase_book("BTC-USD", {"bids": rows, "asks": rows}, depth=12)
+        assert result is not None
+        assert len(result["bids"]) == 12
+        assert len(result["asks"]) == 12
+
+    def test_empty_book_returns_none(self):
+        assert market._build_coinbase_book("BTC-USD", {"bids": [], "asks": []}) is None
