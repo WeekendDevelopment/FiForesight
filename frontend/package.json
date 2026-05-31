@@ -18,7 +18,7 @@
     "@types/react-plotly.js": "^2.6.4",
     "axios": "^1.16.0",
     "lightweight-charts": "^5.2.0",
-    "lucide-react": "^1.14.0",
+    "lucide-react": "^1.17.0",
     "next": "16.2.6",
     "plotly.js": "^3.5.1",
     "react": "^19.2.6",
