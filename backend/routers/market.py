@@ -427,7 +427,10 @@ def _build_coinbase_book(
                 continue
             if price <= 0:
                 continue
-            out.append({"price": round(price, 2), "size": round(size, 4)})
+            # Crypto prices span many magnitudes (sub-cent tokens up to BTC,
+            # plus BTC/ETH-quoted pairs) — keep 8dp so low-priced books aren't
+            # rounded to zero.
+            out.append({"price": round(price, 8), "size": round(size, 8)})
         return out
 
     bids = _levels(payload.get("bids"))
@@ -439,7 +442,7 @@ def _build_coinbase_book(
     best_ask = asks[0]["price"] if asks else 0.0
 
     if best_bid > 0 and best_ask > 0:
-        spread = round(best_ask - best_bid, 4)
+        spread = round(best_ask - best_bid, 8)
         mid = (best_ask + best_bid) / 2
     else:
         spread = 0.0
@@ -456,7 +459,7 @@ def _build_coinbase_book(
     return {
         "symbol": symbol,
         "timestamp": payload.get("time") or "",
-        "mid_price": round(mid, 2) if mid else 0.0,
+        "mid_price": round(mid, 8) if mid else 0.0,
         "bids": bids,
         "asks": asks,
         "spread": spread,
@@ -485,7 +488,10 @@ async def _fetch_alpaca_book(sym: str) -> Dict[str, Any]:
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, headers=headers, params={"feed": "iex"})
+            resp = await asyncio.wait_for(
+                client.get(url, headers=headers, params={"feed": "iex"}),
+                timeout=12.0,
+            )
             resp.raise_for_status()
             payload = resp.json()
     except httpx.HTTPStatusError as exc:
@@ -516,10 +522,13 @@ async def _fetch_coinbase_book(sym: str) -> Dict[str, Any]:
     url = f"{COINBASE_API_URL}/products/{sym}/book"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                url,
-                params={"level": 2},
-                headers={"User-Agent": "FiForesight/1.0"},
+            resp = await asyncio.wait_for(
+                client.get(
+                    url,
+                    params={"level": 2},
+                    headers={"User-Agent": "FiForesight/1.0"},
+                ),
+                timeout=12.0,
             )
             resp.raise_for_status()
             payload = resp.json()

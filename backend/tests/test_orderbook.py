@@ -14,7 +14,13 @@ from routers import market
 def client():
     # raise_server_exceptions=False so the global 500 handler is exercised
     # instead of the exception propagating into the test.
-    return TestClient(main.app, raise_server_exceptions=False)
+    #
+    # Stub the Redis cache for the whole test run — the endpoint imports
+    # cache_get/cache_set from redis_cache at call-time, so patching the
+    # source module keeps the suite network-free and free of stale reads.
+    with patch("redis_cache.cache_get", AsyncMock(return_value=None)), \
+         patch("redis_cache.cache_set", AsyncMock()):
+        yield TestClient(main.app, raise_server_exceptions=False)
 
 
 def _mock_async_client(json_payload):
