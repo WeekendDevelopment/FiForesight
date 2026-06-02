@@ -997,9 +997,11 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     else:
         logger.info(
             "[STEP-4c] News cache MISS — launching SerpAPI, yfinance news, "
-            "Finnhub, and StockTwits tasks"
+            "Finnhub%s tasks" % (", and StockTwits" if Config.STOCKTWITS_ENABLED else "")
         )
-        serp_task = asyncio.create_task(serp_svc.fetch_data(symbol))
+        serp_task = asyncio.create_task(
+            serp_svc.fetch_data(symbol, exchange=(info.get("exchange") or "NASDAQ"))
+        )
         yf_news_task = asyncio.create_task(
             _safe_fetch(
                 asyncio.to_thread(yf_svc.fetch_news, symbol),
@@ -1012,12 +1014,19 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         yahoo_rss_task = asyncio.create_task(
             _safe_fetch(yahoo_rss_svc.fetch_news(symbol), empty=[], name="YAHOORSE")
         )
-        stocktwits_task = asyncio.create_task(
-            _safe_fetch(
-                stocktwits_svc.fetch_sentiment(symbol),
-                empty={"bullish": 0, "bearish": 0, "sentiment": 0.0},
-                name="STOCKTWITS",
+        # StockTwits' public stream now returns 403 without auth, so the call is
+        # gated behind STOCKTWITS_ENABLED to avoid a guaranteed-failing request
+        # on every prediction. Enable it only once a working/authed source exists.
+        stocktwits_task = (
+            asyncio.create_task(
+                _safe_fetch(
+                    stocktwits_svc.fetch_sentiment(symbol),
+                    empty={"bullish": 0, "bearish": 0, "sentiment": 0.0},
+                    name="STOCKTWITS",
+                )
             )
+            if Config.STOCKTWITS_ENABLED
+            else None
         )
 
     earnings_task = asyncio.create_task(
@@ -1044,7 +1053,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         stocktwits_data = cached_news_payload.get("stocktwits", {"bullish": 0, "bearish": 0, "sentiment": 0.0})
         logger.info(f"[STEP-4e] Using cached news/sentiment/stocktwits for {symbol}")
     else:
-        logger.info("[STEP-4e] Awaiting SerpAPI, yfinance news, Finnhub, StockTwits ...")
+        logger.info("[STEP-4e] Awaiting news sources (SerpAPI, yfinance, Finnhub, Yahoo RSS) ...")
         serp_data: dict = {"news_results": [], "markets": {}}
         try:
             serp_data = await serp_task
@@ -1073,6 +1082,9 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
                             "change":   str(t.get("price_change_percentage", "0%")),
                             "category": category,
                         })
+            # Primary trending source: google_finance `discover_more` (related/
+            # most-active tickers), parsed in SerpService into a ready list.
+            trending.extend(serp_data.get("trending", [])[:12])
             logger.info(
                 f"[STEP-4e] ✓ SerpAPI — news={len(serp_news)} articles, "
                 f"trending={len(trending)} tickers"
@@ -1085,7 +1097,8 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         yf_news: List[dict]      = await yf_news_task
         finnhub_news: List[dict] = await finnhub_task
         yahoo_rss: List[dict]    = await yahoo_rss_task
-        stocktwits_data          = await stocktwits_task
+        if stocktwits_task is not None:
+            stocktwits_data = await stocktwits_task
 
         logger.info(
             f"[STEP-4e] Sources — serp={len(serp_news)}, "

@@ -52,8 +52,33 @@ def _run_dcf(
 @router.get("/dcf/{symbol}")
 async def dcf_valuation(symbol: str):
     import yfinance as yf
+    from redis_cache import cache_get, cache_set
 
-    info = await asyncio.to_thread(yf_svc.fetch_info, symbol)
+    def _missing(v) -> bool:
+        return v in (None, "N/A", "")
+
+    # Reuse the shared fundamentals cache (populated by /predict, 1h TTL) so the
+    # DCF reads the SAME beta/revenue_growth as the rest of the dashboard. Under
+    # the dashboard's concurrent request burst yfinance sometimes returns partial
+    # `info`; caching plus a single retry when the key growth/risk inputs are
+    # missing stops the intrinsic value from silently flipping to the default
+    # beta=1.0 / growth=5% (which produced wildly different valuations per load).
+    info_cache_key = f"info:{symbol.upper()}"
+    info = await cache_get(info_cache_key)
+    if not info:
+        info = await asyncio.to_thread(yf_svc.fetch_info, symbol)
+        if info:
+            await cache_set(info_cache_key, info, ttl_seconds=3600)
+
+    if _missing(info.get("beta")) or _missing(info.get("revenue_growth")):
+        retry = await asyncio.to_thread(yf_svc.fetch_info, symbol)
+        if retry and not (_missing(retry.get("beta")) and _missing(retry.get("revenue_growth"))):
+            info = retry
+            await cache_set(info_cache_key, info, ttl_seconds=3600)
+
+    fundamentals_complete = not (
+        _missing(info.get("beta")) or _missing(info.get("revenue_growth"))
+    )
 
     # Raw data
     fcf           = info.get("free_cash_flow")
@@ -148,6 +173,9 @@ async def dcf_valuation(symbol: str):
         "wacc_base":          round(wacc_base * 100, 2),
         "growth_rate_base":   round(g * 100, 2),
         "method":             "FCF",
+        # False when yfinance returned partial fundamentals and beta/growth fell
+        # back to defaults — lets the frontend flag a lower-confidence valuation.
+        "fundamentals_complete": fundamentals_complete,
     }
 
 
