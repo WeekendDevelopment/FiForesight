@@ -4,9 +4,11 @@ import logging
 import math
 from typing import Any, Dict, List, Optional
 
+import httpx
 import yfinance as yf
 from fastapi import APIRouter, HTTPException
 
+from config import Config
 from dependencies import yf_svc
 
 router = APIRouter()
@@ -324,3 +326,250 @@ async def morning_briefing():
     payload = {"indices": data}
     await cache_set(CACHE_KEY, payload, ttl_seconds=900)
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Order Book / Market Depth
+#
+# Real, free multi-level depth only exists for crypto, so the source is
+# chosen per symbol:
+#   • Crypto pairs (e.g. BTC-USD) → Coinbase free public book (level=2),
+#     genuine Level-2 depth ladder, no API key required.
+#   • Stocks (e.g. NVDA)          → Alpaca free IEX feed, top-of-book (L1).
+#
+# Both paths emit the same response shape (multi-level bids/asks arrays) so
+# the frontend renders either without branching.
+# ---------------------------------------------------------------------------
+
+ALPACA_DATA_URL = "https://data.alpaca.markets/v2"
+COINBASE_API_URL = "https://api.exchange.coinbase.com"
+ORDERBOOK_TTL_SECONDS = 10
+ORDERBOOK_DEPTH = 12  # levels per side to return for crypto books
+
+# Quote currencies that mark a "<BASE>-<QUOTE>" symbol as a crypto pair.
+_CRYPTO_QUOTES = {"USD", "USDT", "USDC", "USDD", "DAI", "EUR", "GBP", "BTC", "ETH"}
+
+
+def _is_crypto_symbol(symbol: str) -> bool:
+    """True for Coinbase-style crypto pairs like ``BTC-USD`` / ``ETH-USDT``."""
+    parts = symbol.upper().split("-")
+    return (
+        len(parts) == 2
+        and parts[0].isalnum()
+        and parts[1] in _CRYPTO_QUOTES
+    )
+
+
+def _build_orderbook(symbol: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Shape an Alpaca latest-quote payload into the order-book response.
+
+    The free IEX feed exposes top-of-book (one bid + one ask level). The
+    response keeps the multi-level ``bids``/``asks`` array shape so richer
+    feeds (SIP subscription) can drop in extra levels without an API change.
+    """
+    quote = payload.get("quote") or {}
+    bid_price = float(quote.get("bp") or 0.0)
+    ask_price = float(quote.get("ap") or 0.0)
+    bid_size = _safe_int(quote.get("bs"))
+    ask_size = _safe_int(quote.get("as"))
+    timestamp = quote.get("t") or ""
+
+    if bid_price <= 0 and ask_price <= 0:
+        return None
+
+    bids: List[Dict[str, Any]] = (
+        [{"price": round(bid_price, 2), "size": bid_size}] if bid_price > 0 else []
+    )
+    asks: List[Dict[str, Any]] = (
+        [{"price": round(ask_price, 2), "size": ask_size}] if ask_price > 0 else []
+    )
+
+    if bid_price > 0 and ask_price > 0:
+        spread = round(ask_price - bid_price, 4)
+        mid = (ask_price + bid_price) / 2
+    else:
+        spread = 0.0
+        mid = ask_price or bid_price
+
+    spread_pct = round(spread / mid * 100, 4) if mid else 0.0
+
+    total_size = bid_size + ask_size
+    imbalance = round(bid_size / total_size, 4) if total_size else 0.5
+
+    return {
+        "symbol": symbol,
+        "timestamp": timestamp,
+        "mid_price": round(mid, 2) if mid else 0.0,
+        "bids": bids,
+        "asks": asks,
+        "spread": spread,
+        "spread_pct": spread_pct,
+        "bid_ask_imbalance": imbalance,
+        "source": "Alpaca · IEX (L1)",
+    }
+
+
+def _build_coinbase_book(
+    symbol: str, payload: Dict[str, Any], depth: int = ORDERBOOK_DEPTH
+) -> Optional[Dict[str, Any]]:
+    """Shape a Coinbase ``/book?level=2`` payload into the order-book response.
+
+    Coinbase returns ``[[price, size, num_orders], ...]`` with bids sorted
+    best-first (descending price) and asks best-first (ascending price).
+    """
+    def _levels(rows: Any) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for row in (rows or [])[:depth]:
+            try:
+                price = float(row[0])
+                size = float(row[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if price <= 0:
+                continue
+            # Crypto prices span many magnitudes (sub-cent tokens up to BTC,
+            # plus BTC/ETH-quoted pairs) — keep 8dp so low-priced books aren't
+            # rounded to zero.
+            out.append({"price": round(price, 8), "size": round(size, 8)})
+        return out
+
+    bids = _levels(payload.get("bids"))
+    asks = _levels(payload.get("asks"))
+    if not bids and not asks:
+        return None
+
+    best_bid = bids[0]["price"] if bids else 0.0
+    best_ask = asks[0]["price"] if asks else 0.0
+
+    if best_bid > 0 and best_ask > 0:
+        spread = round(best_ask - best_bid, 8)
+        mid = (best_ask + best_bid) / 2
+    else:
+        spread = 0.0
+        mid = best_ask or best_bid
+
+    spread_pct = round(spread / mid * 100, 4) if mid else 0.0
+
+    # Depth imbalance: aggregate resting size across all returned levels.
+    bid_vol = sum(b["size"] for b in bids)
+    ask_vol = sum(a["size"] for a in asks)
+    total_vol = bid_vol + ask_vol
+    imbalance = round(bid_vol / total_vol, 4) if total_vol else 0.5
+
+    return {
+        "symbol": symbol,
+        "timestamp": payload.get("time") or "",
+        "mid_price": round(mid, 8) if mid else 0.0,
+        "bids": bids,
+        "asks": asks,
+        "spread": spread,
+        "spread_pct": spread_pct,
+        "bid_ask_imbalance": imbalance,
+        "source": "Coinbase (L2)",
+    }
+
+
+async def _fetch_alpaca_book(sym: str) -> Dict[str, Any]:
+    """Top-of-book for a stock symbol via the Alpaca free IEX feed."""
+    if not Config.ALPACA_API_KEY or not Config.ALPACA_SECRET_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Order book unavailable — Alpaca API key not configured. "
+                "Free live depth is available for crypto pairs (e.g. BTC-USD)."
+            ),
+        )
+
+    headers = {
+        "APCA-API-KEY-ID": Config.ALPACA_API_KEY,
+        "APCA-API-SECRET-KEY": Config.ALPACA_SECRET_KEY,
+    }
+    url = f"{ALPACA_DATA_URL}/stocks/{sym}/quotes/latest"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await asyncio.wait_for(
+                client.get(url, headers=headers, params={"feed": "iex"}),
+                timeout=12.0,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status in (401, 403):
+            raise HTTPException(
+                status_code=503,
+                detail="Order book unavailable — Alpaca authentication failed",
+            )
+        if status == 404:
+            raise HTTPException(status_code=404, detail=f"No order book data for {sym}")
+        logger.warning("[ORDERBOOK] Alpaca returned %s for %s", status, sym)
+        raise HTTPException(status_code=502, detail="Order book provider error")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("[ORDERBOOK] Alpaca fetch failed for %s: %s", sym, exc)
+        raise HTTPException(status_code=502, detail="Order book provider error")
+
+    result = _build_orderbook(sym, payload)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No order book data for {sym}")
+    return result
+
+
+async def _fetch_coinbase_book(sym: str) -> Dict[str, Any]:
+    """Free multi-level depth for a crypto pair via Coinbase's public API."""
+    url = f"{COINBASE_API_URL}/products/{sym}/book"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await asyncio.wait_for(
+                client.get(
+                    url,
+                    params={"level": 2},
+                    headers={"User-Agent": "FiForesight/1.0"},
+                ),
+                timeout=12.0,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if status == 404:
+            raise HTTPException(status_code=404, detail=f"No order book data for {sym}")
+        logger.warning("[ORDERBOOK] Coinbase returned %s for %s", status, sym)
+        raise HTTPException(status_code=502, detail="Order book provider error")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("[ORDERBOOK] Coinbase fetch failed for %s: %s", sym, exc)
+        raise HTTPException(status_code=502, detail="Order book provider error")
+
+    result = _build_coinbase_book(sym, payload)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No order book data for {sym}")
+    return result
+
+
+@router.get("/orderbook/{symbol}")
+async def order_book(symbol: str) -> Dict[str, Any]:
+    """Order book snapshot with spread + bid/ask imbalance metrics.
+
+    Crypto pairs (``BTC-USD``) return genuine free Level-2 depth from
+    Coinbase; stocks return Alpaca's free IEX top-of-book. Cached in Redis
+    for 10s.
+    """
+    sym = symbol.upper()
+
+    from redis_cache import cache_get, cache_set
+    cache_key = f"orderbook:{sym}"
+    cached = await cache_get(cache_key)
+    if cached:
+        return cached
+
+    if _is_crypto_symbol(sym):
+        result = await _fetch_coinbase_book(sym)
+    else:
+        result = await _fetch_alpaca_book(sym)
+
+    await cache_set(cache_key, result, ttl_seconds=ORDERBOOK_TTL_SECONDS)
+    return result
