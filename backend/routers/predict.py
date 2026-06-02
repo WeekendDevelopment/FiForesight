@@ -1083,8 +1083,16 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
                             "category": category,
                         })
             # Primary trending source: google_finance `discover_more` (related/
-            # most-active tickers), parsed in SerpService into a ready list.
-            trending.extend(serp_data.get("trending", [])[:12])
+            # most-active tickers), parsed in SerpService. Dedupe by symbol against
+            # anything already added from the legacy markets block.
+            _seen_syms = {t.get("symbol") for t in trending}
+            for t in serp_data.get("trending", []):
+                sym = t.get("symbol")
+                if sym and sym not in _seen_syms:
+                    trending.append(t)
+                    _seen_syms.add(sym)
+                if len(trending) >= 12:
+                    break
             logger.info(
                 f"[STEP-4e] ✓ SerpAPI — news={len(serp_news)} articles, "
                 f"trending={len(trending)} tickers"
