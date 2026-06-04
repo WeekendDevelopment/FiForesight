@@ -9,6 +9,6 @@
   "packageManager": "pnpm@10.33.0",
   "dependencies": {
     "@supabase/supabase-js": "^2.107.0",
-    "concurrently": "^9.2.1"
+    "concurrently": "^10.0.3"
   }
 }
