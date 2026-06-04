@@ -15,7 +15,10 @@ from backend.routers.predict import _dedup_news
 # ---------------------------------------------------------------------------
 
 def run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # asyncio.run creates and manages a fresh loop per call. The old
+    # get_event_loop().run_until_complete pattern raises "no current event loop"
+    # on Python 3.12+/3.14 when no loop is set on the main thread.
+    return asyncio.run(coro)
 
 
 # ---------------------------------------------------------------------------

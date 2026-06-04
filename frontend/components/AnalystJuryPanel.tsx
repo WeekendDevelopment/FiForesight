@@ -41,12 +41,44 @@ const formatToolsUsed = (tools?: string[]): string => {
 export default function AnalystJuryPanel({ analysts }: { analysts: AnalystJuror[] }) {
   const ratingColor = (r: string) => RATING_COLORS[r] ?? { bg: '#64748b22', text: '#94a3b8' };
 
-  const ratingCounts = analysts.reduce((acc, a) => {
-    acc[a.rating] = (acc[a.rating] || 0) + 1;
+  // Consensus must reflect what the panel actually said — NOT just the single
+  // most-bullish verdict (the old `RATING_ORDER.find` headlined "Strong Buy"
+  // even when 2/3 said Hold). Normalize every persona vocabulary onto one
+  // bullish(+)→bearish(−) score, take the plurality bucket, break ties by
+  // summed confidence, and fall back to the confidence-weighted average.
+  const RATING_SCORE: Record<string, number> = {
+    'Strong Buy': 2, 'Low Risk': 2,
+    'Buy': 1, 'Accumulate': 1,
+    'Hold': 0, 'Medium Risk': 0,
+    'Distribute': -1, 'Sell': -1, 'High Risk': -1,
+    'Strong Sell': -2,
+  };
+  const scoreToRating = (s: number): string =>
+    s >= 1.5 ? 'Strong Buy' : s >= 0.5 ? 'Buy' : s > -0.5 ? 'Hold' : s > -1.5 ? 'Sell' : 'Strong Sell';
+  const toBucket = (r: string): string => scoreToRating(RATING_SCORE[r] ?? 0);
+
+  const bucketStats = analysts.reduce((acc, a) => {
+    const b = toBucket(a.rating);
+    const s = acc[b] ?? { count: 0, conf: 0 };
+    s.count += 1; s.conf += a.confidence;
+    acc[b] = s;
     return acc;
-  }, {} as Record<string, number>);
-  const consensus = RATING_ORDER.find(r => ratingCounts[r]) ?? analysts[0]?.rating ?? 'Hold';
-  const avgConf   = Math.round(analysts.reduce((s, a) => s + a.confidence, 0) / Math.max(analysts.length, 1));
+  }, {} as Record<string, { count: number; conf: number }>);
+
+  const totalConf = analysts.reduce((s, a) => s + a.confidence, 0);
+  const weightedScore = totalConf
+    ? analysts.reduce((s, a) => s + (RATING_SCORE[a.rating] ?? 0) * a.confidence, 0) / totalConf
+    : 0;
+  const fallbackBucket = scoreToRating(weightedScore);
+
+  const consensus = Object.entries(bucketStats).sort((a, b) =>
+    b[1].count - a[1].count ||                                   // most votes
+    b[1].conf  - a[1].conf  ||                                   // then summed confidence
+    (a[0] === fallbackBucket ? -1 : b[0] === fallbackBucket ? 1 : 0), // then weighted avg
+  )[0]?.[0] ?? fallbackBucket;
+
+  const ratingCounts: Record<string, number> = { [consensus]: bucketStats[consensus]?.count ?? analysts.length };
+  const avgConf = Math.round(totalConf / Math.max(analysts.length, 1));
   return (
     <Stack spacing={1.5}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 0.5 }}>

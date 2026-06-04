@@ -300,9 +300,11 @@ def _make_analyst_node(persona: dict, analyst_jury_svc, tools=None, tool_dispatc
             return {"verdicts": {pid: verdict}}
         except Exception as exc:
             logger.error(f"[JURY-GRAPH/{pid}] ✗ node failed: {exc}", exc_info=True)
-            # Surface a useful message: 429 = daily quota exhausted, else generic
+            # Surface a useful message: timeout, 429 = quota, else generic
             exc_str = str(exc)
-            if "429" in exc_str or "rate_limit" in exc_str.lower() or "rate limit" in exc_str.lower():
+            if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+                fallback_note = "Analysis timed out."
+            elif "429" in exc_str or "rate_limit" in exc_str.lower() or "rate limit" in exc_str.lower():
                 fallback_note = "Rate limit reached — daily Groq quota exhausted."
             else:
                 fallback_note = "Analysis unavailable."
@@ -358,6 +360,37 @@ def build_jury_graph(analyst_jury_svc, personas: List[dict], tools=None, tool_di
 
 
 # ---------------------------------------------------------------------------
+# Fallback executor (no LangGraph)
+# ---------------------------------------------------------------------------
+
+async def _run_nodes_direct(analyst_jury_svc, personas: List[dict], ctx: str) -> dict:
+    """Run each analyst node concurrently WITHOUT LangGraph.
+
+    LangGraph's ``graph.ainvoke`` fails under New Relic's wrapt-based APM
+    instrumentation in the deployed image ("FunctionWrapperBase() missing
+    required argument 'wrapper'"), which would otherwise degrade the entire
+    jury to Hold/25. This path reuses the exact same per-analyst node logic
+    (including its per-node error isolation) via ``asyncio.gather`` so the jury
+    keeps working under APM. Returns the same ``{"verdicts", "errors"}`` shape
+    as the graph's final state.
+    """
+    nodes = [_make_analyst_node(p, analyst_jury_svc) for p in personas]
+    base_state: JuryState = {"ctx": ctx, "verdicts": {}, "errors": {}}
+    results = await asyncio.gather(
+        *(node(base_state) for node in nodes), return_exceptions=True
+    )
+    verdicts: Dict[str, dict] = {}
+    errors: Dict[str, str] = {}
+    for persona, res in zip(personas, results):
+        if isinstance(res, BaseException):
+            errors[persona["id"]] = str(res)
+            continue
+        verdicts.update(res.get("verdicts", {}))
+        errors.update(res.get("errors", {}))
+    return {"ctx": ctx, "verdicts": verdicts, "errors": errors}
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -397,7 +430,19 @@ async def run_jury_graph(
         f"[JURY-GRAPH] Invoking — {len(personas)} analysts, "
         f"ctx_chars={len(ctx)}"
     )
-    final_state = await graph.ainvoke(initial_state)
+    try:
+        final_state = await graph.ainvoke(initial_state)
+    except Exception as exc:
+        # LangGraph's Pregel runner is wrapped by New Relic's APM in the deployed
+        # image and raises "FunctionWrapperBase() missing required argument
+        # 'wrapper'", which would degrade the whole jury to Hold/25. Fall back to
+        # running the same nodes directly so the jury still produces real verdicts.
+        logger.error(
+            f"[JURY-GRAPH] graph.ainvoke failed ({exc}) — "
+            f"falling back to direct concurrent execution",
+            exc_info=True,
+        )
+        final_state = await _run_nodes_direct(analyst_jury_svc, personas, ctx)
 
     if final_state.get("errors"):
         for pid, err in final_state["errors"].items():

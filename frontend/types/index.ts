@@ -212,4 +212,5 @@ export interface DCFResult {
   wacc_base:          number;
   growth_rate_base:   number;
   method:             string;
+  fundamentals_complete?: boolean;
 }
