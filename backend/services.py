@@ -1706,11 +1706,13 @@ class AnalystJuryService:
         tool_dispatcher,
         max_tokens: int = 320,
         max_rounds: int = 2,
+        force_first: bool = False,
     ) -> tuple:
         """Run a tool-using analyst loop against Groq's OpenAI-compatible API.
 
         Loop:
-          1. Send messages with `tools` (tool_choice=auto).
+          1. Send messages with `tools`. tool_choice is "required" on the first
+             round when `force_first` is set (guarantees ≥1 tool call), else "auto".
           2. If the model returns tool_calls, dispatch each via `tool_dispatcher`
              (an async callable `(name, args_dict) -> str`), append the results as
              role=tool messages, and re-send.
@@ -1737,7 +1739,9 @@ class AnalystJuryService:
             }
             if include_tools:
                 body["tools"]       = tools
-                body["tool_choice"] = "auto"
+                # Force at least one tool call on the opening round when asked
+                # (used by the "re-analyze with tools" path); auto otherwise.
+                body["tool_choice"] = "required" if (force_first and round_idx == 0) else "auto"
 
             logger.debug(
                 f"[GROQ-TOOLS] round={round_idx} model={model} "
@@ -1915,6 +1919,7 @@ class AnalystJuryService:
         *,
         tools: Optional[List[dict]] = None,
         tool_dispatcher=None,
+        force_tools: bool = False,
     ) -> dict:
         """
         Dispatches a single analyst persona to its assigned provider and model.
@@ -1950,6 +1955,7 @@ class AnalystJuryService:
                     raw, tools_used = await self.call_groq_with_tools(
                         model_used, persona["system"], user_prompt,
                         tools, tool_dispatcher, max_tok,
+                        force_first=force_tools,
                     )
                 else:
                     raw = await self._call_groq(model_used, persona["system"], user_prompt, max_tok)

@@ -54,6 +54,10 @@ class PredictRequest(BaseModel):
     data: str = "SPY"
 
 
+class JuryReanalyzeRequest(BaseModel):
+    symbol: str
+
+
 class PredictionResponse(BaseModel):
     symbol:       str
     currentPrice: str
@@ -361,6 +365,13 @@ async def _run_analyst_jury(
     # Each analyst is an independent node; failures are isolated per-node.
     # Swap .ainvoke() → .stream() here in future for SSE streaming.
     # ------------------------------------------------------------------
+    # Stash the assembled context so POST /jury/reanalyze can re-run the jury
+    # with tools forced on, without recomputing every indicator from scratch.
+    try:
+        await cache_set(f"jury_ctx:{symbol.upper()}", ctx, ttl_seconds=28800)  # 8h
+    except Exception as exc:
+        logger.debug(f"[JURY-GRAPH] ctx cache_set failed (non-fatal): {exc}")
+
     try:
         # 30s budget accommodates tool-call round-trips (Groq function calling).
         return await asyncio.wait_for(
@@ -384,6 +395,52 @@ async def _run_analyst_jury(
             }
             for persona in ANALYST_PERSONAS
         ]
+
+
+# ---------------------------------------------------------------------------
+# Jury re-analysis — re-run the jury with live tools forced on
+# ---------------------------------------------------------------------------
+
+@router.post("/jury/reanalyze")
+async def reanalyze_jury(payload: JuryReanalyzeRequest):
+    """
+    Re-run the analyst jury for a symbol with Groq function-calling tools
+    FORCED on (each analyst must invoke ≥1 live tool: VIX, put/call, insider,
+    or macro). Reuses the market-context string assembled by the most recent
+    /predict for this symbol — call /predict first.
+
+    Returns {"juryAnalysts": [...]} with populated `tools_used` per analyst.
+    """
+    symbol = (payload.symbol or "").strip().upper()
+    if not symbol or not re.fullmatch(r"[A-Za-z0-9.\-:]{1,15}", symbol):
+        raise HTTPException(status_code=400, detail="Invalid symbol.")
+
+    ctx = await cache_get(f"jury_ctx:{symbol}")
+    if not ctx:
+        raise HTTPException(
+            status_code=409,
+            detail="No analysis context for this symbol yet — run a prediction first.",
+        )
+
+    logger.info(f"[JURY-REANALYZE] {symbol} — re-running jury with tools forced on")
+    try:
+        jury = await asyncio.wait_for(
+            run_jury_graph(
+                analyst_jury_svc, ANALYST_PERSONAS, ctx,
+                symbol=symbol, enable_tools=True, force_tools=True,
+            ),
+            timeout=40.0,
+        )
+    except asyncio.TimeoutError:
+        logger.error(f"[JURY-REANALYZE] {symbol} timed out after 40s")
+        raise HTTPException(status_code=504, detail="Re-analysis timed out — please try again.")
+    except Exception as exc:
+        logger.error(f"[JURY-REANALYZE] {symbol} failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=502, detail="Re-analysis failed — please try again.")
+
+    tools_total = sum(len(v.get("tools_used", [])) for v in jury)
+    logger.info(f"[JURY-REANALYZE] ✓ {symbol} — {len(jury)} verdicts, {tools_total} tool calls")
+    return {"juryAnalysts": jury}
 
 
 # ---------------------------------------------------------------------------

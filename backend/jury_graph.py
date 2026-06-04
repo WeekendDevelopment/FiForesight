@@ -272,25 +272,27 @@ class JuryState(TypedDict):
 # Node factory — one async node per analyst persona
 # ---------------------------------------------------------------------------
 
-def _make_analyst_node(persona: dict, analyst_jury_svc, tools=None, tool_dispatcher=None):
+def _make_analyst_node(persona: dict, analyst_jury_svc, tools=None, tool_dispatcher=None, force_tools=False):
     """
     Returns an async graph node function pinned to `persona`.
     The node writes its verdict (or error fallback) into state["verdicts"].
 
     When `tools` and `tool_dispatcher` are provided the analyst runs the
     Groq function-calling loop; otherwise it makes a single completion call.
+    `force_tools` makes the opening round require ≥1 tool call.
     """
     pid = persona["id"]
 
     async def _node(state: JuryState) -> dict:
         logger.info(
             f"[JURY-GRAPH/{pid}] node entered — model={persona['api_model']}, "
-            f"tools={'on' if tools and tool_dispatcher else 'off'}"
+            f"tools={'on' if tools and tool_dispatcher else 'off'}, force={force_tools}"
         )
         try:
             verdict = await analyst_jury_svc.get_analyst_verdict(
                 persona, state["ctx"],
                 tools=tools, tool_dispatcher=tool_dispatcher,
+                force_tools=force_tools,
             )
             logger.info(
                 f"[JURY-GRAPH/{pid}] ✓ verdict — "
@@ -333,20 +335,21 @@ def _make_analyst_node(persona: dict, analyst_jury_svc, tools=None, tool_dispatc
 # Graph builder
 # ---------------------------------------------------------------------------
 
-def build_jury_graph(analyst_jury_svc, personas: List[dict], tools=None, tool_dispatcher=None):
+def build_jury_graph(analyst_jury_svc, personas: List[dict], tools=None, tool_dispatcher=None, force_tools=False):
     """
     Build and compile the jury StateGraph.
 
     Each persona becomes a node fanned out in parallel from START.
     All nodes write into the shared `verdicts` dict via the merge reducer.
-    When `tools`/`tool_dispatcher` are passed, every analyst node is tool-enabled.
+    When `tools`/`tool_dispatcher` are passed, every analyst node is tool-enabled;
+    `force_tools` makes each analyst's opening round require ≥1 tool call.
     """
     builder = StateGraph(JuryState)
 
     node_names = []
     for persona in personas:
         name = f"analyst_{persona['id'].lower().replace('-', '_')}"
-        builder.add_node(name, _make_analyst_node(persona, analyst_jury_svc, tools, tool_dispatcher))
+        builder.add_node(name, _make_analyst_node(persona, analyst_jury_svc, tools, tool_dispatcher, force_tools))
         builder.add_edge(START, name)
         builder.add_edge(name, END)
         node_names.append(name)
@@ -400,6 +403,7 @@ async def run_jury_graph(
     ctx: str,
     symbol: Optional[str] = None,
     enable_tools: bool = True,
+    force_tools: bool = False,
 ) -> List[dict]:
     """
     Run the jury graph and return verdicts in the same order as `personas`.
@@ -418,7 +422,7 @@ async def run_jury_graph(
         tools = JURY_TOOLS
         tool_dispatcher = make_tool_dispatcher(symbol)
 
-    graph = build_jury_graph(analyst_jury_svc, personas, tools, tool_dispatcher)
+    graph = build_jury_graph(analyst_jury_svc, personas, tools, tool_dispatcher, force_tools)
 
     initial_state: JuryState = {
         "ctx":      ctx,
