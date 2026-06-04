@@ -46,11 +46,16 @@ export default function OrderBookPanel({ symbol }: { symbol: string }) {
       setBook(data);
       setError(null);
     } catch (err: unknown) {
-      const msg =
-        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
-        'Order book unavailable';
+      const resp = (err as { response?: { status?: number; data?: { error?: string; detail?: string } } })?.response;
+      const msg = resp?.data?.error ?? resp?.data?.detail ?? 'Order book unavailable';
       setError(msg);
       setBook(null);
+      // 503 (no Alpaca key) / 404 / auth errors are permanent for this symbol —
+      // stop polling so we don't hammer a request that will never succeed.
+      if (resp?.status && [400, 401, 403, 404, 503].includes(resp.status) && timer.current) {
+        clearInterval(timer.current);
+        timer.current = null;
+      }
     } finally {
       setLoading(false);
     }

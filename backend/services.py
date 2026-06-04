@@ -740,6 +740,18 @@ class ForecastStore:
 # YFinance Service  —  free historical OHLCV + fundamentals
 # ---------------------------------------------------------------------------
 
+# Maps yfinance exchange codes → Google-Finance exchange suffixes. SerpAPI's
+# google_finance engine only returns results for the "TICKER:EXCHANGE" format;
+# a bare ticker errors with "hasn't returned any results".
+_GOOGLE_EXCHANGE = {
+    "NMS": "NASDAQ", "NGM": "NASDAQ", "NCM": "NASDAQ", "NAS": "NASDAQ",
+    "NYQ": "NYSE",   "NYS": "NYSE",
+    "PCX": "NYSEARCA",
+    "ASE": "NYSEAMERICAN",
+    "BTS": "BATS",
+}
+
+
 class YFinanceService:
     """
     Wraps yfinance for:
@@ -872,6 +884,10 @@ class YFinanceService:
                 "sector":          info.get("sector",          "N/A"),
                 "industry":        info.get("industry",        "N/A"),
                 "currency":        info.get("currency",        "USD"),
+                # Google-Finance exchange suffix (e.g. NASDAQ/NYSE) derived from
+                # yfinance's exchange code — needed for the SerpAPI google_finance
+                # query, which requires the TICKER:EXCHANGE format. "" when unknown.
+                "exchange":        _GOOGLE_EXCHANGE.get(info.get("exchange") or "", ""),
                 # Extended quant fundamentals
                 "beta":            info.get("beta",                 "N/A"),
                 "forward_pe":      info.get("forwardPE",            "N/A"),
@@ -1170,27 +1186,60 @@ class SerpService:
         except ValueError:
             return 0.0
 
-    async def fetch_data(self, query: str) -> dict:
+    @staticmethod
+    def _parse_trending(data: dict) -> List[dict]:
+        """Build a trending-ticker list from the google_finance `discover_more`
+        block (related/most-active tickers). Each item carries symbol, price and
+        a signed change string the frontend sparklines understand."""
+        trending: List[dict] = []
+        seen: set = set()
+        for block in data.get("discover_more", []) or []:
+            for it in (block.get("items", []) if isinstance(block, dict) else []):
+                stock = str(it.get("stock", ""))          # e.g. "TSLA:NASDAQ"
+                sym = stock.split(":")[0].strip().upper()
+                if not sym or sym in seen:
+                    continue
+                mv = it.get("price_movement", {}) or {}
+                pct = mv.get("percentage")
+                up = str(mv.get("movement", "")).lower() == "up"
+                change = (f"{'+' if up else '-'}{pct}%") if pct is not None else ""
+                trending.append({
+                    "symbol": sym,
+                    "price":  it.get("price", ""),
+                    "change": change,
+                })
+                seen.add(sym)
+        return trending
+
+    async def fetch_data(self, query: str, exchange: str = "NASDAQ") -> dict:
         """
         Query SerpAPI Google Finance for news and trending market data.
         Returns a dict with keys:
           - news_results : list of news articles
-          - markets      : dict of category → list of tickers
+          - markets      : dict of category → list of tickers (legacy)
+          - trending     : list of trending tickers (from `discover_more`)
         Falls back to empty structure if the API key is missing or the call fails.
+
+        The google_finance engine requires a "TICKER:EXCHANGE" query — a bare
+        ticker returns an error — so the exchange suffix is appended when absent.
         """
         if not Config.SERP_API_KEY:
             logger.info(
                 "[SERP] API key not set — news/trending fetch SKIPPED "
                 "(returning empty news_results and markets)"
             )
-            return {"news_results": [], "markets": {}}
+            return {"news_results": [], "markets": {}, "trending": []}
+
+        # google_finance needs TICKER:EXCHANGE. Honor an already-qualified query;
+        # otherwise append the resolved exchange (default NASDAQ).
+        gq = query if ":" in query else f"{query.upper()}:{(exchange or 'NASDAQ').upper()}"
 
         logger.debug(
-            f"[SERP] fetch_data — query='{query}', engine=google_finance, timeout=25s"
+            f"[SERP] fetch_data — query='{gq}', engine=google_finance, timeout=25s"
         )
         params = {
             "engine":  "google_finance",
-            "q":       query,
+            "q":       gq,
             "api_key": Config.SERP_API_KEY,
         }
         try:
@@ -1199,25 +1248,26 @@ class SerpService:
                 resp.raise_for_status()
                 data = resp.json()
 
+            if data.get("error"):
+                logger.warning(f"[SERP] google_finance returned no results for '{gq}': {data['error']}")
+                return {"news_results": [], "markets": {}, "trending": []}
+
+            trending      = self._parse_trending(data)
             news_count    = len(data.get("news_results", []))
-            market_cats   = list(data.get("markets", {}).keys())
-            market_total  = sum(
-                len(v) for v in data.get("markets", {}).values() if isinstance(v, list)
-            )
             logger.info(
-                f"[SERP] ✓ fetch_data — query='{query}' | "
+                f"[SERP] ✓ fetch_data — query='{gq}' | "
                 f"news_articles={news_count} | "
-                f"market_categories={market_cats} | "
-                f"trending_tickers={market_total}"
+                f"trending_tickers={len(trending)}"
             )
             return {
                 "news_results": data.get("news_results", []),
                 "markets":      data.get("markets",      {}),
+                "trending":     trending,
             }
 
         except Exception as e:
-            logger.warning(f"[SERP] fetch_data failed ('{query}'): {e} → fallback: 0 articles, empty markets")
-            return {"news_results": [], "markets": {}}
+            logger.warning(f"[SERP] fetch_data failed ('{gq}'): {e} → fallback: 0 articles, empty trending")
+            return {"news_results": [], "markets": {}, "trending": []}
 
 
 # ---------------------------------------------------------------------------
@@ -1276,9 +1326,14 @@ class FinnhubService:
 
 class StockTwitsService:
     """
-    Fetches the public StockTwits symbol stream (no auth required).
-    Counts Bullish/Bearish tags on the last N messages and returns a
-    ratio in [-1, 1]: +1 = all bullish, -1 = all bearish.
+    Fetches the StockTwits symbol stream, counts Bullish/Bearish tags on the
+    last N messages and returns a ratio in [-1, 1]: +1 = all bullish,
+    -1 = all bearish.
+
+    NOTE: the public `api.stocktwits.com` endpoint now returns 403 Forbidden
+    without authentication, so the caller gates this behind
+    `Config.STOCKTWITS_ENABLED` (off by default). The parsing logic below is
+    kept intact for when an authed/working source is wired up.
     """
     _BASE_URL = "https://api.stocktwits.com/api/2/streams/symbol/{symbol}.json"
 
