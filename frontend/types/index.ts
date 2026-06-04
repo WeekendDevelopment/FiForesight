@@ -44,6 +44,7 @@ export interface AnalystJuror {
   note:        string;
   confidence:  number;
   model:       string;
+  tools_used?: string[];
 }
 
 export interface MonteCarloPriceRangeDay {

@@ -362,7 +362,11 @@ async def _run_analyst_jury(
     # Swap .ainvoke() → .stream() here in future for SSE streaming.
     # ------------------------------------------------------------------
     try:
-        return await run_jury_graph(analyst_jury_svc, ANALYST_PERSONAS, ctx)
+        # 30s budget accommodates tool-call round-trips (Groq function calling).
+        return await asyncio.wait_for(
+            run_jury_graph(analyst_jury_svc, ANALYST_PERSONAS, ctx, symbol=symbol),
+            timeout=30.0,
+        )
     except Exception as exc:
         logger.error("[JURY-GRAPH] invocation failed: %s", exc, exc_info=True)
         return [
@@ -376,6 +380,7 @@ async def _run_analyst_jury(
                 "note":        "Analysis unavailable.",
                 "confidence":  25,
                 "model":       "error",
+                "tools_used":  [],
             }
             for persona in ANALYST_PERSONAS
         ]
@@ -1356,9 +1361,11 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
 @router.post("/predict", response_model=PredictionResponse)
 async def predict(payload: PredictRequest):
     try:
-        return await asyncio.wait_for(_predict_inner(payload), timeout=50.0)
+        # 60s overall budget: the tool-using jury alone may take up to 30s
+        # (Groq function-calling round-trips) on top of data + forecast steps.
+        return await asyncio.wait_for(_predict_inner(payload), timeout=60.0)
     except asyncio.TimeoutError:
-        logger.error("[PREDICT] Request timed out after 50s")
+        logger.error("[PREDICT] Request timed out after 60s")
         raise HTTPException(status_code=503, detail="Analysis timed out — please try again.")
 
 

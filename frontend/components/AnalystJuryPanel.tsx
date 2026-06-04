@@ -24,6 +24,20 @@ const RATING_ORDER = [
   'Distribute', 'Sell', 'High Risk', 'Strong Sell',
 ];
 
+// Friendly labels for the Groq function-calling tools each analyst can invoke.
+const TOOL_LABELS: Record<string, string> = {
+  get_vix:            'VIX',
+  get_put_call_ratio: 'put/call ratio',
+  get_insider_flow:   'insider flow',
+  get_macro_snapshot: 'macro snapshot',
+};
+
+const formatToolsUsed = (tools?: string[]): string => {
+  if (!tools || tools.length === 0) return '';
+  const labels = Array.from(new Set(tools.map((t) => TOOL_LABELS[t] ?? t)));
+  return labels.join(', ');
+};
+
 export default function AnalystJuryPanel({ analysts }: { analysts: AnalystJuror[] }) {
   const ratingColor = (r: string) => RATING_COLORS[r] ?? { bg: '#64748b22', text: '#94a3b8' };
 
@@ -119,6 +133,16 @@ export default function AnalystJuryPanel({ analysts }: { analysts: AnalystJuror[
                   <Typography sx={{ fontSize: '0.8rem', lineHeight: 1.65, opacity: 0.85, flex: 1 }}>
                     {analyst.note}
                   </Typography>
+
+                  {formatToolsUsed(analyst.tools_used) && (
+                    <Typography sx={{
+                      fontSize: '0.5rem', opacity: 0.4, lineHeight: 1.3,
+                      fontFamily: 'monospace', color: analyst.color,
+                      letterSpacing: '0.02em',
+                    }}>
+                      🔧 Used: {formatToolsUsed(analyst.tools_used)}
+                    </Typography>
+                  )}
 
                 </CardContent>
               </Card>
