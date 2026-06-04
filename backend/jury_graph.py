@@ -366,7 +366,14 @@ def build_jury_graph(analyst_jury_svc, personas: List[dict], tools=None, tool_di
 # Fallback executor (no LangGraph)
 # ---------------------------------------------------------------------------
 
-async def _run_nodes_direct(analyst_jury_svc, personas: List[dict], ctx: str) -> dict:
+async def _run_nodes_direct(
+    analyst_jury_svc,
+    personas: List[dict],
+    ctx: str,
+    tools=None,
+    tool_dispatcher=None,
+    force_tools=False,
+) -> dict:
     """Run each analyst node concurrently WITHOUT LangGraph.
 
     LangGraph's ``graph.ainvoke`` fails under New Relic's wrapt-based APM
@@ -376,8 +383,12 @@ async def _run_nodes_direct(analyst_jury_svc, personas: List[dict], ctx: str) ->
     (including its per-node error isolation) via ``asyncio.gather`` so the jury
     keeps working under APM. Returns the same ``{"verdicts", "errors"}`` shape
     as the graph's final state.
+
+    Tool args MUST be forwarded here — this is the path that actually runs in
+    the deployed image, so dropping them silently disables the entire
+    tool-using jury in production.
     """
-    nodes = [_make_analyst_node(p, analyst_jury_svc) for p in personas]
+    nodes = [_make_analyst_node(p, analyst_jury_svc, tools, tool_dispatcher, force_tools) for p in personas]
     base_state: JuryState = {"ctx": ctx, "verdicts": {}, "errors": {}}
     results = await asyncio.gather(
         *(node(base_state) for node in nodes), return_exceptions=True
@@ -446,7 +457,9 @@ async def run_jury_graph(
             f"falling back to direct concurrent execution",
             exc_info=True,
         )
-        final_state = await _run_nodes_direct(analyst_jury_svc, personas, ctx)
+        final_state = await _run_nodes_direct(
+            analyst_jury_svc, personas, ctx, tools, tool_dispatcher, force_tools
+        )
 
     if final_state.get("errors"):
         for pid, err in final_state["errors"].items():
