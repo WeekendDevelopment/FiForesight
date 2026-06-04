@@ -367,8 +367,10 @@ async def _run_analyst_jury(
     # ------------------------------------------------------------------
     # Stash the assembled context so POST /jury/reanalyze can re-run the jury
     # with tools forced on, without recomputing every indicator from scratch.
+    # Wrap in a dict — cache_get discards non-list/dict payloads, so a bare
+    # string would be silently dropped on read.
     try:
-        await cache_set(f"jury_ctx:{symbol.upper()}", ctx, ttl_seconds=28800)  # 8h
+        await cache_set(f"jury_ctx:{symbol.upper()}", {"ctx": ctx}, ttl_seconds=28800)  # 8h
     except Exception as exc:
         logger.debug(f"[JURY-GRAPH] ctx cache_set failed (non-fatal): {exc}")
 
@@ -415,7 +417,8 @@ async def reanalyze_jury(payload: JuryReanalyzeRequest):
     if not symbol or not re.fullmatch(r"[A-Za-z0-9.\-:]{1,15}", symbol):
         raise HTTPException(status_code=400, detail="Invalid symbol.")
 
-    ctx = await cache_get(f"jury_ctx:{symbol}")
+    cached = await cache_get(f"jury_ctx:{symbol}")
+    ctx = cached.get("ctx") if isinstance(cached, dict) else None
     if not ctx:
         raise HTTPException(
             status_code=409,

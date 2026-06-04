@@ -1747,7 +1747,39 @@ class AnalystJuryService:
                 f"[GROQ-TOOLS] round={round_idx} model={model} "
                 f"include_tools={include_tools} msgs={len(messages)}"
             )
-            data = await self._post_groq_raw(body)
+            # Some Groq models reject tool params with a 400 (e.g. Qwen3-32B does
+            # not support tool_choice="required", and reasoning models may reject
+            # function calling entirely). Degrade gracefully so the analyst still
+            # returns a real verdict instead of crashing to a Hold/25 fallback:
+            #   required → auto → no tools.
+            try:
+                data = await self._post_groq_raw(body)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 400 or "tools" not in body:
+                    raise
+                data = None
+                # Step 1: if we were forcing, try relaxing to tool_choice=auto.
+                if body.get("tool_choice") == "required":
+                    logger.warning(
+                        f"[GROQ-TOOLS] {model} rejected tool_choice=required (400) — "
+                        f"retrying with tool_choice=auto"
+                    )
+                    body["tool_choice"] = "auto"
+                    try:
+                        data = await self._post_groq_raw(body)
+                    except httpx.HTTPStatusError as exc2:
+                        if exc2.response.status_code != 400:
+                            raise
+                        data = None
+                # Step 2: still rejected (or model can't do tools at all) — drop them.
+                if data is None:
+                    logger.warning(
+                        f"[GROQ-TOOLS] {model} rejected tools (400) — "
+                        f"retrying without tools (plain completion)"
+                    )
+                    body.pop("tools", None)
+                    body.pop("tool_choice", None)
+                    data = await self._post_groq_raw(body)
             msg  = data["choices"][0]["message"]
             tool_calls = msg.get("tool_calls")
 
