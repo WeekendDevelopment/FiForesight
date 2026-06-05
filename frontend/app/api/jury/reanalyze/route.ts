@@ -6,7 +6,9 @@ const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000';
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const symbol = (body.symbol || '').toUpperCase();
+    const symbol = typeof body?.symbol === 'string'
+      ? body.symbol.trim().toUpperCase()
+      : '';
 
     if (!symbol) {
       return NextResponse.json({ error: 'symbol is required' }, { status: 400 });

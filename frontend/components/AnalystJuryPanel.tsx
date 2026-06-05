@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Box, Button, Card, CardContent, CircularProgress, Grid, Stack, Tooltip, Typography } from '@mui/material';
 import { Scale, Wrench } from 'lucide-react';
 import axios from 'axios';
@@ -42,19 +42,26 @@ export default function AnalystJuryPanel({ analysts, symbol }: { analysts: Analy
   const [reanalyzing, setReanalyzing] = useState(false);
   const [reanalyzeError, setReanalyzeError] = useState<string | null>(null);
   const [reanalyzed, setReanalyzed] = useState(false);
+  // Monotonic token: bumped on every prediction change and every re-analyze
+  // start, so an in-flight response for a stale symbol can't clobber newer data.
+  const reanalyzeReqId = useRef(0);
 
   useEffect(() => {
+    reanalyzeReqId.current += 1;
     setLiveAnalysts(analysts);
+    setReanalyzing(false);
     setReanalyzed(false);
     setReanalyzeError(null);
-  }, [analysts]);
+  }, [analysts, symbol]);
 
   const handleReanalyze = async () => {
     if (!symbol || reanalyzing) return;
+    const reqId = ++reanalyzeReqId.current;
     setReanalyzing(true);
     setReanalyzeError(null);
     try {
       const res = await axios.post('/api/jury/reanalyze', { symbol });
+      if (reqId !== reanalyzeReqId.current) return;   // superseded — discard
       const next = res.data?.juryAnalysts as AnalystJuror[] | undefined;
       if (next && next.length > 0) {
         setLiveAnalysts(next);
@@ -63,9 +70,10 @@ export default function AnalystJuryPanel({ analysts, symbol }: { analysts: Analy
         setReanalyzeError('No verdicts returned.');
       }
     } catch (err: any) {
+      if (reqId !== reanalyzeReqId.current) return;   // superseded — discard
       setReanalyzeError(err?.response?.data?.error ?? 'Re-analysis failed.');
     } finally {
-      setReanalyzing(false);
+      if (reqId === reanalyzeReqId.current) setReanalyzing(false);
     }
   };
 

@@ -211,7 +211,12 @@ async def _run_sync_tool(fn, *args) -> dict:
     if not _YF_AVAILABLE:
         return {"error": "market data provider unavailable"}
     try:
-        return await asyncio.to_thread(fn, *args)
+        # 12s cap per project convention — a hung yfinance call must not stall
+        # the analyst (and, through it, the whole jury).
+        return await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout=12.0)
+    except asyncio.TimeoutError:
+        logger.warning(f"[JURY-TOOLS] {fn.__name__} timed out after 12s")
+        return {"error": "tool fetch timed out"}
     except Exception as exc:
         logger.warning(f"[JURY-TOOLS] {fn.__name__} failed: {exc}")
         return {"error": "tool fetch failed"}
