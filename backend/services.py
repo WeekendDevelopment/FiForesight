@@ -1564,6 +1564,17 @@ NOTE_PROMPT_SUFFIX = (
 )
 
 
+# Appended to the user prompt only when live tools are available to the analyst.
+# Encourages (but does not force) tool use before the final JSON verdict.
+TOOL_PROMPT_HINT = (
+    "\n\nYou have access to live market data tools: get_vix (volatility regime), "
+    "get_put_call_ratio (options positioning), get_insider_flow (insider buy/sell), "
+    "and get_macro_snapshot (rates & yield curve). Call any tools that would "
+    "strengthen your analysis BEFORE giving your verdict. When you have gathered "
+    "what you need, respond with the final JSON verdict described below."
+)
+
+
 class AnalystJuryService:
     """
     Routes analyst persona calls to the correct provider API.
@@ -1659,6 +1670,167 @@ class AnalystJuryService:
             f"response_chars={len(result)}"
         )
         return result
+
+    # ------------------------------------------------------------------
+    # Internal: raw OpenAI-compatible POST returning the full JSON body
+    # (needed for tool calling — callers inspect message.tool_calls)
+    # ------------------------------------------------------------------
+    @newrelic.agent.function_trace()
+    async def _post_groq_raw(self, body: dict) -> dict:
+        """POST a fully-formed chat-completions body to Groq, return parsed JSON.
+
+        Raises httpx.HTTPStatusError on non-2xx so callers can inspect status codes
+        (e.g. 429 rate-limit handling in the jury graph).
+        """
+        if not Config.GROQ_API_KEY:
+            raise ValueError("GROQ API key not configured")
+        headers = {
+            "Authorization": f"Bearer {Config.GROQ_API_KEY}",
+            "Content-Type":  "application/json",
+        }
+        async with httpx.AsyncClient(timeout=35.0) as client:
+            resp = await client.post(self.GROQ_BASE_URL, json=body, headers=headers)
+            resp.raise_for_status()
+            return resp.json()
+
+    # ------------------------------------------------------------------
+    # Public: agentic Groq call with OpenAI-compatible function/tool use
+    # ------------------------------------------------------------------
+    @newrelic.agent.function_trace()
+    async def call_groq_with_tools(
+        self,
+        model: str,
+        system: str,
+        user: str,
+        tools: List[dict],
+        tool_dispatcher,
+        max_tokens: int = 320,
+        max_rounds: int = 2,
+        force_first: bool = False,
+    ) -> tuple:
+        """Run a tool-using analyst loop against Groq's OpenAI-compatible API.
+
+        Loop:
+          1. Send messages with `tools`. tool_choice is "required" on the first
+             round when `force_first` is set (guarantees ≥1 tool call), else "auto".
+          2. If the model returns tool_calls, dispatch each via `tool_dispatcher`
+             (an async callable `(name, args_dict) -> str`), append the results as
+             role=tool messages, and re-send.
+          3. After `max_rounds` tool rounds, send once more WITHOUT tools so the
+             model is forced to return its final text answer.
+
+        Returns a tuple `(final_content, tools_used)` where `tools_used` is the
+        ordered, de-duplicated list of tool names the model actually invoked.
+        """
+        messages: List[dict] = [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user},
+        ]
+        tools_used: List[str] = []
+
+        # max_rounds tool rounds + 1 forced final (no-tools) round
+        for round_idx in range(max_rounds + 1):
+            include_tools = round_idx < max_rounds
+            body = {
+                "model":       model,
+                "messages":    messages,
+                "max_tokens":  max_tokens,
+                "temperature": 0.65,
+            }
+            if include_tools:
+                body["tools"]       = tools
+                # Force at least one tool call on the opening round when asked
+                # (used by the "re-analyze with tools" path); auto otherwise.
+                body["tool_choice"] = "required" if (force_first and round_idx == 0) else "auto"
+
+            logger.debug(
+                f"[GROQ-TOOLS] round={round_idx} model={model} "
+                f"include_tools={include_tools} msgs={len(messages)}"
+            )
+            # Some Groq models reject tool params with a 400 (e.g. Qwen3-32B does
+            # not support tool_choice="required", and reasoning models may reject
+            # function calling entirely). Degrade gracefully so the analyst still
+            # returns a real verdict instead of crashing to a Hold/25 fallback:
+            #   required → auto → no tools.
+            try:
+                data = await self._post_groq_raw(body)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 400 or "tools" not in body:
+                    raise
+                data = None
+                # Step 1: if we were forcing, try relaxing to tool_choice=auto.
+                if body.get("tool_choice") == "required":
+                    logger.warning(
+                        f"[GROQ-TOOLS] {model} rejected tool_choice=required (400) — "
+                        f"retrying with tool_choice=auto"
+                    )
+                    body["tool_choice"] = "auto"
+                    try:
+                        data = await self._post_groq_raw(body)
+                    except httpx.HTTPStatusError as exc2:
+                        if exc2.response.status_code != 400:
+                            raise
+                        data = None
+                # Step 2: still rejected (or model can't do tools at all) — drop them.
+                if data is None:
+                    logger.warning(
+                        f"[GROQ-TOOLS] {model} rejected tools (400) — "
+                        f"retrying without tools (plain completion)"
+                    )
+                    body.pop("tools", None)
+                    body.pop("tool_choice", None)
+                    data = await self._post_groq_raw(body)
+            msg  = data["choices"][0]["message"]
+            tool_calls = msg.get("tool_calls")
+
+            if not tool_calls:
+                content = (msg.get("content") or "").strip()
+                # de-dupe preserving first-seen order
+                seen: List[str] = []
+                for t in tools_used:
+                    if t not in seen:
+                        seen.append(t)
+                logger.info(
+                    f"[GROQ-TOOLS] ✓ complete — model={model}, rounds={round_idx}, "
+                    f"tools_used={seen}, response_chars={len(content)}"
+                )
+                return content, seen
+
+            # Model requested tools — record the assistant turn, then dispatch each.
+            messages.append({
+                "role":       "assistant",
+                "content":    msg.get("content") or "",
+                "tool_calls": tool_calls,
+            })
+            for tc in tool_calls:
+                fn_name = tc.get("function", {}).get("name", "")
+                try:
+                    fn_args = json.loads(tc.get("function", {}).get("arguments") or "{}")
+                    if not isinstance(fn_args, dict):
+                        fn_args = {}
+                except (json.JSONDecodeError, TypeError):
+                    fn_args = {}
+                logger.info(f"[GROQ-TOOLS] dispatch — {fn_name}({fn_args})")
+                try:
+                    result = await tool_dispatcher(fn_name, fn_args)
+                except Exception as exc:   # tool failures are non-fatal
+                    logger.warning(f"[GROQ-TOOLS] tool {fn_name} failed: {exc}")
+                    result = json.dumps({"error": "tool unavailable"})
+                tools_used.append(fn_name)
+                messages.append({
+                    "role":         "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "name":         fn_name,
+                    "content":      result if isinstance(result, str) else json.dumps(result),
+                })
+
+        # Fallback: loop exhausted without a final text answer (should not happen).
+        seen = list(dict.fromkeys(tools_used))
+        logger.warning(
+            f"[GROQ-TOOLS] loop exhausted with no final content — model={model}, "
+            f"tools_used={seen}"
+        )
+        return "", seen
 
     # ------------------------------------------------------------------
     # Internal: robust structured response parser
@@ -1772,21 +1944,37 @@ class AnalystJuryService:
     # Public: dispatch one persona and return a structured verdict
     # ------------------------------------------------------------------
     @newrelic.agent.function_trace()
-    async def get_analyst_verdict(self, persona: dict, market_ctx: str) -> dict:
+    async def get_analyst_verdict(
+        self,
+        persona: dict,
+        market_ctx: str,
+        *,
+        tools: Optional[List[dict]] = None,
+        tool_dispatcher=None,
+        force_tools: bool = False,
+    ) -> dict:
         """
         Dispatches a single analyst persona to its assigned provider and model.
         All 3 personas use Groq. Provider field reserved for future expansion.
         Returns a fully structured verdict dict ready for the API response.
+
+        When `tools` and `tool_dispatcher` are supplied, the analyst runs an
+        agentic tool-using loop (Groq function calling) and the returned verdict
+        carries a `tools_used` list naming the tools the model invoked.
         """
-        user_prompt = market_ctx + NOTE_PROMPT_SUFFIX
+        use_tools   = bool(tools and tool_dispatcher)
+        hint        = TOOL_PROMPT_HINT if use_tools else ""
+        user_prompt = market_ctx + hint + NOTE_PROMPT_SUFFIX
         model_used  = persona["api_model"]
         max_tok     = persona.get("max_tokens", 320)
         raw         = ""
+        tools_used: List[str] = []
 
         logger.info(
             f"[JURY/{persona['id']}] ── Dispatching — "
             f"provider={persona['provider']}, model={model_used}, "
-            f"max_tokens={max_tok}, title='{persona['title']}' ──"
+            f"max_tokens={max_tok}, tools={'on' if use_tools else 'off'}, "
+            f"title='{persona['title']}' ──"
         )
         logger.debug(
             f"[JURY/{persona['id']}] Context sent — "
@@ -1795,13 +1983,20 @@ class AnalystJuryService:
 
         try:
             if persona["provider"] == "groq":
-                raw = await self._call_groq(model_used, persona["system"], user_prompt, max_tok)
+                if use_tools:
+                    raw, tools_used = await self.call_groq_with_tools(
+                        model_used, persona["system"], user_prompt,
+                        tools, tool_dispatcher, max_tok,
+                        force_first=force_tools,
+                    )
+                else:
+                    raw = await self._call_groq(model_used, persona["system"], user_prompt, max_tok)
             else:
                 raise ValueError(f"Unknown provider: {persona['provider']}")
 
             logger.debug(
                 f"[JURY/{persona['id']}] ✓ Raw response received — "
-                f"model={model_used}, raw_chars={len(raw)}"
+                f"model={model_used}, raw_chars={len(raw)}, tools_used={tools_used}"
             )
 
         except Exception as e:
@@ -1815,6 +2010,7 @@ class AnalystJuryService:
                 '"confidence": 25}'
             )
             model_used = "error"
+            tools_used = []
 
         parsed = self._parse_analyst_response(raw, persona_id=persona["id"])
 
@@ -1828,10 +2024,12 @@ class AnalystJuryService:
             "note":        parsed.get("note",        "No available analysis at this time."),
             "confidence":  parsed.get("confidence",  50),
             "model":       model_used,
+            "tools_used":  tools_used,
         }
         logger.info(
             f"[JURY/{persona['id']}] Final verdict — "
             f"rating={verdict['rating']}, confidence={verdict['confidence']}%, "
-            f"model={verdict['model']}, note_chars={len(verdict['note'])}"
+            f"model={verdict['model']}, note_chars={len(verdict['note'])}, "
+            f"tools_used={tools_used}"
         )
         return verdict

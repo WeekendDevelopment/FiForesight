@@ -347,7 +347,7 @@ export default function QuantumDashboard() {
 
                   {/* ── Analyst Jury ──────────────────────────────────── */}
                   {prediction.juryAnalysts && prediction.juryAnalysts.length > 0 && (
-                    <AnalystJuryPanel analysts={prediction.juryAnalysts} />
+                    <AnalystJuryPanel analysts={prediction.juryAnalysts} symbol={prediction.symbol} />
                   )}
 
                   {/* ── Trade Setup ──────────────────────────────────── */}
