@@ -151,11 +151,27 @@ export default function AdvancedChart({
       histTimes = history.map(h => h.time as UTCTimestamp);
       foreTimes = forecast.map(f => f.time as UTCTimestamp);
     } else {
+      // Stale cached payload without epoch `time` (only possible transiently,
+      // within the /history cache TTL right after a deploy). buildTimestamps
+      // understands ONLY MM/DD; ISO (YYYY-MM-DD) or intraday (HH:MM) labels
+      // would reconstruct to NaN and blank the chart. So use buildTimestamps
+      // only for genuine MM/DD data, otherwise synthesize monotonic ascending
+      // timestamps so the chart still renders until the cache refreshes.
       const allDates = [
         ...history.map(h => h.date),
         ...forecast.map(f => f.date),
       ];
-      ({ histTimes, foreTimes } = buildTimestamps(allDates, history.length));
+      const looksMmDd = allDates.every(d => /^\d{1,2}\/\d{1,2}$/.test(d));
+      if (looksMmDd) {
+        ({ histTimes, foreTimes } = buildTimestamps(allDates, history.length));
+      } else {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const synthetic = allDates.map(
+          (_, i) => (nowSec - (allDates.length - 1 - i) * 86_400) as UTCTimestamp,
+        );
+        histTimes = synthetic.slice(0, history.length);
+        foreTimes = synthetic.slice(history.length);
+      }
     }
 
     const bg          = isDark ? '#0d1520' : '#ffffff';
