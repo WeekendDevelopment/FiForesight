@@ -215,10 +215,16 @@ async def get_history(
     else:
         dates = [ts.strftime("%Y-%m-%d") for ts in df.index]
 
+    # Real UNIX epoch (seconds, UTC) per bar — fed straight to the lightweight-
+    # charts time scale so the zoom chart works on every range (incl. intraday),
+    # without reconstructing a calendar date from the display string.
+    times = [int(ts.timestamp()) for ts in df.index]
+
     history_bars: list[dict] = []
     for i, date in enumerate(dates):
         bar: dict[str, Any] = {
             "date":        date,
+            "time":        times[i],
             "price":       round(closes[i], 4),
             "open":        round(opens[i],  4),
             "high":        round(highs[i],  4),

@@ -66,7 +66,6 @@ export default function QuantumDashboard() {
   const [error,            setError]            = useState<string | null>(null);
   const [indicators,       setIndicators]       = useState<IndicatorKey[]>(['bb', 'sma']);
   const [chartMode,        setChartMode]        = useState<'line' | 'candle'>('line');
-  const [chartEngine,      setChartEngine]      = useState<'classic' | 'pro'>('classic');
   const [tradeSetup,       setTradeSetup]       = useState<TradeSetupResponse | null>(null);
   const [tradeSetupLoading, setTradeSetupLoading] = useState(false);
   const [optionsData,      setOptionsData]      = useState<OptionsChainResult | null>(null);
@@ -323,8 +322,6 @@ export default function QuantumDashboard() {
                     setIndicators={setIndicators}
                     chartMode={chartMode}
                     setChartMode={setChartMode}
-                    chartEngine={chartEngine}
-                    setChartEngine={setChartEngine}
                     isDark={isDark}
                     primaryColor={primaryColor}
                     trendColor={trendColor}
