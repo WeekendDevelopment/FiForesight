@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import {
-  Box, Stack, Typography, IconButton, Button, Tooltip, useMediaQuery,
+  Box, Stack, Typography, IconButton, Tooltip, useMediaQuery,
 } from '@mui/material';
 import {
   BrainCircuit, Home, Search, BarChart2, Calendar, Rocket, LineChart,
@@ -63,6 +63,20 @@ function Sidebar() {
       try { window.localStorage.setItem(COLLAPSE_KEY, String(next)); } catch { /* non-fatal */ }
       return next;
     });
+  };
+
+  // Activate a click handler on Enter/Space for keyboard users (the footer
+  // controls are styled Boxes rather than <button>s).
+  const onActivate = (fn: () => void) => (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(); }
+  };
+
+  const handleAuthClick = () => {
+    if (user) {
+      signOut().catch(err => console.error('Sign out failed:', err));
+    } else {
+      setAuthOpen(true);
+    }
   };
 
   const width      = collapsed ? COLLAPSED_WIDTH : EXPANDED_WIDTH;
@@ -128,7 +142,9 @@ function Sidebar() {
         {/* Theme toggle */}
         <Box
           onClick={toggleTheme}
+          onKeyDown={onActivate(toggleTheme)}
           role="button"
+          tabIndex={0}
           aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
           sx={{
             display: 'flex', alignItems: 'center', gap: 1.5, cursor: 'pointer',
@@ -143,8 +159,10 @@ function Sidebar() {
 
         {/* Auth */}
         <Box
-          onClick={() => (user ? void signOut() : setAuthOpen(true))}
+          onClick={handleAuthClick}
+          onKeyDown={onActivate(handleAuthClick)}
           role="button"
+          tabIndex={0}
           aria-label={user ? 'Sign out' : 'Sign in'}
           sx={{
             display: 'flex', alignItems: 'center', gap: 1.5, cursor: 'pointer',
