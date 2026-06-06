@@ -17,6 +17,7 @@ import { useWatchlist } from '../hooks/useWatchlist';
 import { useAuth } from '../contexts/AuthContext';
 import AuthModal from '../components/AuthModal';
 import ModelWeightBar   from '../components/ModelWeightBar';
+import BacktestPanel    from '../components/BacktestPanel';
 import TrendingSparklines from '../components/TrendingSparklines';
 import MonteCarloFanChart from '../components/MonteCarloFanChart';
 import MonteCarloProbabilitySurface from '../components/MonteCarloProbabilitySurface';
@@ -344,6 +345,9 @@ export default function QuantumDashboard() {
                   {prediction.modelWeights && (
                     <ModelWeightBar weights={prediction.modelWeights} isDark={isDark} />
                   )}
+
+                  {/* ── Walk-forward backtest (on-demand) ────────────── */}
+                  <BacktestPanel symbol={prediction.symbol} isDark={isDark} primaryColor={primaryColor} />
 
                   {/* ── Analyst Jury ──────────────────────────────────── */}
                   {prediction.juryAnalysts && prediction.juryAnalysts.length > 0 && (
