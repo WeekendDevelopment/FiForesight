@@ -314,3 +314,76 @@ def test_options_chain_expiry_list_capped() -> None:
     with patch("backend.routers.market.yf.Ticker", _mock_options_ticker(expirations=many_expirations)):
         resp = client.get("/options/AAPL")
     assert len(resp.json()["expirations"]) == 8
+
+
+def test_options_chain_includes_greeks() -> None:
+    """Each contract carries Black-Scholes delta + theta."""
+    with patch("backend.routers.market.yf.Ticker", _mock_options_ticker()):
+        resp = client.get("/options/AAPL")
+    call = resp.json()["calls"][0]
+    put  = resp.json()["puts"][0]
+    assert "delta" in call and "theta" in call
+    # Call delta in [0, 1]; put delta in [-1, 0].
+    assert 0.0 <= call["delta"] <= 1.0
+    assert -1.0 <= put["delta"] <= 0.0
+
+
+def test_options_chain_includes_stats() -> None:
+    """Response carries aggregate stats (put/call ratio, ATM IV, skew)."""
+    with patch("backend.routers.market.yf.Ticker", _mock_options_ticker()):
+        resp = client.get("/options/AAPL")
+    stats = resp.json()["stats"]
+    for key in ("put_call_ratio", "iv_avg_calls", "iv_avg_puts", "iv_skew"):
+        assert key in stats
+    assert stats["put_call_ratio"] >= 0
+
+
+def test_options_chain_expiry_param_selects_expiry() -> None:
+    """A valid ?expiry= picks that expiry; an unknown one falls back to nearest."""
+    exps = ["2026-06-20", "2026-07-18"]
+    with patch("backend.routers.market.yf.Ticker", _mock_options_ticker(expirations=exps)):
+        chosen = client.get("/options/AAPL?expiry=2026-07-18")
+    assert chosen.json()["expiry"] == "2026-07-18"
+
+    with patch("backend.routers.market.yf.Ticker", _mock_options_ticker(expirations=exps)):
+        fallback = client.get("/options/AAPL?expiry=1999-01-01")
+    assert fallback.json()["expiry"] == "2026-06-20"  # nearest default
+
+
+# ---------------------------------------------------------------------------
+# Earnings calendar tests
+# ---------------------------------------------------------------------------
+
+def _mock_earnings_ticker(date_str: str = "2026-06-20", market_cap: float = 3e12) -> MagicMock:
+    fast_info = MagicMock()
+    fast_info.display_name = "Mock Corp"
+    fast_info.market_cap   = market_cap
+
+    ticker = MagicMock()
+    ticker.calendar  = {"Earnings Date": [date_str]}
+    ticker.fast_info = fast_info
+    return MagicMock(return_value=ticker)
+
+
+def test_earnings_calendar_groups_and_caps() -> None:
+    with patch("backend.routers.market.yf.Ticker", _mock_earnings_ticker()):
+        resp = client.get("/earnings/calendar")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert "calendar" in payload and "generated_at" in payload
+    cal = payload["calendar"]
+    assert "2026-06-20" in cal
+    # All watchlist tickers share one date → capped to 8 per day.
+    assert len(cal["2026-06-20"]) <= 8
+    entry = cal["2026-06-20"][0]
+    for key in ("symbol", "name", "market_cap", "date"):
+        assert key in entry
+
+
+def test_earnings_calendar_skips_missing_dates() -> None:
+    ticker = MagicMock()
+    ticker.calendar = None
+    with patch("backend.routers.market.yf.Ticker", MagicMock(return_value=ticker)):
+        resp = client.get("/earnings/calendar")
+    assert resp.status_code == 200
+    assert resp.json()["calendar"] == {}
