@@ -30,6 +30,8 @@ export interface HistoryPoint {
   macd?:        number | null;
   macd_signal?: number | null;
   macd_hist?:   number | null;
+  rsi?:         number | null;
+  vwap?:        number | null;
 }
 
 export interface AnalystJuror {
@@ -42,6 +44,7 @@ export interface AnalystJuror {
   note:        string;
   confidence:  number;
   model:       string;
+  tools_used?: string[];
 }
 
 export interface MonteCarloPriceRangeDay {
@@ -174,6 +177,23 @@ export interface OptionsChainResult {
   puts:          OptionContract[];
 }
 
+export interface IntervalStats {
+  change_pct:  number;
+  period_high: number;
+  period_low:  number;
+  sma20:       number | null;
+  ann_vol:     number;
+}
+
+export interface IntervalHistoryData {
+  symbol:     string;
+  period:     string;
+  interval:   string;
+  history:    HistoryPoint[];
+  rsi_series: Array<number | null>;
+  stats:      IntervalStats;
+}
+
 export interface DCFScenario {
   wacc:            number;
   growth_rate:     number;
@@ -192,4 +212,5 @@ export interface DCFResult {
   wacc_base:          number;
   growth_rate_base:   number;
   method:             string;
+  fundamentals_complete?: boolean;
 }

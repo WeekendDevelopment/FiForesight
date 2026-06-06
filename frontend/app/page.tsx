@@ -17,6 +17,7 @@ import { useWatchlist } from '../hooks/useWatchlist';
 import { useAuth } from '../contexts/AuthContext';
 import AuthModal from '../components/AuthModal';
 import ModelWeightBar   from '../components/ModelWeightBar';
+import BacktestPanel    from '../components/BacktestPanel';
 import TrendingSparklines from '../components/TrendingSparklines';
 import MonteCarloFanChart from '../components/MonteCarloFanChart';
 import MonteCarloProbabilitySurface from '../components/MonteCarloProbabilitySurface';
@@ -29,6 +30,7 @@ import FundamentalsPanel      from '../components/FundamentalsPanel';
 import PeerComparisonPanel    from '../components/PeerComparisonPanel';
 import TradeSetupCard         from '../components/TradeSetupCard';
 import OptionsChainPanel from '../components/OptionsChainPanel';
+import OrderBookPanel    from '../components/OrderBookPanel';
 import StockChatPanel    from '../components/StockChatPanel';
 import { useIndicatorSignals } from '../hooks/useIndicatorSignals';
 import DCFCard               from '../components/DCFCard';
@@ -65,7 +67,6 @@ export default function QuantumDashboard() {
   const [error,            setError]            = useState<string | null>(null);
   const [indicators,       setIndicators]       = useState<IndicatorKey[]>(['bb', 'sma']);
   const [chartMode,        setChartMode]        = useState<'line' | 'candle'>('line');
-  const [chartEngine,      setChartEngine]      = useState<'classic' | 'pro'>('classic');
   const [tradeSetup,       setTradeSetup]       = useState<TradeSetupResponse | null>(null);
   const [tradeSetupLoading, setTradeSetupLoading] = useState(false);
   const [optionsData,      setOptionsData]      = useState<OptionsChainResult | null>(null);
@@ -317,12 +318,11 @@ export default function QuantumDashboard() {
                   {/* Price chart card */}
                   <PriceChartCard
                     prediction={prediction}
+                    symbol={prediction.symbol}
                     indicators={indicators}
                     setIndicators={setIndicators}
                     chartMode={chartMode}
                     setChartMode={setChartMode}
-                    chartEngine={chartEngine}
-                    setChartEngine={setChartEngine}
                     isDark={isDark}
                     primaryColor={primaryColor}
                     trendColor={trendColor}
@@ -346,9 +346,12 @@ export default function QuantumDashboard() {
                     <ModelWeightBar weights={prediction.modelWeights} isDark={isDark} />
                   )}
 
+                  {/* ── Walk-forward backtest (on-demand) ────────────── */}
+                  <BacktestPanel symbol={prediction.symbol} isDark={isDark} primaryColor={primaryColor} />
+
                   {/* ── Analyst Jury ──────────────────────────────────── */}
                   {prediction.juryAnalysts && prediction.juryAnalysts.length > 0 && (
-                    <AnalystJuryPanel analysts={prediction.juryAnalysts} />
+                    <AnalystJuryPanel analysts={prediction.juryAnalysts} symbol={prediction.symbol} />
                   )}
 
                   {/* ── Trade Setup ──────────────────────────────────── */}
@@ -501,6 +504,11 @@ export default function QuantumDashboard() {
                       isDark={isDark}
                       primaryColor={primaryColor}
                     />
+                  )}
+
+                  {/* ── Level 2 Order Book ───────────────────────────── */}
+                  {prediction && (
+                    <OrderBookPanel symbol={prediction.symbol} />
                   )}
 
                   {/* ── Peer Comparison ──────────────────────────────────── */}

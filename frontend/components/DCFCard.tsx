@@ -79,6 +79,11 @@ export default function DCFCard({ dcf, isDark, primaryColor }: Props) {
         <Typography sx={{ fontSize: '0.65rem', opacity: 0.4, lineHeight: 1.5 }}>
           FCF ${dcf.fcf_billions.toFixed(1)}B · Base WACC {dcf.wacc_base.toFixed(1)}% · Growth {dcf.growth_rate_base.toFixed(1)}% · 5yr DCF + Gordon terminal
         </Typography>
+        {dcf.fundamentals_complete === false && (
+          <Typography sx={{ fontSize: '0.6rem', color: '#f59e0b', opacity: 0.8, mt: 0.5 }}>
+            ⚠ Partial fundamentals — beta/growth defaulted; valuation is lower-confidence.
+          </Typography>
+        )}
       </CardContent>
     </Card>
   );
