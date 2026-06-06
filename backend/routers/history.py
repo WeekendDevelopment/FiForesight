@@ -195,6 +195,14 @@ async def get_history(
     opens   = [float(v) for v in df["Open"].tolist()]   if "Open"   in df.columns else list(closes)
     volumes = [int(v)   for v in df["Volume"].tolist()] if "Volume" in df.columns else [0] * len(closes)
 
+    # InfluxDB stores intraday live-price snapshots (close-only) alongside daily
+    # OHLC bars; those snapshot rows arrive with open/high/low == 0 and would
+    # render as candlesticks spanning from $0. Coalesce any non-positive OHLC to
+    # the close so every bar is a valid candle (a flat doji for snapshot rows).
+    opens = [o if o > 0 else c for o, c in zip(opens, closes)]
+    highs = [h if h > 0 else c for h, c in zip(highs, closes)]
+    lows  = [low if low > 0 else c for low, c in zip(lows, closes)]
+
     bb       = calculate_bollinger_bands(closes)
     macd_d   = calculate_macd(closes)
     rsi_s    = calculate_rsi_series(closes)
@@ -215,10 +223,16 @@ async def get_history(
     else:
         dates = [ts.strftime("%Y-%m-%d") for ts in df.index]
 
+    # Real UNIX epoch (seconds, UTC) per bar — fed straight to the lightweight-
+    # charts time scale so the zoom chart works on every range (incl. intraday),
+    # without reconstructing a calendar date from the display string.
+    times = [int(ts.timestamp()) for ts in df.index]
+
     history_bars: list[dict] = []
     for i, date in enumerate(dates):
         bar: dict[str, Any] = {
             "date":        date,
+            "time":        times[i],
             "price":       round(closes[i], 4),
             "open":        round(opens[i],  4),
             "high":        round(highs[i],  4),

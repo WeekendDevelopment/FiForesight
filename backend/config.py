@@ -18,6 +18,9 @@ class Config:
     ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
     PORT = int(os.getenv("PORT", 8000))
     SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
+    # StockTwits public API now returns 403 without auth — disabled by default so
+    # we don't fire a guaranteed-failing request on every prediction.
+    STOCKTWITS_ENABLED = os.getenv("STOCKTWITS_ENABLED", "false").lower() in ("1", "true", "yes")
 
 class SanitizeHttpxFilter(logging.Filter):
     SENSITIVE_PARAMS = {"api_key", "token", "secret", "password", "key"}

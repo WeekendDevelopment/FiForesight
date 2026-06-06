@@ -44,6 +44,7 @@ export interface AnalystJuror {
   note:        string;
   confidence:  number;
   model:       string;
+  tools_used?: string[];
 }
 
 export interface MonteCarloPriceRangeDay {
@@ -211,4 +212,5 @@ export interface DCFResult {
   wacc_base:          number;
   growth_rate_base:   number;
   method:             string;
+  fundamentals_complete?: boolean;
 }
