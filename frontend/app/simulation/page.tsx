@@ -13,6 +13,7 @@ import {
   ArrowLeft, Trash2, BarChart2, Trophy, RefreshCw,
   Target, Brain, Lock, LogIn,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -1251,7 +1252,7 @@ export default function SimulationPage() {
           px: 3, py: 1.5,
           display: 'flex', alignItems: 'center', gap: 2,
         }}>
-          <IconButton component="a" href="/" size="small" sx={{ color: 'text.secondary' }}>
+          <IconButton component={Link} href="/" size="small" sx={{ color: 'text.secondary' }}>
             <ArrowLeft size={18} />
           </IconButton>
           <Typography variant="subtitle1" fontWeight={700} sx={{ color: 'primary.main' }}>
@@ -1275,7 +1276,7 @@ export default function SimulationPage() {
                 Build an AI-curated portfolio and race it against the S&amp;P 500.
               </Typography>
               <Button
-                component="a"
+                component={Link}
                 href="/"
                 variant="outlined"
                 startIcon={<LogIn size={16} />}
