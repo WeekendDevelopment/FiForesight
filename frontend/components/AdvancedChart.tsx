@@ -206,13 +206,18 @@ export default function AdvancedChart({
         upColor, downColor, wickUpColor: upColor, wickDownColor: downColor,
         borderVisible: false,
       });
+      // Some daily bars are close-only snapshots (open/high/low === 0); treat
+      // any non-positive OHLC as the close so they render as a valid doji
+      // instead of a candle spanning from $0.
+      const ohlc = (v: number | null | undefined, close: number) =>
+        typeof v === 'number' && v > 0 ? v : close;
       candles.setData(
         history
           .map((h, i) => ({
             time: histTimes[i],
-            open: (h.open ?? h.price) as number,
-            high: (h.high ?? h.price) as number,
-            low:  (h.low  ?? h.price) as number,
+            open: ohlc(h.open, h.price),
+            high: ohlc(h.high, h.price),
+            low:  ohlc(h.low,  h.price),
             close: h.price,
           }))
           .filter(c => Number.isFinite(c.open) && Number.isFinite(c.close))

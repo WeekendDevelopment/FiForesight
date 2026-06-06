@@ -195,6 +195,14 @@ async def get_history(
     opens   = [float(v) for v in df["Open"].tolist()]   if "Open"   in df.columns else list(closes)
     volumes = [int(v)   for v in df["Volume"].tolist()] if "Volume" in df.columns else [0] * len(closes)
 
+    # InfluxDB stores intraday live-price snapshots (close-only) alongside daily
+    # OHLC bars; those snapshot rows arrive with open/high/low == 0 and would
+    # render as candlesticks spanning from $0. Coalesce any non-positive OHLC to
+    # the close so every bar is a valid candle (a flat doji for snapshot rows).
+    opens = [o if o > 0 else c for o, c in zip(opens, closes)]
+    highs = [h if h > 0 else c for h, c in zip(highs, closes)]
+    lows  = [low if low > 0 else c for low, c in zip(lows, closes)]
+
     bb       = calculate_bollinger_bands(closes)
     macd_d   = calculate_macd(closes)
     rsi_s    = calculate_rsi_series(closes)
