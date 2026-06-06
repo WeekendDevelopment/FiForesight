@@ -124,10 +124,15 @@ def _run_backtest(symbol: str, closes: List[float], dates: List[str]) -> Optiona
         ens_dirs.append(1 if ens_dir == actual_dir else 0)
 
         # Equity curve: take the position implied by the ensemble's day-5 call
-        # (long if it predicts up, short if down) and book the realized 5-day
-        # return. One trade per window, compounded additively.
-        position = 1 if ens_dir >= 0 else -1
-        window_return_pct = position * (actual[-1] - train_last) / train_last * 100.0
+        # (long if it predicts up, short if down). A flat prediction is treated
+        # as a no-trade rather than defaulting long, so an undecided model
+        # doesn't introduce a systematic long bias. One trade per window,
+        # compounded additively.
+        if ens_dir == 0:
+            window_return_pct = 0.0
+        else:
+            position = 1 if ens_dir > 0 else -1
+            window_return_pct = position * (actual[-1] - train_last) / train_last * 100.0
         cumulative_return_pct += window_return_pct
         equity_curve.append({
             "date": pred_date,
@@ -179,7 +184,14 @@ async def backtest(symbol: str) -> dict:
         return cached
 
     logger.info("[BACKTEST] cache MISS for %s — fetching 2y history", sym)
-    df = await asyncio.to_thread(yf_svc.fetch_history, sym, "2y")
+    try:
+        df = await asyncio.wait_for(
+            asyncio.to_thread(yf_svc.fetch_history, sym, "2y"),
+            timeout=12.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("[BACKTEST] yfinance fetch timed out for %s", sym)
+        raise HTTPException(status_code=504, detail=f"Data fetch for {sym} timed out.")
     if df is None or df.empty:
         raise HTTPException(status_code=404, detail=f"No data found for {sym}.")
 

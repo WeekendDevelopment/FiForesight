@@ -1,9 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import axios from 'axios';
 import {
-  Box, Button, Paper, Stack, Typography, CircularProgress,
+  Box, Button, Paper, Typography, CircularProgress,
   Table, TableBody, TableCell, TableHead, TableRow, Tooltip as MuiTooltip,
 } from '@mui/material';
 import {
@@ -60,6 +60,13 @@ export default function BacktestPanel({ symbol, isDark, primaryColor }: Props) {
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Clear any prior ticker's backtest when the symbol changes so a stale result
+  // isn't shown for the newly-selected ticker until the user reruns.
+  useEffect(() => {
+    setResult(null);
+    setError(null);
+  }, [symbol]);
 
   const textColor = isDark ? 'rgba(220,220,220,0.55)' : 'rgba(20,30,50,0.55)';
   const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)';
