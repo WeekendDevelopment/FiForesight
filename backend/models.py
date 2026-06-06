@@ -807,6 +807,7 @@ def run_ensemble_forecast(
             predicted = round(last_price * (1 + (vol * 0.3 * (1 if i % 2 == 0 else -0.5))), 2)
             days.append({
                 "date":           dt.strftime("%m/%d"),
+                "time":           int(dt.timestamp()),
                 "predicted":      predicted,
                 "high":           round(predicted * (1 + vol), 2),
                 "low":            round(predicted * (1 - vol), 2),
@@ -891,6 +892,7 @@ def run_ensemble_forecast(
             dt = datetime.now(timezone.utc) + timedelta(days=i)
             days.append({
                 "date":           dt.strftime("%m/%d"),
+                "time":           int(dt.timestamp()),
                 "predicted":      round(last_price * (1 + vol * 0.1 * i * 0.3), 2),
                 "high":           round(last_price * (1 + vol * i * 0.4), 2),
                 "low":            round(last_price * (1 - vol * i * 0.4), 2),
@@ -1009,6 +1011,7 @@ def run_ensemble_forecast(
         dt = datetime.now(timezone.utc) + timedelta(days=i + 1)
         days.append({
             "date":           dt.strftime("%m/%d"),
+            "time":           int(dt.timestamp()),
             "predicted":      round(predicted, 2),
             "high":           day_high,
             "low":            day_low,

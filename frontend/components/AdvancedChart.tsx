@@ -24,6 +24,7 @@ export type IndicatorKey = 'bb' | 'sma' | 'ema' | 'macd' | 'rsi' | 'volume';
 
 export interface AdvHistoryPoint {
   date: string;
+  time?: number;   // UNIX epoch seconds (UTC) — preferred over `date` when present
   price: number;
   open?: number;
   high?: number;
@@ -43,6 +44,7 @@ export interface AdvHistoryPoint {
 
 export interface AdvForecastPoint {
   date: string;
+  time?: number;   // UNIX epoch seconds (UTC)
   predicted: number;
   high: number;
   low: number;
@@ -59,6 +61,7 @@ interface Props {
   trendColor: string;
   support?: number[];
   resistance?: number[];
+  intraday?: boolean;   // show HH:MM on the time axis (1D/5D/1M ranges)
 }
 
 /**
@@ -120,6 +123,7 @@ export default function AdvancedChart({
   trendColor,
   support = [],
   resistance = [],
+  intraday = false,
 }: Props) {
   const priceRef   = useRef<HTMLDivElement>(null);
   const volumeRef  = useRef<HTMLDivElement>(null);
@@ -134,11 +138,41 @@ export default function AdvancedChart({
     let handlers: Array<() => void> = [];
 
     try {
-    const allDates = [
-      ...history.map(h => h.date),
-      ...forecast.map(f => f.date),
-    ];
-    const { histTimes, foreTimes } = buildTimestamps(allDates, history.length);
+    // Prefer real epoch timestamps from the backend (works for every range
+    // incl. intraday). Fall back to MM/DD reconstruction only if any bar is
+    // missing `time` (e.g. a stale cached payload mid-rollout).
+    const haveEpoch =
+      history.every(h => typeof h.time === 'number') &&
+      forecast.every(f => typeof f.time === 'number');
+
+    let histTimes: UTCTimestamp[];
+    let foreTimes: UTCTimestamp[];
+    if (haveEpoch) {
+      histTimes = history.map(h => h.time as UTCTimestamp);
+      foreTimes = forecast.map(f => f.time as UTCTimestamp);
+    } else {
+      // Stale cached payload without epoch `time` (only possible transiently,
+      // within the /history cache TTL right after a deploy). buildTimestamps
+      // understands ONLY MM/DD; ISO (YYYY-MM-DD) or intraday (HH:MM) labels
+      // would reconstruct to NaN and blank the chart. So use buildTimestamps
+      // only for genuine MM/DD data, otherwise synthesize monotonic ascending
+      // timestamps so the chart still renders until the cache refreshes.
+      const allDates = [
+        ...history.map(h => h.date),
+        ...forecast.map(f => f.date),
+      ];
+      const looksMmDd = allDates.every(d => /^\d{1,2}\/\d{1,2}$/.test(d));
+      if (looksMmDd) {
+        ({ histTimes, foreTimes } = buildTimestamps(allDates, history.length));
+      } else {
+        const nowSec = Math.floor(Date.now() / 1000);
+        const synthetic = allDates.map(
+          (_, i) => (nowSec - (allDates.length - 1 - i) * 86_400) as UTCTimestamp,
+        );
+        histTimes = synthetic.slice(0, history.length);
+        foreTimes = synthetic.slice(history.length);
+      }
+    }
 
     const bg          = isDark ? '#0d1520' : '#ffffff';
     const textColor   = isDark ? 'rgba(220,220,220,0.75)' : 'rgba(20,30,50,0.75)';
@@ -151,7 +185,7 @@ export default function AdvancedChart({
       grid:   { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: gridColor },
-      timeScale: { borderColor: gridColor, timeVisible: false, secondsVisible: false },
+      timeScale: { borderColor: gridColor, timeVisible: intraday, secondsVisible: false },
       autoSize: true,
     };
 
@@ -172,13 +206,18 @@ export default function AdvancedChart({
         upColor, downColor, wickUpColor: upColor, wickDownColor: downColor,
         borderVisible: false,
       });
+      // Some daily bars are close-only snapshots (open/high/low === 0); treat
+      // any non-positive OHLC as the close so they render as a valid doji
+      // instead of a candle spanning from $0.
+      const ohlc = (v: number | null | undefined, close: number) =>
+        typeof v === 'number' && v > 0 ? v : close;
       candles.setData(
         history
           .map((h, i) => ({
             time: histTimes[i],
-            open: (h.open ?? h.price) as number,
-            high: (h.high ?? h.price) as number,
-            low:  (h.low  ?? h.price) as number,
+            open: ohlc(h.open, h.price),
+            high: ohlc(h.high, h.price),
+            low:  ohlc(h.low,  h.price),
             close: h.price,
           }))
           .filter(c => Number.isFinite(c.open) && Number.isFinite(c.close))
@@ -328,7 +367,7 @@ export default function AdvancedChart({
       handlers.forEach(h => h());
       charts.forEach(c => c.remove());
     };
-  }, [history, forecast, rsiSeries, indicators, mode, isDark, primaryColor, trendColor, support, resistance]);
+  }, [history, forecast, rsiSeries, indicators, mode, isDark, primaryColor, trendColor, support, resistance, intraday]);
 
   const paneBorder = isDark ? '1px solid rgba(255,255,255,0.05)' : '1px solid rgba(0,0,0,0.08)';
   const labelStyle: React.CSSProperties = {

@@ -1371,6 +1371,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     for idx, p in enumerate(historical_prices[slice_start:], start=slice_start):
         history.append({
             "date":        p["_time"].strftime("%m/%d") if hasattr(p["_time"], "strftime") else str(p["_time"])[:10],
+            "time":        int(p["_time"].timestamp()) if hasattr(p["_time"], "timestamp") else None,
             "price":       round(float(p["close"]),                 2),
             "open":        round(float(p.get("open",  p["close"])), 2),
             "high":        round(float(p.get("high",  p["close"])), 2),
