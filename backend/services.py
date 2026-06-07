@@ -1483,7 +1483,7 @@ class SentimentService:
 #
 #   LLAMA-4-SCOUT → Groq meta-llama/llama-4-scout-17b-16e-instruct (free tier) — Macro & Risk lens
 #   LLAMA-70B → Groq llama-3.3-70b-versatile    (14,400 RPD free) — Growth lens
-#   QWEN3-32B → Groq qwen/qwen3-32b             (free tier)       — Quant lens
+#   GPT-OSS-20B → Groq openai/gpt-oss-20b       (free tier)       — Quant lens
 #
 #   _ai_note uses Groq llama-3.3-70b independently (header note, not jury)
 # ---------------------------------------------------------------------------
@@ -1533,16 +1533,16 @@ ANALYST_PERSONAS = [
         ),
     },
     {
-        "id":          "QWEN3-32B",
-        "avatar":      "QW",
+        "id":          "GPT-OSS-20B",
+        "avatar":      "GO",
         "title":       "Quant Lens",
-        "model_label": "Groq · Qwen3 32B",
+        "model_label": "Groq · GPT-OSS 20B",
         "provider":    "groq",
-        "api_model":   "qwen/qwen3-32b",
+        "api_model":   "openai/gpt-oss-20b",
         "max_tokens":  2048,
         "color":       "#10b981",
         "system": (
-            "You are QWEN3-32B, a quantitative signal analyst running on Alibaba Qwen3 32B. "
+            "You are GPT-OSS-20B, a quantitative signal analyst running on OpenAI GPT-OSS 20B. "
             "You operate purely on technical indicators and statistical signals — no macro bias, no news sentiment. "
             "Analyse the provided OHLCV data and indicator outputs. "
             "Interpret RSI regime, MACD histogram crossover state, Bollinger Band width and price position, "
@@ -1837,7 +1837,7 @@ class AnalystJuryService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _parse_analyst_response(raw: str, persona_id: str = "?") -> dict:
+    def _parse_analyst_response(raw: str, persona_id: str = "?", model: str = "?") -> dict:
         import json
 
         logger.debug(
@@ -1910,10 +1910,25 @@ class AnalystJuryService:
             )
 
         # ── Last resort: regex field extraction from plain text ───────────────
+        # Both JSON paths failed → the model emitted malformed/structurally-broken
+        # output. Track it (keyed by model) so a chronically-misbehaving model is
+        # visible in New Relic, then salvage a clean note without leaking JSON
+        # punctuation (e.g. stray "}}" from an unbalanced object) into the UI.
         logger.warning(
             f"[JURY/{persona_id}] ⚠ Parse path: LAST-RESORT (regex plain-text extraction) — "
-            f"both JSON parse paths failed"
+            f"both JSON parse paths failed (model={model}, raw_chars={len(raw)}, "
+            f"had_think_block={'<think>' in raw})"
         )
+        try:
+            newrelic.agent.record_custom_event("JuryMalformedOutput", {
+                "persona_id":      persona_id,
+                "model":           model,
+                "raw_chars":       len(raw),
+                "had_think_block": "<think>" in raw,
+            })
+        except Exception:  # observability must never break parsing
+            pass
+
         rating = "Hold"
         for candidate in [
             "Strong Buy", "Strong Sell",
@@ -1927,7 +1942,18 @@ class AnalystJuryService:
 
         conf_match = re.search(r"(\d{1,3})\s*%", cleaned)
         confidence = int(conf_match.group(1)) if conf_match else 60
-        note       = re.sub(r"\{.*?\}", "", cleaned, flags=re.DOTALL).strip()[:420]
+
+        # Salvage the note: first try to lift the "note" field out of the broken
+        # JSON; otherwise drop the JSON-ish span (greedy) and scrub any remaining
+        # brace/bracket/quote so fragments like "}}" can never reach the user.
+        note_match = re.search(r'"note"\s*:\s*"([^"]{1,420})"', cleaned, flags=re.DOTALL)
+        if note_match:
+            note = note_match.group(1).strip()
+        else:
+            note = re.sub(r"\{.*\}", " ", cleaned, flags=re.DOTALL)   # greedy: whole JSON blob
+            note = re.sub(r"[{}\[\]\"]", " ", note)                   # any stray JSON punctuation
+            note = re.sub(r"\s{2,}", " ", note).strip()
+        note = note[:420] or "Quantitative analysis unavailable this run."
 
         result = {
             "rating":     rating,
@@ -2012,7 +2038,7 @@ class AnalystJuryService:
             model_used = "error"
             tools_used = []
 
-        parsed = self._parse_analyst_response(raw, persona_id=persona["id"])
+        parsed = self._parse_analyst_response(raw, persona_id=persona["id"], model=model_used)
 
         verdict = {
             "id":          persona["id"],
