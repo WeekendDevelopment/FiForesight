@@ -29,14 +29,13 @@ import PriceChartCard    from '../../../components/PriceChartCard';
 import FundamentalsPanel      from '../../../components/FundamentalsPanel';
 import PeerComparisonPanel    from '../../../components/PeerComparisonPanel';
 import TradeSetupCard         from '../../../components/TradeSetupCard';
-import OptionsChainPanel from '../../../components/OptionsChainPanel';
 import OrderBookPanel    from '../../../components/OrderBookPanel';
 import StockChatPanel    from '../../../components/StockChatPanel';
 import { useIndicatorSignals } from '../../../hooks/useIndicatorSignals';
 import DCFCard               from '../../../components/DCFCard';
 import WhyDidMoveCard        from '../../../components/WhyDidMoveCard';
 import MorningBriefingPanel  from '../../../components/MorningBriefingPanel';
-import type { PredictionData, IndicatorKey, TradeSetupResponse, DCFResult, OptionsChainResult } from '../../../types';
+import type { PredictionData, IndicatorKey, TradeSetupResponse, DCFResult } from '../../../types';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -71,7 +70,6 @@ function AnalysisContent() {
   const [chartMode,        setChartMode]        = useState<'line' | 'candle'>('line');
   const [tradeSetup,       setTradeSetup]       = useState<TradeSetupResponse | null>(null);
   const [tradeSetupLoading, setTradeSetupLoading] = useState(false);
-  const [optionsData,      setOptionsData]      = useState<OptionsChainResult | null>(null);
   const [dcfData,          setDcfData]          = useState<DCFResult | null>(null);
   const [chatOpen,         setChatOpen]         = useState(false);
   const [authOpen,         setAuthOpen]         = useState(false);
@@ -116,7 +114,6 @@ function AnalysisContent() {
     setLoading(true);
     setError(null);
     setTradeSetup(null);
-    setOptionsData(null);
     setDcfData(null);
     setChatOpen(false);
     try {
@@ -127,11 +124,6 @@ function AnalysisContent() {
       } else {
         setTradeSetup(null);
       }
-      // Fire-and-forget options chain fetch (non-blocking)
-      const optionsSymbol = response.data?.symbol ?? fullSymbol;
-      axios.get(`/api/options/${encodeURIComponent(optionsSymbol)}`)
-        .then(r => setOptionsData(r.data))
-        .catch(() => setOptionsData(null));
       // Fire-and-forget DCF fetch (non-blocking)
       axios.get(`/api/dcf/${baseSymbol}`)
         .then(r => setDcfData(r.data))
@@ -441,15 +433,6 @@ function AnalysisContent() {
                   <FundamentalsPanel
                     prediction={prediction}
                     rsiInfo={rsiInfo}
-                    isDark={isDark}
-                    primaryColor={primaryColor}
-                  />
-                )}
-
-                {/* ── Options Chain ─────────────────────────────────── */}
-                {optionsData && (
-                  <OptionsChainPanel
-                    data={optionsData}
                     isDark={isDark}
                     primaryColor={primaryColor}
                   />
