@@ -2,8 +2,9 @@
 import asyncio
 import logging
 import math
-from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Optional
+import os
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 import yfinance as yf
@@ -432,6 +433,157 @@ async def earnings_calendar():
 
     payload = {"calendar": data, "generated_at": datetime.now(timezone.utc).isoformat()}
     await cache_set(CACHE_KEY, payload, ttl_seconds=21600)  # 6h TTL
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# IPO Calendar
+# ---------------------------------------------------------------------------
+
+def _parse_ipo_price_range(item: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
+    """Extract (low, high) numeric price bounds from an FMP IPO row.
+
+    FMP variously returns explicit ``priceLow``/``priceHigh`` numbers or a
+    ``priceRange`` string like ``"$18-$22"`` / ``"18.00 - 22.00"`` / ``"$20"``.
+    Returns ``(None, None)`` when nothing parseable is present.
+    """
+    def _num(v: Any) -> Optional[float]:
+        try:
+            if v is None or v == "":
+                return None
+            return float(str(v).replace("$", "").replace(",", "").strip())
+        except (TypeError, ValueError):
+            return None
+
+    low = _num(item.get("priceLow"))
+    high = _num(item.get("priceHigh"))
+    if low is not None or high is not None:
+        return low, high
+
+    rng = item.get("priceRange")
+    if isinstance(rng, str) and rng.strip():
+        parts = [p for p in rng.replace("$", "").split("-") if p.strip()]
+        if len(parts) >= 2:
+            return _num(parts[0]), _num(parts[-1])
+        if len(parts) == 1:
+            v = _num(parts[0])
+            return v, v
+    return None, None
+
+
+@router.get("/ipo/calendar")
+async def ipo_calendar() -> Dict[str, Any]:
+    """Upcoming (next 90d) + recent (last 30d) public offerings.
+
+    Primary source: Financial Modeling Prep (needs a free ``FMP_API_KEY``).
+    Falls back to SEC EDGAR S-1 full-text search (no key) when the key is unset,
+    so the feature degrades gracefully. Cached 4h in Redis.
+    """
+    from redis_cache import cache_get, cache_set
+    CACHE_KEY = "ipo:calendar"
+    cached = await cache_get(CACHE_KEY)
+    if cached:
+        return cached
+
+    fmp_key = os.getenv("FMP_API_KEY", "").strip()
+    today = date.today()
+
+    async def _fetch_fmp() -> List[Dict[str, Any]]:
+        from_date = (today - timedelta(days=30)).isoformat()
+        to_date = (today + timedelta(days=90)).isoformat()
+        url = (
+            "https://financialmodelingprep.com/api/v3/ipo_calendar"
+            f"?from={from_date}&to={to_date}&apikey={fmp_key}"
+        )
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            raw = resp.json()
+
+        results: List[Dict[str, Any]] = []
+        for item in (raw or []):
+            ipo_date = str(item.get("date") or "")
+            low, high = _parse_ipo_price_range(item)
+            results.append({
+                "symbol":     item.get("symbol") or "",
+                "company":    item.get("company") or "",
+                "exchange":   item.get("exchange") or "",
+                "date":       ipo_date,
+                "price_low":  low,
+                "price_high": high,
+                "shares":     item.get("shares"),
+                "market_cap": item.get("marketCap"),
+                "actions":    item.get("actions") or "",  # "expected" | "priced" | "withdrawn"
+                "status":     "upcoming" if ipo_date >= today.isoformat() else "recent",
+            })
+        return results
+
+    async def _fetch_edgar_fallback() -> List[Dict[str, Any]]:
+        """Lightweight fallback: recent S-1 filings from EDGAR full-text search."""
+        from_date = (today - timedelta(days=30)).isoformat()
+        url = (
+            "https://efts.sec.gov/LATEST/search-index"
+            f"?forms=S-1&dateRange=custom&startdt={from_date}"
+            "&_source=file_date,display_names,period_of_report"
+        )
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                url, headers={"User-Agent": "FiForesight research@fiforesight.dev"}
+            )
+            resp.raise_for_status()
+            raw = resp.json()
+
+        results: List[Dict[str, Any]] = []
+        hits = ((raw or {}).get("hits", {}) or {}).get("hits", []) or []
+        for hit in hits[:20]:
+            src = hit.get("_source", {}) or {}
+            names = src.get("display_names") or []
+            results.append({
+                "symbol":     "",
+                "company":    names[0] if names else "Unknown",
+                "exchange":   "US",
+                "date":       src.get("file_date", "") or "",
+                "price_low":  None,
+                "price_high": None,
+                "shares":     None,
+                "market_cap": None,
+                "actions":    "S-1 Filed",
+                "status":     "recent",
+            })
+        return results
+
+    try:
+        if fmp_key:
+            data = await asyncio.wait_for(_fetch_fmp(), timeout=12.0)
+            source = "fmp"
+        else:
+            logger.info("[IPO] FMP_API_KEY not set — using SEC EDGAR fallback")
+            data = await asyncio.wait_for(_fetch_edgar_fallback(), timeout=12.0)
+            source = "edgar"
+    except asyncio.TimeoutError:
+        logger.warning("[IPO] upstream fetch timed out")
+        raise HTTPException(status_code=504, detail="IPO calendar temporarily unavailable")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[IPO] fetch failed: {e}")
+        raise HTTPException(status_code=502, detail="IPO data provider error")
+
+    # Upcoming first (ascending by date), then recent (most recent first).
+    upcoming = sorted(
+        [x for x in data if x["status"] == "upcoming"], key=lambda x: x["date"]
+    )
+    recent = sorted(
+        [x for x in data if x["status"] == "recent"], key=lambda x: x["date"], reverse=True
+    )
+
+    payload = {
+        "upcoming":     upcoming,
+        "recent":       recent,
+        "source":       source,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await cache_set(CACHE_KEY, payload, ttl_seconds=14400)  # 4h TTL
     return payload
 
 
