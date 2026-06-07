@@ -114,6 +114,7 @@ INFLUXDB_TOKEN=
 INFLUXDB_ORG=WeekendDevelopment
 INFLUXDB_BUCKET=FiForesightBucket
 SERP_API_KEY=            # Optional — news/trending
+FMP_API_KEY=             # Optional — IPO calendar (falls back to SEC EDGAR S-1 filings)
 PORT=8000
 ```
 
