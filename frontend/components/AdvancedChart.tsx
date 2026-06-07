@@ -40,6 +40,7 @@ export interface AdvHistoryPoint {
   macd?: number | null;
   macd_signal?: number | null;
   macd_hist?: number | null;
+  vwap?: number | null;
 }
 
 export interface AdvForecastPoint {
@@ -62,6 +63,7 @@ interface Props {
   support?: number[];
   resistance?: number[];
   intraday?: boolean;   // show HH:MM on the time axis (1D/5D/1M ranges)
+  showVwap?: boolean;   // dashed VWAP overlay (intraday ranges only)
 }
 
 /**
@@ -124,6 +126,7 @@ export default function AdvancedChart({
   support = [],
   resistance = [],
   intraday = false,
+  showVwap = false,
 }: Props) {
   const priceRef   = useRef<HTMLDivElement>(null);
   const volumeRef  = useRef<HTMLDivElement>(null);
@@ -258,6 +261,12 @@ export default function AdvancedChart({
       ema50.setData(histPoints(h => h.ema50));
     }
 
+    // VWAP — dashed orange overlay (intraday ranges only)
+    if (showVwap) {
+      const vwapLine = priceChart.addSeries(LineSeries, { color: '#ff9800', lineWidth: 2, lineStyle: 2 });
+      vwapLine.setData(histPoints(h => h.vwap));
+    }
+
     // Forecast line + band
     if (forecast.length) {
       const foreLine = priceChart.addSeries(LineSeries, { color: '#bc13fe', lineWidth: 2, lineStyle: 2 });
@@ -367,7 +376,7 @@ export default function AdvancedChart({
       handlers.forEach(h => h());
       charts.forEach(c => c.remove());
     };
-  }, [history, forecast, rsiSeries, indicators, mode, isDark, primaryColor, trendColor, support, resistance, intraday]);
+  }, [history, forecast, rsiSeries, indicators, mode, isDark, primaryColor, trendColor, support, resistance, intraday, showVwap]);
 
   const paneBorder = isDark ? '1px solid rgba(255,255,255,0.05)' : '1px solid rgba(0,0,0,0.08)';
   const labelStyle: React.CSSProperties = {

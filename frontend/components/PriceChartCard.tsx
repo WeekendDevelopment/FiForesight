@@ -49,12 +49,14 @@ export default function PriceChartCard({
   const [selectedInterval, setSelectedInterval] = useState<string>('2y');
   const [intervalData,     setIntervalData]     = useState<IntervalHistoryData | null>(null);
   const [historyLoading,   setHistoryLoading]   = useState(false);
+  const [showVwap,         setShowVwap]         = useState(false);
   // Track the last symbol we rendered for — reset interval when it changes
   const [lastSymbol, setLastSymbol] = useState(prediction.symbol);
   if (lastSymbol !== prediction.symbol) {
     setLastSymbol(prediction.symbol);
     setSelectedInterval('2y');
     setIntervalData(null);
+    setShowVwap(false);
   }
   const fetchIntervalHistory = useCallback((iv: string) => {
     if (iv === '2y') {
@@ -72,6 +74,8 @@ export default function PriceChartCard({
 
   const handleIntervalChange = useCallback((iv: string) => {
     setSelectedInterval(iv);
+    // VWAP only applies to intraday ranges (1D/5D/1M) — clear it otherwise.
+    if (!INTRADAY_RANGES.has(iv)) setShowVwap(false);
     fetchIntervalHistory(iv);
   }, [fetchIntervalHistory]);
 
@@ -220,6 +224,19 @@ export default function PriceChartCard({
             <ToggleButton value="line">LINE</ToggleButton>
             <ToggleButton value="candle">CANDLE</ToggleButton>
           </ToggleButtonGroup>
+
+          {/* VWAP overlay — intraday ranges only (5m/15m/1h carry vwap bars) */}
+          {intraday && (
+            <ToggleButtonGroup
+              aria-label="vwap-overlay"
+              value={showVwap ? ['vwap'] : []}
+              onChange={() => setShowVwap(v => !v)}
+              size="small"
+              sx={toggleSx}
+            >
+              <ToggleButton value="vwap">VWAP</ToggleButton>
+            </ToggleButtonGroup>
+          )}
         </Box>
 
         {/* Indicators Guide (collapsible) */}
@@ -327,6 +344,7 @@ export default function PriceChartCard({
             support={isTwoYear ? (prediction.indicators?.support ?? []) : []}
             resistance={isTwoYear ? (prediction.indicators?.resistance ?? []) : []}
             intraday={intraday}
+            showVwap={intraday && showVwap}
           />
         </Box>
       </CardContent>
