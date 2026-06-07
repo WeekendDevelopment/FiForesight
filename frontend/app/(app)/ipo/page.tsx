@@ -79,20 +79,23 @@ export default function IpoPage() {
   const [view,    setView]    = useState<View>('upcoming');
 
   useEffect(() => {
+    const controller = new AbortController();
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch('/api/ipo');
+        const res = await fetch('/api/ipo', { signal: controller.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json: IpoCalendarResult = await res.json();
         if (!cancelled) setData(json);
       } catch {
+        // Ignore the abort triggered by unmount; the cancelled guard already
+        // prevents a spurious error state in that case.
         if (!cancelled) setError(true);
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; controller.abort(); };
   }, []);
 
   const borderCol = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)';
