@@ -3,6 +3,8 @@
 
 yfinance, InfluxDB, and the Redis cache are all mocked; no network required.
 """
+from contextlib import AbstractContextManager
+from typing import Any, Tuple
 from unittest.mock import patch, AsyncMock, MagicMock
 
 import numpy as np
@@ -40,7 +42,7 @@ def _make_ohlcv_df(rows: int, freq: str, start: str = "2026-01-02 09:30") -> pd.
     )
 
 
-def _cache_patches():
+def _cache_patches() -> Tuple[AbstractContextManager[Any], AbstractContextManager[Any]]:
     """Force a cache miss and a no-op cache write."""
     return (
         patch("backend.routers.history.cache_get", AsyncMock(return_value=None)),
