@@ -212,9 +212,9 @@ async def _run_analyst_jury(
 ) -> List[dict]:
     """
     Run all 3 analyst personas concurrently via AnalystJuryService.
-      - KIMI-K2    → Groq moonshotai/kimi-k2-instruct  (macro & risk lens, Moonshot AI)
-      - LLAMA-70B  → Groq llama-3.3-70b-versatile    (growth lens, Meta)
-      - QWEN3-32B  → Groq qwen/qwen3-32b             (quant lens, Alibaba)
+      - LLAMA-4-SCOUT → Groq meta-llama/llama-4-scout-17b-16e-instruct (macro & risk lens, Meta)
+      - LLAMA-70B     → Groq llama-3.3-70b-versatile  (growth lens, Meta)
+      - GPT-OSS-20B   → Groq openai/gpt-oss-20b        (quant lens, OpenAI)
 
     All provider routing and response parsing are handled inside
     AnalystJuryService — no per-provider branching needed here.
