@@ -30,6 +30,8 @@ export interface HistoryPoint {
   macd?:        number | null;
   macd_signal?: number | null;
   macd_hist?:   number | null;
+  rsi?:         number | null;
+  vwap?:        number | null;
 }
 
 export interface AnalystJuror {
@@ -42,6 +44,7 @@ export interface AnalystJuror {
   note:        string;
   confidence:  number;
   model:       string;
+  tools_used?: string[];
 }
 
 export interface MonteCarloPriceRangeDay {
@@ -161,8 +164,17 @@ export interface OptionContract {
   volume:        number;
   open_interest: number;
   implied_vol:   number;
+  delta:         number;
+  theta:         number;
   in_the_money:  boolean;
   type:          'call' | 'put';
+}
+
+export interface OptionsStats {
+  put_call_ratio: number;
+  iv_avg_calls:   number;
+  iv_avg_puts:    number;
+  iv_skew:        number;
 }
 
 export interface OptionsChainResult {
@@ -172,6 +184,36 @@ export interface OptionsChainResult {
   current_price: number;
   calls:         OptionContract[];
   puts:          OptionContract[];
+  stats?:        OptionsStats;
+}
+
+export interface EarningsEntry {
+  symbol:     string;
+  name:       string;
+  market_cap: number;
+  date:       string;
+}
+
+export interface EarningsCalendarResult {
+  calendar:     Record<string, EarningsEntry[]>;
+  generated_at: string;
+}
+
+export interface IntervalStats {
+  change_pct:  number;
+  period_high: number;
+  period_low:  number;
+  sma20:       number | null;
+  ann_vol:     number;
+}
+
+export interface IntervalHistoryData {
+  symbol:     string;
+  period:     string;
+  interval:   string;
+  history:    HistoryPoint[];
+  rsi_series: Array<number | null>;
+  stats:      IntervalStats;
 }
 
 export interface DCFScenario {
@@ -192,4 +234,5 @@ export interface DCFResult {
   wacc_base:          number;
   growth_rate_base:   number;
   method:             string;
+  fundamentals_complete?: boolean;
 }

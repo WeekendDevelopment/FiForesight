@@ -14,11 +14,11 @@
     "@emotion/styled": "^11.11.5",
     "@mui/icons-material": "^7.3.9",
     "@mui/material": "^7.3.9",
-    "@supabase/supabase-js": "^2.105.4",
+    "@supabase/supabase-js": "^2.107.0",
     "@types/react-plotly.js": "^2.6.4",
-    "axios": "^1.16.0",
+    "axios": "^1.16.1",
     "lightweight-charts": "^5.2.0",
-    "lucide-react": "^1.14.0",
+    "lucide-react": "^1.17.0",
     "next": "16.2.6",
     "plotly.js": "^3.5.1",
     "react": "^19.2.6",
@@ -37,7 +37,7 @@
     "eslint": "^9.39.4",
     "eslint-config-next": "16.2.2",
     "eslint-plugin-react": "^7.37.5",
-    "postcss": "^8.5.14",
+    "postcss": "^8.5.15",
     "tailwindcss": "^4.3.0",
     "typescript": "^6.0.3"
   }

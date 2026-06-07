@@ -740,6 +740,18 @@ class ForecastStore:
 # YFinance Service  —  free historical OHLCV + fundamentals
 # ---------------------------------------------------------------------------
 
+# Maps yfinance exchange codes → Google-Finance exchange suffixes. SerpAPI's
+# google_finance engine only returns results for the "TICKER:EXCHANGE" format;
+# a bare ticker errors with "hasn't returned any results".
+_GOOGLE_EXCHANGE = {
+    "NMS": "NASDAQ", "NGM": "NASDAQ", "NCM": "NASDAQ", "NAS": "NASDAQ",
+    "NYQ": "NYSE",   "NYS": "NYSE",
+    "PCX": "NYSEARCA",
+    "ASE": "NYSEAMERICAN",
+    "BTS": "BATS",
+}
+
+
 class YFinanceService:
     """
     Wraps yfinance for:
@@ -872,6 +884,10 @@ class YFinanceService:
                 "sector":          info.get("sector",          "N/A"),
                 "industry":        info.get("industry",        "N/A"),
                 "currency":        info.get("currency",        "USD"),
+                # Google-Finance exchange suffix (e.g. NASDAQ/NYSE) derived from
+                # yfinance's exchange code — needed for the SerpAPI google_finance
+                # query, which requires the TICKER:EXCHANGE format. "" when unknown.
+                "exchange":        _GOOGLE_EXCHANGE.get(info.get("exchange") or "", ""),
                 # Extended quant fundamentals
                 "beta":            info.get("beta",                 "N/A"),
                 "forward_pe":      info.get("forwardPE",            "N/A"),
@@ -1170,27 +1186,60 @@ class SerpService:
         except ValueError:
             return 0.0
 
-    async def fetch_data(self, query: str) -> dict:
+    @staticmethod
+    def _parse_trending(data: dict) -> List[dict]:
+        """Build a trending-ticker list from the google_finance `discover_more`
+        block (related/most-active tickers). Each item carries symbol, price and
+        a signed change string the frontend sparklines understand."""
+        trending: List[dict] = []
+        seen: set = set()
+        for block in data.get("discover_more", []) or []:
+            for it in (block.get("items", []) if isinstance(block, dict) else []):
+                stock = str(it.get("stock", ""))          # e.g. "TSLA:NASDAQ"
+                sym = stock.split(":")[0].strip().upper()
+                if not sym or sym in seen:
+                    continue
+                mv = it.get("price_movement", {}) or {}
+                pct = mv.get("percentage")
+                up = str(mv.get("movement", "")).lower() == "up"
+                change = (f"{'+' if up else '-'}{pct}%") if pct is not None else ""
+                trending.append({
+                    "symbol": sym,
+                    "price":  it.get("price", ""),
+                    "change": change,
+                })
+                seen.add(sym)
+        return trending
+
+    async def fetch_data(self, query: str, exchange: str = "NASDAQ") -> dict:
         """
         Query SerpAPI Google Finance for news and trending market data.
         Returns a dict with keys:
           - news_results : list of news articles
-          - markets      : dict of category → list of tickers
+          - markets      : dict of category → list of tickers (legacy)
+          - trending     : list of trending tickers (from `discover_more`)
         Falls back to empty structure if the API key is missing or the call fails.
+
+        The google_finance engine requires a "TICKER:EXCHANGE" query — a bare
+        ticker returns an error — so the exchange suffix is appended when absent.
         """
         if not Config.SERP_API_KEY:
             logger.info(
                 "[SERP] API key not set — news/trending fetch SKIPPED "
                 "(returning empty news_results and markets)"
             )
-            return {"news_results": [], "markets": {}}
+            return {"news_results": [], "markets": {}, "trending": []}
+
+        # google_finance needs TICKER:EXCHANGE. Honor an already-qualified query;
+        # otherwise append the resolved exchange (default NASDAQ).
+        gq = query if ":" in query else f"{query.upper()}:{(exchange or 'NASDAQ').upper()}"
 
         logger.debug(
-            f"[SERP] fetch_data — query='{query}', engine=google_finance, timeout=25s"
+            f"[SERP] fetch_data — query='{gq}', engine=google_finance, timeout=25s"
         )
         params = {
             "engine":  "google_finance",
-            "q":       query,
+            "q":       gq,
             "api_key": Config.SERP_API_KEY,
         }
         try:
@@ -1199,25 +1248,26 @@ class SerpService:
                 resp.raise_for_status()
                 data = resp.json()
 
+            if data.get("error"):
+                logger.warning(f"[SERP] google_finance returned no results for '{gq}': {data['error']}")
+                return {"news_results": [], "markets": {}, "trending": []}
+
+            trending      = self._parse_trending(data)
             news_count    = len(data.get("news_results", []))
-            market_cats   = list(data.get("markets", {}).keys())
-            market_total  = sum(
-                len(v) for v in data.get("markets", {}).values() if isinstance(v, list)
-            )
             logger.info(
-                f"[SERP] ✓ fetch_data — query='{query}' | "
+                f"[SERP] ✓ fetch_data — query='{gq}' | "
                 f"news_articles={news_count} | "
-                f"market_categories={market_cats} | "
-                f"trending_tickers={market_total}"
+                f"trending_tickers={len(trending)}"
             )
             return {
                 "news_results": data.get("news_results", []),
                 "markets":      data.get("markets",      {}),
+                "trending":     trending,
             }
 
         except Exception as e:
-            logger.warning(f"[SERP] fetch_data failed ('{query}'): {e} → fallback: 0 articles, empty markets")
-            return {"news_results": [], "markets": {}}
+            logger.warning(f"[SERP] fetch_data failed ('{gq}'): {e} → fallback: 0 articles, empty trending")
+            return {"news_results": [], "markets": {}, "trending": []}
 
 
 # ---------------------------------------------------------------------------
@@ -1276,9 +1326,14 @@ class FinnhubService:
 
 class StockTwitsService:
     """
-    Fetches the public StockTwits symbol stream (no auth required).
-    Counts Bullish/Bearish tags on the last N messages and returns a
-    ratio in [-1, 1]: +1 = all bullish, -1 = all bearish.
+    Fetches the StockTwits symbol stream, counts Bullish/Bearish tags on the
+    last N messages and returns a ratio in [-1, 1]: +1 = all bullish,
+    -1 = all bearish.
+
+    NOTE: the public `api.stocktwits.com` endpoint now returns 403 Forbidden
+    without authentication, so the caller gates this behind
+    `Config.STOCKTWITS_ENABLED` (off by default). The parsing logic below is
+    kept intact for when an authed/working source is wired up.
     """
     _BASE_URL = "https://api.stocktwits.com/api/2/streams/symbol/{symbol}.json"
 
@@ -1428,7 +1483,7 @@ class SentimentService:
 #
 #   LLAMA-4-SCOUT → Groq meta-llama/llama-4-scout-17b-16e-instruct (free tier) — Macro & Risk lens
 #   LLAMA-70B → Groq llama-3.3-70b-versatile    (14,400 RPD free) — Growth lens
-#   QWEN3-32B → Groq qwen/qwen3-32b             (free tier)       — Quant lens
+#   GPT-OSS-20B → Groq openai/gpt-oss-20b       (free tier)       — Quant lens
 #
 #   _ai_note uses Groq llama-3.3-70b independently (header note, not jury)
 # ---------------------------------------------------------------------------
@@ -1478,16 +1533,16 @@ ANALYST_PERSONAS = [
         ),
     },
     {
-        "id":          "QWEN3-32B",
-        "avatar":      "QW",
+        "id":          "GPT-OSS-20B",
+        "avatar":      "GO",
         "title":       "Quant Lens",
-        "model_label": "Groq · Qwen3 32B",
+        "model_label": "Groq · GPT-OSS 20B",
         "provider":    "groq",
-        "api_model":   "qwen/qwen3-32b",
+        "api_model":   "openai/gpt-oss-20b",
         "max_tokens":  2048,
         "color":       "#10b981",
         "system": (
-            "You are QWEN3-32B, a quantitative signal analyst running on Alibaba Qwen3 32B. "
+            "You are GPT-OSS-20B, a quantitative signal analyst running on OpenAI GPT-OSS 20B. "
             "You operate purely on technical indicators and statistical signals — no macro bias, no news sentiment. "
             "Analyse the provided OHLCV data and indicator outputs. "
             "Interpret RSI regime, MACD histogram crossover state, Bollinger Band width and price position, "
@@ -1506,6 +1561,17 @@ NOTE_PROMPT_SUFFIX = (
     '{"rating": "<Strong Buy|Buy|Hold|Sell|Strong Sell|Low Risk|Medium Risk|High Risk|Accumulate|Distribute>", '
     '"note": "<3-4 advisory sentences, up to 420 chars, with specific signals and implications>", '
     '"confidence": <integer 10-95>}'
+)
+
+
+# Appended to the user prompt only when live tools are available to the analyst.
+# Encourages (but does not force) tool use before the final JSON verdict.
+TOOL_PROMPT_HINT = (
+    "\n\nYou have access to live market data tools: get_vix (volatility regime), "
+    "get_put_call_ratio (options positioning), get_insider_flow (insider buy/sell), "
+    "and get_macro_snapshot (rates & yield curve). Call any tools that would "
+    "strengthen your analysis BEFORE giving your verdict. When you have gathered "
+    "what you need, respond with the final JSON verdict described below."
 )
 
 
@@ -1606,11 +1672,172 @@ class AnalystJuryService:
         return result
 
     # ------------------------------------------------------------------
+    # Internal: raw OpenAI-compatible POST returning the full JSON body
+    # (needed for tool calling — callers inspect message.tool_calls)
+    # ------------------------------------------------------------------
+    @newrelic.agent.function_trace()
+    async def _post_groq_raw(self, body: dict) -> dict:
+        """POST a fully-formed chat-completions body to Groq, return parsed JSON.
+
+        Raises httpx.HTTPStatusError on non-2xx so callers can inspect status codes
+        (e.g. 429 rate-limit handling in the jury graph).
+        """
+        if not Config.GROQ_API_KEY:
+            raise ValueError("GROQ API key not configured")
+        headers = {
+            "Authorization": f"Bearer {Config.GROQ_API_KEY}",
+            "Content-Type":  "application/json",
+        }
+        async with httpx.AsyncClient(timeout=35.0) as client:
+            resp = await client.post(self.GROQ_BASE_URL, json=body, headers=headers)
+            resp.raise_for_status()
+            return resp.json()
+
+    # ------------------------------------------------------------------
+    # Public: agentic Groq call with OpenAI-compatible function/tool use
+    # ------------------------------------------------------------------
+    @newrelic.agent.function_trace()
+    async def call_groq_with_tools(
+        self,
+        model: str,
+        system: str,
+        user: str,
+        tools: List[dict],
+        tool_dispatcher,
+        max_tokens: int = 320,
+        max_rounds: int = 2,
+        force_first: bool = False,
+    ) -> tuple:
+        """Run a tool-using analyst loop against Groq's OpenAI-compatible API.
+
+        Loop:
+          1. Send messages with `tools`. tool_choice is "required" on the first
+             round when `force_first` is set (guarantees ≥1 tool call), else "auto".
+          2. If the model returns tool_calls, dispatch each via `tool_dispatcher`
+             (an async callable `(name, args_dict) -> str`), append the results as
+             role=tool messages, and re-send.
+          3. After `max_rounds` tool rounds, send once more WITHOUT tools so the
+             model is forced to return its final text answer.
+
+        Returns a tuple `(final_content, tools_used)` where `tools_used` is the
+        ordered, de-duplicated list of tool names the model actually invoked.
+        """
+        messages: List[dict] = [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": user},
+        ]
+        tools_used: List[str] = []
+
+        # max_rounds tool rounds + 1 forced final (no-tools) round
+        for round_idx in range(max_rounds + 1):
+            include_tools = round_idx < max_rounds
+            body = {
+                "model":       model,
+                "messages":    messages,
+                "max_tokens":  max_tokens,
+                "temperature": 0.65,
+            }
+            if include_tools:
+                body["tools"]       = tools
+                # Force at least one tool call on the opening round when asked
+                # (used by the "re-analyze with tools" path); auto otherwise.
+                body["tool_choice"] = "required" if (force_first and round_idx == 0) else "auto"
+
+            logger.debug(
+                f"[GROQ-TOOLS] round={round_idx} model={model} "
+                f"include_tools={include_tools} msgs={len(messages)}"
+            )
+            # Some Groq models reject tool params with a 400 (e.g. Qwen3-32B does
+            # not support tool_choice="required", and reasoning models may reject
+            # function calling entirely). Degrade gracefully so the analyst still
+            # returns a real verdict instead of crashing to a Hold/25 fallback:
+            #   required → auto → no tools.
+            try:
+                data = await self._post_groq_raw(body)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 400 or "tools" not in body:
+                    raise
+                data = None
+                # Step 1: if we were forcing, try relaxing to tool_choice=auto.
+                if body.get("tool_choice") == "required":
+                    logger.warning(
+                        f"[GROQ-TOOLS] {model} rejected tool_choice=required (400) — "
+                        f"retrying with tool_choice=auto"
+                    )
+                    body["tool_choice"] = "auto"
+                    try:
+                        data = await self._post_groq_raw(body)
+                    except httpx.HTTPStatusError as exc2:
+                        if exc2.response.status_code != 400:
+                            raise
+                        data = None
+                # Step 2: still rejected (or model can't do tools at all) — drop them.
+                if data is None:
+                    logger.warning(
+                        f"[GROQ-TOOLS] {model} rejected tools (400) — "
+                        f"retrying without tools (plain completion)"
+                    )
+                    body.pop("tools", None)
+                    body.pop("tool_choice", None)
+                    data = await self._post_groq_raw(body)
+            msg  = data["choices"][0]["message"]
+            tool_calls = msg.get("tool_calls")
+
+            if not tool_calls:
+                content = (msg.get("content") or "").strip()
+                # de-dupe preserving first-seen order
+                seen: List[str] = []
+                for t in tools_used:
+                    if t not in seen:
+                        seen.append(t)
+                logger.info(
+                    f"[GROQ-TOOLS] ✓ complete — model={model}, rounds={round_idx}, "
+                    f"tools_used={seen}, response_chars={len(content)}"
+                )
+                return content, seen
+
+            # Model requested tools — record the assistant turn, then dispatch each.
+            messages.append({
+                "role":       "assistant",
+                "content":    msg.get("content") or "",
+                "tool_calls": tool_calls,
+            })
+            for tc in tool_calls:
+                fn_name = tc.get("function", {}).get("name", "")
+                try:
+                    fn_args = json.loads(tc.get("function", {}).get("arguments") or "{}")
+                    if not isinstance(fn_args, dict):
+                        fn_args = {}
+                except (json.JSONDecodeError, TypeError):
+                    fn_args = {}
+                logger.info(f"[GROQ-TOOLS] dispatch — {fn_name}({fn_args})")
+                try:
+                    result = await tool_dispatcher(fn_name, fn_args)
+                except Exception as exc:   # tool failures are non-fatal
+                    logger.warning(f"[GROQ-TOOLS] tool {fn_name} failed: {exc}")
+                    result = json.dumps({"error": "tool unavailable"})
+                tools_used.append(fn_name)
+                messages.append({
+                    "role":         "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "name":         fn_name,
+                    "content":      result if isinstance(result, str) else json.dumps(result),
+                })
+
+        # Fallback: loop exhausted without a final text answer (should not happen).
+        seen = list(dict.fromkeys(tools_used))
+        logger.warning(
+            f"[GROQ-TOOLS] loop exhausted with no final content — model={model}, "
+            f"tools_used={seen}"
+        )
+        return "", seen
+
+    # ------------------------------------------------------------------
     # Internal: robust structured response parser
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _parse_analyst_response(raw: str, persona_id: str = "?") -> dict:
+    def _parse_analyst_response(raw: str, persona_id: str = "?", model: str = "?") -> dict:
         import json
 
         logger.debug(
@@ -1683,10 +1910,25 @@ class AnalystJuryService:
             )
 
         # ── Last resort: regex field extraction from plain text ───────────────
+        # Both JSON paths failed → the model emitted malformed/structurally-broken
+        # output. Track it (keyed by model) so a chronically-misbehaving model is
+        # visible in New Relic, then salvage a clean note without leaking JSON
+        # punctuation (e.g. stray "}}" from an unbalanced object) into the UI.
         logger.warning(
             f"[JURY/{persona_id}] ⚠ Parse path: LAST-RESORT (regex plain-text extraction) — "
-            f"both JSON parse paths failed"
+            f"both JSON parse paths failed (model={model}, raw_chars={len(raw)}, "
+            f"had_think_block={'<think>' in raw})"
         )
+        try:
+            newrelic.agent.record_custom_event("JuryMalformedOutput", {
+                "persona_id":      persona_id,
+                "model":           model,
+                "raw_chars":       len(raw),
+                "had_think_block": "<think>" in raw,
+            })
+        except Exception:  # observability must never break parsing
+            pass
+
         rating = "Hold"
         for candidate in [
             "Strong Buy", "Strong Sell",
@@ -1700,7 +1942,18 @@ class AnalystJuryService:
 
         conf_match = re.search(r"(\d{1,3})\s*%", cleaned)
         confidence = int(conf_match.group(1)) if conf_match else 60
-        note       = re.sub(r"\{.*?\}", "", cleaned, flags=re.DOTALL).strip()[:420]
+
+        # Salvage the note: first try to lift the "note" field out of the broken
+        # JSON; otherwise drop the JSON-ish span (greedy) and scrub any remaining
+        # brace/bracket/quote so fragments like "}}" can never reach the user.
+        note_match = re.search(r'"note"\s*:\s*"([^"]{1,420})"', cleaned, flags=re.DOTALL)
+        if note_match:
+            note = note_match.group(1).strip()
+        else:
+            note = re.sub(r"\{.*\}", " ", cleaned, flags=re.DOTALL)   # greedy: whole JSON blob
+            note = re.sub(r"[{}\[\]\"]", " ", note)                   # any stray JSON punctuation
+            note = re.sub(r"\s{2,}", " ", note).strip()
+        note = note[:420] or "Quantitative analysis unavailable this run."
 
         result = {
             "rating":     rating,
@@ -1717,21 +1970,37 @@ class AnalystJuryService:
     # Public: dispatch one persona and return a structured verdict
     # ------------------------------------------------------------------
     @newrelic.agent.function_trace()
-    async def get_analyst_verdict(self, persona: dict, market_ctx: str) -> dict:
+    async def get_analyst_verdict(
+        self,
+        persona: dict,
+        market_ctx: str,
+        *,
+        tools: Optional[List[dict]] = None,
+        tool_dispatcher=None,
+        force_tools: bool = False,
+    ) -> dict:
         """
         Dispatches a single analyst persona to its assigned provider and model.
         All 3 personas use Groq. Provider field reserved for future expansion.
         Returns a fully structured verdict dict ready for the API response.
+
+        When `tools` and `tool_dispatcher` are supplied, the analyst runs an
+        agentic tool-using loop (Groq function calling) and the returned verdict
+        carries a `tools_used` list naming the tools the model invoked.
         """
-        user_prompt = market_ctx + NOTE_PROMPT_SUFFIX
+        use_tools   = bool(tools and tool_dispatcher)
+        hint        = TOOL_PROMPT_HINT if use_tools else ""
+        user_prompt = market_ctx + hint + NOTE_PROMPT_SUFFIX
         model_used  = persona["api_model"]
         max_tok     = persona.get("max_tokens", 320)
         raw         = ""
+        tools_used: List[str] = []
 
         logger.info(
             f"[JURY/{persona['id']}] ── Dispatching — "
             f"provider={persona['provider']}, model={model_used}, "
-            f"max_tokens={max_tok}, title='{persona['title']}' ──"
+            f"max_tokens={max_tok}, tools={'on' if use_tools else 'off'}, "
+            f"title='{persona['title']}' ──"
         )
         logger.debug(
             f"[JURY/{persona['id']}] Context sent — "
@@ -1740,13 +2009,20 @@ class AnalystJuryService:
 
         try:
             if persona["provider"] == "groq":
-                raw = await self._call_groq(model_used, persona["system"], user_prompt, max_tok)
+                if use_tools:
+                    raw, tools_used = await self.call_groq_with_tools(
+                        model_used, persona["system"], user_prompt,
+                        tools, tool_dispatcher, max_tok,
+                        force_first=force_tools,
+                    )
+                else:
+                    raw = await self._call_groq(model_used, persona["system"], user_prompt, max_tok)
             else:
                 raise ValueError(f"Unknown provider: {persona['provider']}")
 
             logger.debug(
                 f"[JURY/{persona['id']}] ✓ Raw response received — "
-                f"model={model_used}, raw_chars={len(raw)}"
+                f"model={model_used}, raw_chars={len(raw)}, tools_used={tools_used}"
             )
 
         except Exception as e:
@@ -1760,8 +2036,9 @@ class AnalystJuryService:
                 '"confidence": 25}'
             )
             model_used = "error"
+            tools_used = []
 
-        parsed = self._parse_analyst_response(raw, persona_id=persona["id"])
+        parsed = self._parse_analyst_response(raw, persona_id=persona["id"], model=model_used)
 
         verdict = {
             "id":          persona["id"],
@@ -1773,10 +2050,12 @@ class AnalystJuryService:
             "note":        parsed.get("note",        "No available analysis at this time."),
             "confidence":  parsed.get("confidence",  50),
             "model":       model_used,
+            "tools_used":  tools_used,
         }
         logger.info(
             f"[JURY/{persona['id']}] Final verdict — "
             f"rating={verdict['rating']}, confidence={verdict['confidence']}%, "
-            f"model={verdict['model']}, note_chars={len(verdict['note'])}"
+            f"model={verdict['model']}, note_chars={len(verdict['note'])}, "
+            f"tools_used={tools_used}"
         )
         return verdict
