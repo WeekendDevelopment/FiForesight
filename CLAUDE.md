@@ -14,7 +14,7 @@ AI-driven quantitative financial forecasting SaaS. Ticker lookup → ensemble ML
 | ML/Forecasting | Prophet, SARIMAX (statsmodels), RandomForestRegressor (scikit-learn) |
 | Market Data | yfinance, SerpAPI (news/trending) |
 | Sentiment | VADER (vaderSentiment) — headline scoring, compound score + label |
-| AI / LLM Jury | Groq API — Llama 4 Scout, Llama 3.3 70B, Qwen3 32B (3-analyst jury via LangGraph) |
+| AI / LLM Jury | Groq API — Llama 4 Scout, Llama 3.3 70B, GPT-OSS 20B (3-analyst jury via LangGraph) |
 | Time-Series DB | InfluxDB |
 | Auth | Supabase (email/password, free tier) |
 | Observability | New Relic APM (backend + frontend) |
@@ -141,7 +141,7 @@ User enters ticker
       → SerpAPI: news headlines + trending symbols
       → VADER SentimentService: compound [-1,1] + label (Bullish/Bearish/Neutral)
       → LangGraph StateGraph parallel fan-out (Groq):
-          Llama 4 Scout (Macro & Risk) · Llama 3.3 70B (Growth) · Qwen3 32B (Quant)
+          Llama 4 Scout (Macro & Risk) · Llama 3.3 70B (Growth) · GPT-OSS 20B (Quant)
           Each isolated — failures degrade to Hold/25, not 500
       → Response: history, fundamentals, indicators, forecasts, jury verdicts, news, sentiment, monte carlo
 

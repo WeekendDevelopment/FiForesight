@@ -9,7 +9,7 @@ Replaces the bare asyncio.gather() approach with a proper StateGraph so that:
   - `.stream()` drop-in replaces `.invoke()` for future SSE support
 
 Graph shape (parallel fan-out):
-  START → [llama4scout | llama70b | qwen3] → END
+  START → [llama4scout | llama70b | gptoss] → END
 All three analyst nodes fire concurrently via LangGraph's parallel fan-out.
 """
 
