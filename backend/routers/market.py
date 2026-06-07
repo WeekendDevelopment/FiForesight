@@ -2,11 +2,13 @@
 import asyncio
 import logging
 import math
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
 import yfinance as yf
 from fastapi import APIRouter, HTTPException
+from scipy.stats import norm
 
 from config import Config
 from dependencies import yf_svc
@@ -28,6 +30,28 @@ def _safe_int(v: Any) -> int:
 # ---------------------------------------------------------------------------
 RISK_FREE_RATE      = 0.045   # ~10Y Treasury yield
 EQUITY_RISK_PREMIUM = 0.055   # Damodaran
+
+
+def _bs_greeks(S: float, K: float, T: float, r: float, sigma: float, is_call: bool):
+    """Returns (delta, theta) for a European option (Black-Scholes)."""
+    # yfinance can hand back NaN/inf implied vol; non-finite inputs would
+    # otherwise slip past the `<= 0` checks (NaN comparisons are False) and
+    # yield non-finite Greeks (invalid JSON).
+    if not all(math.isfinite(x) for x in (S, K, T, sigma)):
+        return (0.0, 0.0)
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+        return (0.0, 0.0)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    if is_call:
+        delta = norm.cdf(d1)
+        theta = (-(S * norm.pdf(d1) * sigma) / (2 * math.sqrt(T))
+                 - r * K * math.exp(-r * T) * norm.cdf(d2)) / 365
+    else:
+        delta = norm.cdf(d1) - 1
+        theta = (-(S * norm.pdf(d1) * sigma) / (2 * math.sqrt(T))
+                 + r * K * math.exp(-r * T) * norm.cdf(-d2)) / 365
+    return (round(delta, 3), round(theta, 4))
 
 
 def _run_dcf(
@@ -199,10 +223,14 @@ async def dcf_valuation(symbol: str):
 # ---------------------------------------------------------------------------
 
 @router.get("/options/{symbol}")
-async def options_chain(symbol: str) -> Dict[str, Any]:
+async def options_chain(symbol: str, expiry: Optional[str] = None) -> Dict[str, Any]:
     """
-    Returns the nearest-expiry options chain (calls + puts) for the given symbol.
+    Returns an options chain (calls + puts) for the given symbol.
+
     Filters to strikes within ±25% of current price to keep payload small.
+    Each contract carries Black-Scholes `delta` and `theta`. Aggregate `stats`
+    (put/call ratio, ATM IV, IV skew) are included. An optional `?expiry=`
+    query param selects a specific expiry; defaults to the nearest one.
     """
 
     def _fetch() -> Optional[Dict[str, Any]]:
@@ -210,8 +238,9 @@ async def options_chain(symbol: str) -> Dict[str, Any]:
         expirations = ticker.options
         if not expirations:
             return None
-        expiry = expirations[0]
-        chain  = ticker.option_chain(expiry)
+        # Honour the requested expiry only when it's a real one; else nearest.
+        selected_expiry = expiry if (expiry and expiry in expirations) else expirations[0]
+        chain  = ticker.option_chain(selected_expiry)
         price  = (
             ticker.info.get("currentPrice")
             or ticker.info.get("regularMarketPrice")
@@ -223,12 +252,24 @@ async def options_chain(symbol: str) -> Dict[str, Any]:
             logger.warning("[OPTIONS] Unable to retrieve price for %s", symbol)
             return None
 
+        # Time to expiry in years for the Greeks (floor at 1 day).
+        try:
+            exp_date = datetime.strptime(selected_expiry, "%Y-%m-%d").date()
+            days_to_expiry = (exp_date - date.today()).days
+        except ValueError:
+            days_to_expiry = 30
+        T = max(days_to_expiry, 1) / 365
+
         def _clean(df: Any, is_call: bool) -> List[Dict[str, Any]]:
             rows = []
             for _, r in df.iterrows():
                 strike = float(r.get("strike", 0))
                 if abs(strike - price) / price > 0.25:
                     continue
+                raw_iv = float(r.get("impliedVolatility", 0) or 0)
+                if not math.isfinite(raw_iv) or raw_iv < 0:
+                    raw_iv = 0.0
+                delta, theta = _bs_greeks(price, strike, T, RISK_FREE_RATE, raw_iv, is_call)
                 rows.append({
                     "strike":        round(strike, 2),
                     "last":          round(float(r.get("lastPrice",        0)), 2),
@@ -238,19 +279,43 @@ async def options_chain(symbol: str) -> Dict[str, Any]:
                     "change_pct":    round(float(r.get("percentChange",    0)), 2),
                     "volume":        _safe_int(r.get("volume",       0)),
                     "open_interest": _safe_int(r.get("openInterest", 0)),
-                    "implied_vol":   round(float(r.get("impliedVolatility", 0)) * 100, 1),
+                    "implied_vol":   round(raw_iv * 100, 1),
+                    "delta":         delta,
+                    "theta":         theta,
                     "in_the_money":  bool(r.get("inTheMoney", False)),
                     "type":          "call" if is_call else "put",
                 })
             return rows
 
+        calls = _clean(chain.calls, True)
+        puts  = _clean(chain.puts,  False)
+
+        def _atm_iv(rows: List[Dict[str, Any]]) -> float:
+            """Mean implied vol of contracts within 5% of spot (ATM)."""
+            atm = [r["implied_vol"] for r in rows if abs(r["strike"] - price) / price <= 0.05]
+            return round(sum(atm) / len(atm), 1) if atm else 0.0
+
+        iv_avg_calls = _atm_iv(calls)
+        iv_avg_puts  = _atm_iv(puts)
+        stats = {
+            "put_call_ratio": round(
+                sum(p["open_interest"] for p in puts)
+                / max(sum(c["open_interest"] for c in calls), 1),
+                2,
+            ),
+            "iv_avg_calls": iv_avg_calls,
+            "iv_avg_puts":  iv_avg_puts,
+            "iv_skew":      round(iv_avg_puts - iv_avg_calls, 1),
+        }
+
         return {
             "symbol":        symbol.upper(),
-            "expiry":        expiry,
+            "expiry":        selected_expiry,
             "expirations":   list(expirations[:8]),
             "current_price": round(price, 2),
-            "calls":         _clean(chain.calls, True),
-            "puts":          _clean(chain.puts,  False),
+            "calls":         calls,
+            "puts":          puts,
+            "stats":         stats,
         }
 
     try:
@@ -264,6 +329,110 @@ async def options_chain(symbol: str) -> Dict[str, Any]:
     if result is None:
         raise HTTPException(status_code=404, detail=f"No options data for {symbol}")
     return result
+
+
+# ---------------------------------------------------------------------------
+# Earnings Calendar
+# ---------------------------------------------------------------------------
+
+# Top ~60 S&P 500 constituents by market cap (hardcoded — avoids an index API
+# call). Used only as the watchlist for the earnings calendar.
+# symbol -> company name. yfinance's FastInfo carries no display_name, and
+# calling .info for every ticker would blow the 45s budget — so names for the
+# (hardcoded) watchlist are resolved from this static map, no API cost.
+EARNINGS_NAMES: Dict[str, str] = {
+    "AAPL": "Apple", "MSFT": "Microsoft", "NVDA": "NVIDIA", "AMZN": "Amazon",
+    "GOOGL": "Alphabet", "META": "Meta Platforms", "TSLA": "Tesla", "AVGO": "Broadcom",
+    "BRK-B": "Berkshire Hathaway", "JPM": "JPMorgan Chase", "LLY": "Eli Lilly",
+    "V": "Visa", "UNH": "UnitedHealth", "XOM": "Exxon Mobil", "MA": "Mastercard",
+    "JNJ": "Johnson & Johnson", "PG": "Procter & Gamble", "HD": "Home Depot",
+    "COST": "Costco", "ABBV": "AbbVie", "MRK": "Merck", "CVX": "Chevron",
+    "CRM": "Salesforce", "WMT": "Walmart", "BAC": "Bank of America", "NFLX": "Netflix",
+    "AMD": "Advanced Micro Devices", "KO": "Coca-Cola", "PEP": "PepsiCo",
+    "TMO": "Thermo Fisher", "ACN": "Accenture", "LIN": "Linde", "MCD": "McDonald's",
+    "ABT": "Abbott Laboratories", "CSCO": "Cisco", "ORCL": "Oracle", "GE": "GE Aerospace",
+    "TXN": "Texas Instruments", "ADBE": "Adobe", "PM": "Philip Morris", "DHR": "Danaher",
+    "INTC": "Intel", "QCOM": "Qualcomm", "NEE": "NextEra Energy", "RTX": "RTX Corp",
+    "UPS": "United Parcel Service", "AMGN": "Amgen", "INTU": "Intuit",
+    "IBM": "IBM", "SBUX": "Starbucks", "CAT": "Caterpillar", "GS": "Goldman Sachs",
+    "BLK": "BlackRock", "SPGI": "S&P Global", "AXP": "American Express",
+    "NOW": "ServiceNow", "ISRG": "Intuitive Surgical",
+}
+
+EARNINGS_WATCHLIST = list(EARNINGS_NAMES.keys())
+
+
+@router.get("/earnings/calendar")
+async def earnings_calendar():
+    """Returns upcoming earnings dates for S&P 500 top constituents. Cached 6h."""
+    from redis_cache import cache_get, cache_set
+    CACHE_KEY = "earnings:calendar"
+    cached = await cache_get(CACHE_KEY)
+    if cached:
+        return cached
+
+    def _fetch_earnings():
+        results: Dict[str, List[Dict[str, Any]]] = {}
+        for ticker in EARNINGS_WATCHLIST:
+            try:
+                t = yf.Ticker(ticker)
+                cal = t.calendar  # dict or DataFrame depending on yfinance version
+                if cal is None:
+                    continue
+                if hasattr(cal, "loc"):  # DataFrame
+                    if "Earnings Date" in cal.index:
+                        dates = cal.loc["Earnings Date"]
+                        date_val = (
+                            str(dates.iloc[0])[:10]
+                            if hasattr(dates, "iloc") else str(dates)[:10]
+                        )
+                    else:
+                        continue
+                elif isinstance(cal, dict):
+                    date_val = cal.get("Earnings Date", [None])
+                    if isinstance(date_val, list):
+                        date_val = str(date_val[0])[:10] if date_val else None
+                    else:
+                        date_val = str(date_val)[:10]
+                else:
+                    continue
+                if not date_val or date_val == "None":
+                    continue
+
+                # fast_info is cheaper than .info for market cap; names come
+                # from the static map (FastInfo has no display_name).
+                info = t.fast_info
+                short_name = EARNINGS_NAMES.get(ticker) or getattr(info, "display_name", ticker) or ticker
+                market_cap = getattr(info, "market_cap", 0) or 0
+
+                results.setdefault(date_val, []).append({
+                    "symbol": ticker,
+                    "name": short_name,
+                    "market_cap": market_cap,
+                    "date": date_val,
+                })
+            except Exception:
+                continue
+
+        # Sort each day's entries by market cap desc, keep top 8.
+        calendar: Dict[str, List[Dict[str, Any]]] = {}
+        for date_str, entries in results.items():
+            entries.sort(key=lambda x: x["market_cap"], reverse=True)
+            calendar[date_str] = entries[:8]
+        return calendar
+
+    try:
+        # Intentional exception to the 12s per-fetch guideline: this batches ~57
+        # sequential yfinance calls and runs at most once per 6h (Redis cache),
+        # never on a hot path. 12s cannot complete the full watchlist sweep.
+        data = await asyncio.wait_for(asyncio.to_thread(_fetch_earnings), timeout=45.0)
+    except asyncio.TimeoutError:
+        logger.warning("[EARNINGS] calendar fetch timed out")
+        raise HTTPException(status_code=504, detail="Earnings calendar temporarily unavailable")
+
+    payload = {"calendar": data, "generated_at": datetime.now(timezone.utc).isoformat()}
+    await cache_set(CACHE_KEY, payload, ttl_seconds=21600)  # 6h TTL
+    return payload
 
 
 # ---------------------------------------------------------------------------
