@@ -1,7 +1,7 @@
 # FiForesight Roadmap
 
 > Source of truth for planned work. Feature-based, free-tier only.
-> Last synced: 2026-06-06 — PRs #205 shipped; Features 5–8 planned (prompts written).
+> Last synced: 2026-06-07 — Features 5–7 shipped; Phase C items (L2, jury tools, backtester) shipped ahead of schedule. Feature 8 (IPO Tracker) is the only open Next Up item.
 
 ---
 
@@ -13,12 +13,17 @@
 - Historical forecast tracking & per-model accuracy/MAE (`ForecastTrackingService`)
 - Monte Carlo GBM simulation — 1000 paths, VaR-95, p10/p50/p90, fan chart + 3D surface
 - Volume Profile panel
+- Dynamic chart time intervals (1D/5D/1M/3M/6M/1Y/2Y) — `GET /history`, VWAP overlay, contextual metrics (#208)
+- Chart zoom/pan across all intervals — drop classic view, AdvancedChart timestamp hardening (#221)
+- Walk-forward backtester — rolling 252-day train → 5-day predict, per-model MAE + directional accuracy (#222)
 
 ### Intelligence
-- 3-model LLM Analyst Jury (Llama 4 Scout, Llama 3.3 70B, Qwen3 32B) via Groq + LangGraph
+- 3-model LLM Analyst Jury (Llama 4 Scout, Llama 3.3 70B, GPT-OSS 20B) via Groq + LangGraph
 - VADER sentiment scoring on news headlines
 - Stock Chat Agent — SSE streaming via `POST /chat`
 - Trade Setup Generator — entry/stop/3 targets + R:R + Groq rationale
+- Tool-using jury agents — Groq function calling; tools: `get_vix`, `get_put_call_ratio`, `get_insider_flow`, `get_macro_snapshot`; jury re-analysis UI (#220)
+- Jury quant lens swapped to `openai/gpt-oss-20b`; verdict parsing hardened; malformed output tracked (#226)
 
 ### Data & UX
 - SerpAPI news + trending sparklines
@@ -31,180 +36,89 @@
 - Position sizing (1% rule) — Monte Carlo VaR-based % of portfolio risk in Trade Setup Card (#191)
 - Options chain panel — calls/puts table, ITM highlight, expiry selector (#194)
 - Morning briefing (Market Pulse strip) — `MorningBriefingPanel`, `GET /briefing` (#205)
-- "Why did this move?" explainer — `WhyDidMoveCard`, `predict.py:moveExplanation`, >3% trigger (#205)
+- "Why did this move?" explainer — `WhyDidMoveCard`, >3% trigger, fallback to top headline (#205)
 - Sector heatmap — `SectorHeatmap`, `GET /sectors`, 11 SPDR ETFs (#205)
+- Level 2 order book — `OrderBookPanel`, Alpaca Markets (US equities) + Coinbase (crypto) (#209)
+- URL-persistent analysis tab — `?symbol=` param, `router.replace` after predict, watchlist quick-launch (#228)
+- VWAP intraday overlay — dashed line + ±1σ bands on 1D/5D intervals (#228)
+
+### Navigation & Architecture
+- App Shell sidebar — collapsible, mobile bottom nav, `AppShellContext`, theme + auth in footer (#223)
+- Landing page — lightweight: MorningBriefingPanel + SectorHeatmap + TrendingSparklines + search (#223)
+- Standalone Options Chain tab (`/options`) — self-fetching `OptionsChainPanel`, symbol search (#225)
+- Earnings Calendar tab (`/earnings`) — top 60 S&P 500, top 8/day, Redis 6h TTL (#225)
+- Options Greeks (Δ, Θ) + aggregate stats (IV, put/call ratio, IV skew) (#225)
+- Expiry selector on options chain (#225)
 
 ### Auth & Backend
 - Supabase email/password auth — `AuthContext`, `AuthModal`, watchlist groundwork (#193)
 - Backend pytest harness — 22 tests, no network calls (`backend/tests/`) (#192)
 - Router split — `main.py` → `routers/predict.py`, `simulation.py`, `trade.py`, `market.py` (#195)
+- App-tester QA fixes — jury consensus, DCF edge cases, SerpAPI, StockTwits, order book (#211)
+- Groq quota-exhaustion resilience — failure caching (5 min TTL), LangGraph fallback under New Relic (#208)
 
 ### Infra
 - Redis caching layer (`redis_cache.py`)
 - InfluxDB OHLCV cache (2Y)
 - New Relic APM (backend + frontend)
 - HTTPS, Docker multi-stage, Koyeb + Oracle Cloud deploys
-- GitHub Actions: PR preview + prod deploy
+- GitHub Actions: PR preview + prod deploy; Alpaca API key wired through pipeline (#209)
 - FastMCP server (`mcp_server.py`)
 
 ---
 
-## Next Up — Features 5–8
-> Prompts written (2026-06-06). Implement in order — each feature depends on the previous being merged.
-
-### Feature 5 · App Shell + Landing Page Restructure
-**Branch:** `feat/app-shell-navigation`
-
-Introduce a persistent sidebar nav and restructure the app into a multi-tab architecture.
-This is the foundational refactor — all subsequent features depend on it.
-
-- Create Next.js route group `frontend/app/(app)/` with shared `AppShellContext`
-  (isDark, primaryColor, themeMode)
-- **AppShell layout** — fixed left sidebar (collapsible to icon-only, persisted in
-  localStorage), bottom nav on mobile. Items: Home · Analysis · Options · Earnings ·
-  IPO Tracker · Portfolio
-- **New landing page `/`** — lightweight: MorningBriefingPanel + SectorHeatmap +
-  TrendingSparklines + large search bar. Search navigates to `/analysis?symbol=X`.
-  Market open/closed status badge.
-- **`/analysis` page** — current `page.tsx` moved here. Reads `?symbol` param and
-  auto-triggers prediction. Theme/auth controls move to sidebar footer.
-- **Placeholder pages** — `/options`, `/earnings`, `/ipo` (filled in Features 6–8)
-- **No new API calls** — pure structural refactor
-
-**Files:**
-```
-CREATE  frontend/app/(app)/layout.tsx          ← AppShell + sidebar
-CREATE  frontend/app/(app)/page.tsx            ← New landing
-CREATE  frontend/app/(app)/analysis/page.tsx   ← Moved from app/page.tsx
-CREATE  frontend/app/(app)/options/page.tsx    ← Placeholder
-CREATE  frontend/app/(app)/earnings/page.tsx   ← Placeholder
-CREATE  frontend/app/(app)/ipo/page.tsx        ← Placeholder
-CREATE  frontend/contexts/AppShellContext.tsx
-DELETE  frontend/app/page.tsx
-```
-
----
-
-### Feature 6 · Options Chain Tab + Earnings Calendar Tab
-**Branch:** `feat/options-earnings-tabs`
-**Depends on:** Feature 5
-
-**Options Chain (`/options`):**
-- Convert `OptionsChainPanel` from prop-fed → self-fetching (backward-compatible: still
-  accepts `data` prop for the analysis tab)
-- Add `?expiry=` query param to `GET /options/{symbol}` backend endpoint
-- Black-Scholes Greeks (Delta + Theta) per contract via `scipy.stats.norm`
-- Aggregate stats: put/call ratio, ATM IV calls/puts, IV skew
-- Standalone `/options` page with symbol search — no prediction flow required
-
-**Earnings Calendar (`/earnings`):**
-- New `GET /earnings/calendar` backend endpoint in `market.py`
-- Fetches `yf.Ticker().calendar` for top 60 S&P 500 stocks (hardcoded list)
-- Returns `{ calendar: { "YYYY-MM-DD": [{symbol, name, market_cap}] } }`, top 8 per day
-- Redis 6h TTL; 45s asyncio timeout (60 yfinance calls)
-- Frontend: "This Week / This Month / Next Month / All" tab filter
-- Card grid — clicking any card navigates to `/analysis?symbol=X`
-
-**Files:**
-```
-MODIFY  backend/routers/market.py              ← Greeks, stats, expiry param, earnings endpoint
-MODIFY  frontend/components/OptionsChainPanel.tsx ← Self-fetching + Greeks columns + stats bar
-CREATE  frontend/app/(app)/options/page.tsx    ← Replace placeholder
-CREATE  frontend/app/(app)/earnings/page.tsx   ← Replace placeholder
-CREATE  frontend/app/api/earnings/route.ts
-MODIFY  frontend/app/api/options/[symbol]/route.ts ← Forward expiry param
-```
-
----
-
-### Feature 7 · Ticker Analysis Tab Polish
-**Branch:** `feat/analysis-tab-polish`
-**Depends on:** Features 5 + 6
-
-**A. Dynamic chart time intervals** *(highest priority — in roadmap since last session)*
-- New `GET /history?symbol=&period=&interval=` endpoint
-- Supported combos: 1D/5m · 5D/15m · 1M/1h · 3M/1d · 6M/1d · 1Y/1d · 2Y/1d
-- Returns OHLCV bars + computed metrics: change_pct, period_high, period_low, sma20,
-  ann_vol, rsi_series, vwap_series (intraday only)
-- Redis TTL: 5 min intraday, 15 min daily
-- Segmented button row on `PriceChartCard` — default 2Y (no regression)
-- Metric chips update to match selected interval
-- VWAP dashed overlay for intraday intervals (1D/5D), toggle button
-
-**B. Persistent symbol in URL**
-- After prediction, `router.replace('/analysis?symbol=NVDA', { scroll: false })`
-- Reload/share URL preserves the last searched ticker
-
-**C. Watchlist quick-launch**
-- Watchlist chip click → triggers prediction AND updates URL
-
-**Files:**
-```
-CREATE  backend/routers/market.py (or predict.py) ← GET /history endpoint
-CREATE  frontend/app/api/history/route.ts
-MODIFY  frontend/components/PriceChartCard.tsx    ← Interval selector + VWAP overlay
-MODIFY  frontend/app/(app)/analysis/page.tsx      ← URL persistence + watchlist fix
-```
-
----
+## Next Up
 
 ### Feature 8 · IPO Tracker Tab
 **Branch:** `feat/ipo-tracker`
-**Depends on:** Features 5 + 6 + 7
+**Depends on:** Features 5, 6, 7 (all merged ✅)
 
-- New `GET /ipo/calendar` endpoint in `market.py`
+Standalone `/ipo` tab replacing the placeholder left by Feature 5.
+
+- New `GET /ipo/calendar` endpoint in `backend/routers/market.py`
 - **Primary source:** Financial Modeling Prep free tier (`FMP_API_KEY` env var, optional)
-  → upcoming 90 days + recent 30 days IPOs with symbol, exchange, price range,
-  shares offered, estimated market cap, status (expected/priced/withdrawn)
-- **Fallback:** SEC EDGAR S-1 filings search (no API key, always available)
-- `httpx` for async HTTP (non-blocking — do NOT use `requests` in async context)
+  → upcoming 90 days + recent 30 days IPOs: symbol, exchange, price range, shares, market cap, status
+- **Fallback:** SEC EDGAR S-1 filings search (no key, always available)
+- `httpx` for async HTTP (verify it's in `requirements.txt`, add if missing)
 - Redis 4h TTL
 - Frontend: "Upcoming / Recent" tabs, IPO cards with all details
-- Clicking a priced IPO card with known symbol → navigates to `/analysis?symbol=X`
-- Graceful degradation: if FMP key absent, shows EDGAR fallback with note explaining
-  how to enable full data
+- Clicking a priced IPO with known symbol → `/analysis?symbol=X`
+- Graceful degradation: EDGAR fallback with note explaining how to add FMP key
 
-**New env var (optional):**
+**New optional env var:**
 ```
-FMP_API_KEY=    # Free at financialmodelingprep.com — unlocks IPO calendar
+FMP_API_KEY=    # Free at financialmodelingprep.com — unlocks full IPO calendar
 ```
 
 **Files:**
 ```
-MODIFY  backend/routers/market.py              ← GET /ipo/calendar
-MODIFY  backend/requirements.txt               ← Add httpx if not present
-CREATE  frontend/app/(app)/ipo/page.tsx        ← Replace placeholder
+MODIFY  backend/routers/market.py
+MODIFY  backend/requirements.txt      ← add httpx if missing
+CREATE  frontend/app/(app)/ipo/page.tsx
 CREATE  frontend/app/api/ipo/route.ts
 ```
 
 ---
 
-## Quick Wins (small, self-contained, high UX value)
+## Quick Wins
 
-### QW-1 · Intraday Sparklines — replace static trending ticker list
-**Current:** `TrendingSparklines` shows hardcoded popular tickers (NVDA, AAPL, MSFT,
-TSLA, AMZN, META, GOOGL, AMD, AVGO, SPY, QQQ, BTC-USD) with a static multi-day
-sparkline and % change (SerpAPI trending symbols, weekly data).
+### QW-1 · Intraday Sparklines (replace static trending ticker list)
+**Current:** `TrendingSparklines` shows a hardcoded popular ticker list with static
+multi-day sparklines and % change from SerpAPI weekly data.
 
-**Desired:** Replace the sparkline data source with **1 trading day / last trading day
-intraday bars** (`period="1d", interval="5m"`) so each mini-chart shows the actual
-intraday price path for that session — far more actionable and visually dynamic.
+**Desired:** Replace with **1 trading day / last trading day intraday bars**
+(`period="1d", interval="5m"`) — each mini-chart shows the actual intraday price path.
 
-- **Backend** — extend `GET /sparklines` (in `routers/predict.py`) or add a new
-  `GET /sparklines/intraday` endpoint. For each ticker, fetch `yf.download(t, period="1d",
-  interval="5m")`. Return `{ symbol, prices: [float], change_pct, current_price }`.
-  Redis 5-min TTL (intraday data changes every tick). 12s asyncio timeout.
-- **Frontend** — `TrendingSparklines.tsx`: swap the existing data fetch to the new
-  endpoint. The Recharts `LineChart` already exists — just feed it intraday closes instead
-  of multi-day closes. Label change: "Trending" → "Today" (or "Last Session" if market
-  is closed). % change = (last bar − first bar) / first bar × 100 for the trading day.
-- **On landing page:** same component, same position — no layout change needed.
-- **On ticker/analysis page:** the same `TrendingSparklines` strip can remain in the
-  right sidebar (currently it appears there); it will automatically benefit from the
-  backend change — no separate wiring needed.
-- **Dynamic ticker list:** optionally make the list dynamic — pull from SerpAPI trending
-  symbols (already fetched) and augment with SPY/QQQ/BTC-USD as anchors, so the strip
-  reflects what's actually moving that day rather than a hardcoded list.
+- **Backend** — extend `GET /sparklines` (in `routers/predict.py`) or new
+  `GET /sparklines/intraday`. Per ticker: `yf.download(t, period="1d", interval="5m")`.
+  Return `{ symbol, prices: [float], change_pct, current_price }`. Redis 5-min TTL.
+  `asyncio.wait_for(timeout=12)`.
+- **Frontend** — `TrendingSparklines.tsx`: swap data source to new endpoint.
+  Label change: "Trending" → "Today" (or "Last Session" if market closed).
+  % change = (last bar − first bar) / first bar for the session.
+- **Dynamic list (optional):** pull from SerpAPI trending symbols + SPY/QQQ/BTC-USD
+  as anchors so the strip reflects what's actually moving, not a hardcoded list.
+- One backend change propagates to both landing page and analysis page sidebar.
 
 **Files:** `backend/routers/predict.py` (or `market.py`), `frontend/components/TrendingSparklines.tsx`, `frontend/app/api/sparklines/route.ts`
 **Effort:** ½ day
@@ -219,8 +133,9 @@ intraday price path for that session — far more actionable and visually dynami
 | ATR (Average True Range) → adaptive stops | High | Low | Replace flat % stops in TradeSetup; `stop = entry ± 2×ATR` |
 | RSI + MACD divergence detection | High | Med | `scipy.signal.find_peaks`; annotate chart; inject into jury context |
 | Earnings surprise history | High | Low | `yf.Ticker().earnings_history` → last 4Q EPS beat/miss table |
-| Options Greeks (Δ, Θ) + IV rank + put/call ratio | High | Med | Black-Scholes via `scipy.stats.norm`; partial in Feature 6 |
 | RandomForest feature importance | Med | Low | `rf.feature_importances_` post-fit → top-5 bar chart |
+
+> Note: Options Greeks + IV rank + put/call ratio are partially shipped in PR #225.
 
 ---
 
@@ -229,27 +144,27 @@ intraday price path for that session — far more actionable and visually dynami
 
 | Feature | Value | Effort | Notes |
 |---|---|---|---|
-| Insider transactions (SEC EDGAR Form 4) | High | Med | Free, no key — `efts.sec.gov` search; last 10 Form 4 filings |
-| FRED macro context → jury prompts | High | Med | `DGS10`, `CPIAUCSL`, `UNRATE`, `FEDFUNDS`, `T10Y2Y`; inject into analyst context |
-| Regime detection (HMM via `hmmlearn`) | High | Med | 3-state Gaussian HMM; labels: trending_up / ranging / trending_down; badge on jury panel |
+| Insider transactions (SEC EDGAR Form 4) | High | Med | Free, no key — `efts.sec.gov`; last 10 Form 4 filings per ticker |
+| FRED macro context → jury prompts | High | Med | `DGS10`, `CPIAUCSL`, `UNRATE`, `FEDFUNDS`, `T10Y2Y`; inject into analyst system prompt |
+| Regime detection (HMM via `hmmlearn`) | High | Med | 3-state Gaussian HMM on returns + vol; label badge on jury panel |
 | Jury dissent surfacing | Med | Low | When split 2-1, extract minority rationale → amber "Dissenting View" card |
-| VWAP intraday overlay | Med | Low | Partial in Feature 7; standalone: `/history` endpoint already covers this |
-| Reddit sentiment (PRAW — free) | Med | High | `r/wallstreetbets` + `r/stocks` mention count + VADER score; needs Reddit API account |
-| Google Trends signal (`pytrends`) | Med | Med | Relative search interest for `"{symbol} stock"`; fragile dependency |
+| Reddit sentiment (PRAW — free) | Med | High | `r/wallstreetbets` + `r/stocks` mention count + VADER; needs Reddit API account |
+| Google Trends signal (`pytrends`) | Med | Med | Relative search interest for `"{symbol} stock"`; fragile but free |
 
 ---
 
 ## Phase C Backlog — New Architecture
 > Research complete (2026-06-06). Prompt written.
+> ✅ Level 2 order book, tool-using jury agents, and walk-forward backtester already shipped (PRs #209, #220, #222).
 
-| Feature | Value | Effort | Notes |
-|---|---|---|---|
-| Tool-using jury agents (Groq function calling) | High | High | Give agents tools: `get_vix()`, `get_put_call_ratio()`, `get_insider_flow()`, `get_macro_snapshot()` |
-| Walk-forward backtester | High | High | Rolling 252-day train → 5-day predict → step 21 days; per-model MAE + directional accuracy |
-| Level 2 order book (Alpaca free paper trading) | Med | High | WebSocket → top 10 bid/ask levels; ladder UI; needs Alpaca account |
-| Custom alert rule builder | High | High | Needs auth + background worker |
-| Isolation Forest anomaly detection | Med | High | Flag statistical outliers in price/volume series |
-| Pattern detection (`scipy.signal.find_peaks`) | Med | Med | Head & shoulders, double top/bottom, flag/pennant |
+| Feature | Value | Effort | Status | Notes |
+|---|---|---|---|---|
+| ~~Level 2 order book~~ | ~~High~~ | ~~High~~ | ✅ Shipped #209 | Alpaca (US equities) + Coinbase (crypto) |
+| ~~Tool-using jury agents~~ | ~~High~~ | ~~High~~ | ✅ Shipped #220 | Groq function calling; `get_vix`, `get_put_call_ratio`, `get_insider_flow`, `get_macro_snapshot` |
+| ~~Walk-forward backtester~~ | ~~High~~ | ~~High~~ | ✅ Shipped #222 | Rolling 252-day train → 5-day predict; per-model MAE + directional accuracy |
+| Custom alert rule builder | High | High | Pending | Needs auth + background worker |
+| Isolation Forest anomaly detection | Med | High | Pending | Flag statistical outliers in price/volume |
+| Pattern detection (`scipy.signal.find_peaks`) | Med | Med | Pending | Head & shoulders, double top/bottom, flag/pennant |
 
 ---
 
@@ -257,13 +172,12 @@ intraday price path for that session — far more actionable and visually dynami
 
 | Feature | Value | Effort | Notes |
 |---|---|---|---|
-| Walk-forward backtester | High | High | Already in Phase C |
-| Watchlist persistent (Supabase) | High | Med | Auth shipped; watchlist UI second pass |
+| Watchlist persistence (Supabase) | High | Med | Auth shipped; watchlist UI is second pass |
 | Daily briefing email / push | High | High | Needs worker + Supabase edge function |
 | Multi-ticker overlay comparison | Med | Low | Ratio chart (stock vs SPY); rolling correlation |
 | International markets | Med | Med | yfinance supports non-US tickers |
-| Macro dashboard (FRED API — standalone page) | Med | Med | GDP, CPI, rates, yield curve as a dedicated `/macro` tab |
-| Earnings call transcript sentiment | Med | High | SEC EDGAR free; NLP on 10-Q/8-K text |
+| Macro dashboard (FRED — standalone `/macro` tab) | Med | Med | GDP, CPI, rates, yield curve |
+| Earnings call transcript sentiment | Med | High | SEC EDGAR free; NLP on 10-Q/8-K filings |
 | Short interest tracker | Med | Med | FINRA ATS transparency (free weekly data) |
 
 ---
@@ -276,13 +190,14 @@ All features use free APIs / free tiers / self-hosted:
 |---|---|---|
 | **yfinance** | Market data, history, fundamentals | No |
 | **SerpAPI** | News headlines, trending symbols | Yes (free tier) |
-| **Groq** | LLM jury (Llama 4 Scout, Llama 3.3 70B, Qwen3 32B) | Yes (free tier) |
+| **Groq** | LLM jury (Llama 4 Scout, Llama 3.3 70B, GPT-OSS 20B) | Yes (free tier) |
 | **VADER** | Headline sentiment scoring | No (local) |
 | **Supabase** | Auth + watchlist persistence | Yes (free tier) |
-| **FRED API** | Macro indicators (GDP, CPI, rates) | No (read-only) |
+| **FRED API** | Macro indicators (Phase B) | No (read-only) |
 | **SEC EDGAR** | Form 4 insider filings, S-1 IPO filings | No |
 | **FMP** | IPO calendar (Feature 8) | Yes (free tier, 250 req/day) |
-| **Alpaca** | Level 2 order book (Phase C) | Yes (free paper trading) |
+| **Alpaca** | Level 2 order book — US equities | Yes (free paper trading) |
+| **Coinbase** | Level 2 order book — crypto | No (public WebSocket) |
 | **PRAW / Reddit** | Social sentiment (Phase B) | Yes (free dev account) |
 | **InfluxDB** | OHLCV time-series cache | Self-hosted (Oracle) |
 | **Redis** | Response caching | Self-hosted |
