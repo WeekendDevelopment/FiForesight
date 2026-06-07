@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useState, useMemo, useEffect, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import React, { useState, useMemo, useEffect, useRef, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import axios from 'axios';
 import {
   Box, Container, Typography, TextField, Button, Card, CardContent,
@@ -59,8 +59,12 @@ const POPULAR_TICKERS = [
 
 function AnalysisContent() {
   const { isDark, primaryColor } = useAppShell();
+  const router        = useRouter();
   const searchParams  = useSearchParams();
   const symbolFromUrl = searchParams.get('symbol');
+  // Base ticker (no exchange suffix) most recently fetched — guards the URL-sync
+  // effect below so a programmatic router.replace doesn't re-trigger a fetch.
+  const lastLoadedRef = useRef<string | null>(null);
 
   const [ticker,           setTicker]           = useState('NVDA');
   const [exchange,         setExchange]         = useState('');
@@ -112,6 +116,9 @@ function AnalysisContent() {
       fullSymbol = exchange ? `${ticker}:${exchange}` : ticker;
     }
     const baseSymbol = fullSymbol.split(':')[0];
+    // Record before fetching so the router.replace below (which changes the URL,
+    // and therefore symbolFromUrl) doesn't bounce back into a duplicate fetch.
+    lastLoadedRef.current = baseSymbol;
 
     setLoading(true);
     setError(null);
@@ -122,6 +129,9 @@ function AnalysisContent() {
     try {
       const response = await axios.post('/api/predict', { data: fullSymbol });
       setPrediction(response.data);
+      // Persist the ticker in the URL so the view is shareable, reload-safe, and
+      // back/forward navigable. scroll:false keeps the current scroll position.
+      router.replace(`/analysis?symbol=${encodeURIComponent(baseSymbol)}`, { scroll: false });
       if (user) {
         fetchTradeSetup(response.data);
       } else {
@@ -143,9 +153,11 @@ function AnalysisContent() {
     }
   };
 
-  // Auto-trigger analysis when arriving with a ?symbol= query (e.g. from the landing search).
+  // Auto-trigger analysis when the ?symbol= query changes — on first load (e.g.
+  // from the landing search) and on browser back/forward. Skips the case where
+  // the change came from our own router.replace after a fetch (guarded by ref).
   useEffect(() => {
-    if (symbolFromUrl) {
+    if (symbolFromUrl && symbolFromUrl.toUpperCase() !== lastLoadedRef.current) {
       handlePredict(symbolFromUrl);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -421,7 +433,7 @@ function AnalysisContent() {
                           key={sym}
                           label={sym}
                           size="small"
-                          onClick={() => setTicker(sym)}
+                          onClick={() => handlePredict(sym)}
                           onDelete={() => void toggleWatchlist(sym)}
                           sx={{
                             cursor: 'pointer',
