@@ -2,7 +2,6 @@
 import asyncio
 import logging
 import math
-import os
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -485,7 +484,7 @@ async def ipo_calendar() -> Dict[str, Any]:
     if cached:
         return cached
 
-    fmp_key = os.getenv("FMP_API_KEY", "").strip()
+    fmp_key = (Config.FMP_API_KEY or "").strip()
     today = date.today()
 
     async def _fetch_fmp() -> List[Dict[str, Any]]:

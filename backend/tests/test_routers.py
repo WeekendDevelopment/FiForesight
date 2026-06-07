@@ -2,7 +2,6 @@
 Router tests — trade setup, DCF valuation, options chain.
 All external calls are mocked; no network required.
 """
-import os
 from datetime import date, timedelta
 from typing import Any, Dict, List, Tuple
 from unittest.mock import patch, AsyncMock, MagicMock
@@ -453,7 +452,7 @@ def test_ipo_calendar_fmp_split_and_shapes() -> None:
             "marketCap": 800_000_000, "priceLow": 20, "priceHigh": 24,
         },
     ]
-    with patch.dict(os.environ, {"FMP_API_KEY": "test-key"}), \
+    with patch("backend.routers.market.Config.FMP_API_KEY", "test-key"), \
             patch("backend.routers.market.httpx.AsyncClient", _mock_httpx_client(raw)):
         resp = client.get("/ipo/calendar")
     assert resp.status_code == 200
@@ -491,7 +490,7 @@ def test_ipo_calendar_edgar_fallback_without_key() -> None:
         }
     }
     # Empty key (after strip) forces the EDGAR fallback branch.
-    with patch.dict(os.environ, {"FMP_API_KEY": ""}), \
+    with patch("backend.routers.market.Config.FMP_API_KEY", ""), \
             patch("backend.routers.market.httpx.AsyncClient", _mock_httpx_client(edgar_payload)):
         resp = client.get("/ipo/calendar")
     assert resp.status_code == 200
