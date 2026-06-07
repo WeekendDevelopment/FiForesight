@@ -179,6 +179,38 @@ CREATE  frontend/app/api/ipo/route.ts
 
 ---
 
+## Quick Wins (small, self-contained, high UX value)
+
+### QW-1 · Intraday Sparklines — replace static trending ticker list
+**Current:** `TrendingSparklines` shows hardcoded popular tickers (NVDA, AAPL, MSFT,
+TSLA, AMZN, META, GOOGL, AMD, AVGO, SPY, QQQ, BTC-USD) with a static multi-day
+sparkline and % change (SerpAPI trending symbols, weekly data).
+
+**Desired:** Replace the sparkline data source with **1 trading day / last trading day
+intraday bars** (`period="1d", interval="5m"`) so each mini-chart shows the actual
+intraday price path for that session — far more actionable and visually dynamic.
+
+- **Backend** — extend `GET /sparklines` (in `routers/predict.py`) or add a new
+  `GET /sparklines/intraday` endpoint. For each ticker, fetch `yf.download(t, period="1d",
+  interval="5m")`. Return `{ symbol, prices: [float], change_pct, current_price }`.
+  Redis 5-min TTL (intraday data changes every tick). 12s asyncio timeout.
+- **Frontend** — `TrendingSparklines.tsx`: swap the existing data fetch to the new
+  endpoint. The Recharts `LineChart` already exists — just feed it intraday closes instead
+  of multi-day closes. Label change: "Trending" → "Today" (or "Last Session" if market
+  is closed). % change = (last bar − first bar) / first bar × 100 for the trading day.
+- **On landing page:** same component, same position — no layout change needed.
+- **On ticker/analysis page:** the same `TrendingSparklines` strip can remain in the
+  right sidebar (currently it appears there); it will automatically benefit from the
+  backend change — no separate wiring needed.
+- **Dynamic ticker list:** optionally make the list dynamic — pull from SerpAPI trending
+  symbols (already fetched) and augment with SPY/QQQ/BTC-USD as anchors, so the strip
+  reflects what's actually moving that day rather than a hardcoded list.
+
+**Files:** `backend/routers/predict.py` (or `market.py`), `frontend/components/TrendingSparklines.tsx`, `frontend/app/api/sparklines/route.ts`
+**Effort:** ½ day
+
+---
+
 ## Phase A Backlog — More Signal, Same Stack
 > Research complete (2026-06-06). Prompt written. No new APIs required.
 
