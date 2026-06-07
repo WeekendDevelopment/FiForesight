@@ -2,6 +2,8 @@
 Router tests — trade setup, DCF valuation, options chain.
 All external calls are mocked; no network required.
 """
+import os
+from datetime import date, timedelta
 from typing import Any, Dict, List, Tuple
 from unittest.mock import patch, AsyncMock, MagicMock
 from fastapi import FastAPI
@@ -413,3 +415,90 @@ def test_earnings_calendar_skips_missing_dates() -> None:
         resp = client.get("/earnings/calendar")
     assert resp.status_code == 200
     assert resp.json()["calendar"] == {}
+
+
+# ---------------------------------------------------------------------------
+# IPO calendar tests
+# ---------------------------------------------------------------------------
+
+def _mock_httpx_client(json_payload: Any) -> MagicMock:
+    """Build a drop-in for ``httpx.AsyncClient`` usable as an async context
+    manager, whose ``.get()`` resolves to a response carrying ``json_payload``."""
+    resp = MagicMock()
+    resp.raise_for_status = MagicMock()
+    resp.json = MagicMock(return_value=json_payload)
+
+    http = MagicMock()
+    http.get = AsyncMock(return_value=resp)
+
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=http)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=cm)
+
+
+def test_ipo_calendar_fmp_split_and_shapes() -> None:
+    today = date.today()
+    upcoming_date = (today + timedelta(days=10)).isoformat()
+    recent_date = (today - timedelta(days=5)).isoformat()
+    raw = [
+        {
+            "date": upcoming_date, "company": "Upcoming Co", "symbol": "UPCO",
+            "exchange": "NASDAQ", "actions": "expected", "shares": 5_200_000,
+            "marketCap": 1_200_000_000, "priceRange": "$18-$22",
+        },
+        {
+            "date": recent_date, "company": "Recent Co", "symbol": "RECO",
+            "exchange": "NYSE", "actions": "priced", "shares": 3_000_000,
+            "marketCap": 800_000_000, "priceLow": 20, "priceHigh": 24,
+        },
+    ]
+    with patch.dict(os.environ, {"FMP_API_KEY": "test-key"}), \
+            patch("backend.routers.market.httpx.AsyncClient", _mock_httpx_client(raw)):
+        resp = client.get("/ipo/calendar")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["source"] == "fmp"
+    assert "generated_at" in payload
+
+    # Upcoming / recent split is driven by date vs. today.
+    assert len(payload["upcoming"]) == 1
+    assert len(payload["recent"]) == 1
+
+    up = payload["upcoming"][0]
+    assert up["symbol"] == "UPCO" and up["status"] == "upcoming"
+    assert up["price_low"] == 18 and up["price_high"] == 22  # parsed from "$18-$22"
+
+    rec = payload["recent"][0]
+    assert rec["symbol"] == "RECO" and rec["status"] == "recent"
+    assert rec["price_low"] == 20 and rec["price_high"] == 24
+
+    # Every card carries the full, stable shape the frontend renders.
+    for key in (
+        "symbol", "company", "exchange", "date", "price_low",
+        "price_high", "shares", "market_cap", "actions", "status",
+    ):
+        assert key in up
+
+
+def test_ipo_calendar_edgar_fallback_without_key() -> None:
+    edgar_payload = {
+        "hits": {
+            "hits": [
+                {"_source": {"display_names": ["Newco Inc."], "file_date": "2026-05-20"}},
+                {"_source": {"display_names": [], "file_date": "2026-05-18"}},
+            ]
+        }
+    }
+    # Empty key (after strip) forces the EDGAR fallback branch.
+    with patch.dict(os.environ, {"FMP_API_KEY": ""}), \
+            patch("backend.routers.market.httpx.AsyncClient", _mock_httpx_client(edgar_payload)):
+        resp = client.get("/ipo/calendar")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["source"] == "edgar"
+    # EDGAR rows are all classified as recent S-1 filings.
+    assert len(payload["recent"]) == 2
+    assert payload["recent"][0]["actions"] == "S-1 Filed"
+    assert payload["recent"][0]["company"] == "Newco Inc."
+    assert payload["recent"][1]["company"] == "Unknown"

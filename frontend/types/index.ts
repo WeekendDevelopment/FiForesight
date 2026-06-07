@@ -199,6 +199,26 @@ export interface EarningsCalendarResult {
   generated_at: string;
 }
 
+export interface IpoEntry {
+  symbol:     string;
+  company:    string;
+  exchange:   string;
+  date:       string;
+  price_low:  number | null;
+  price_high: number | null;
+  shares:     number | null;
+  market_cap: number | null;
+  actions:    string;
+  status:     'upcoming' | 'recent';
+}
+
+export interface IpoCalendarResult {
+  upcoming:     IpoEntry[];
+  recent:       IpoEntry[];
+  source:       'fmp' | 'edgar';
+  generated_at: string;
+}
+
 export interface IntervalStats {
   change_pct:  number;
   period_high: number;
