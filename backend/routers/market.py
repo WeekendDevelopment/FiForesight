@@ -34,6 +34,11 @@ EQUITY_RISK_PREMIUM = 0.055   # Damodaran
 
 def _bs_greeks(S: float, K: float, T: float, r: float, sigma: float, is_call: bool):
     """Returns (delta, theta) for a European option (Black-Scholes)."""
+    # yfinance can hand back NaN/inf implied vol; non-finite inputs would
+    # otherwise slip past the `<= 0` checks (NaN comparisons are False) and
+    # yield non-finite Greeks (invalid JSON).
+    if not all(math.isfinite(x) for x in (S, K, T, sigma)):
+        return (0.0, 0.0)
     if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
         return (0.0, 0.0)
     d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
@@ -261,7 +266,9 @@ async def options_chain(symbol: str, expiry: Optional[str] = None) -> Dict[str, 
                 strike = float(r.get("strike", 0))
                 if abs(strike - price) / price > 0.25:
                     continue
-                raw_iv = float(r.get("impliedVolatility", 0))
+                raw_iv = float(r.get("impliedVolatility", 0) or 0)
+                if not math.isfinite(raw_iv) or raw_iv < 0:
+                    raw_iv = 0.0
                 delta, theta = _bs_greeks(price, strike, T, RISK_FREE_RATE, raw_iv, is_call)
                 rows.append({
                     "strike":        round(strike, 2),
@@ -415,6 +422,9 @@ async def earnings_calendar():
         return calendar
 
     try:
+        # Intentional exception to the 12s per-fetch guideline: this batches ~57
+        # sequential yfinance calls and runs at most once per 6h (Redis cache),
+        # never on a hot path. 12s cannot complete the full watchlist sweep.
         data = await asyncio.wait_for(asyncio.to_thread(_fetch_earnings), timeout=45.0)
     except asyncio.TimeoutError:
         logger.warning("[EARNINGS] calendar fetch timed out")

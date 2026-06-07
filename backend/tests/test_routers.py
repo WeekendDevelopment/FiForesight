@@ -338,6 +338,32 @@ def test_options_chain_includes_stats() -> None:
     assert stats["put_call_ratio"] >= 0
 
 
+def test_options_chain_handles_nan_iv() -> None:
+    """A NaN impliedVolatility must not produce non-finite (invalid-JSON) Greeks."""
+    import math as _math
+
+    strikes = [145, 150, 155]
+    calls_df = _make_options_df(strikes, 150.0, is_call=True)
+    puts_df  = _make_options_df(strikes, 150.0, is_call=False)
+    calls_df.loc[:, "impliedVolatility"] = _math.nan  # poison the IV column
+
+    chain = MagicMock()
+    chain.calls = calls_df
+    chain.puts  = puts_df
+    ticker = MagicMock()
+    ticker.options = ["2026-06-20"]
+    ticker.option_chain.return_value = chain
+    ticker.info = {"currentPrice": 150.0}
+
+    with patch("backend.routers.market.yf.Ticker", MagicMock(return_value=ticker)):
+        resp = client.get("/options/AAPL")
+    assert resp.status_code == 200
+    for c in resp.json()["calls"]:
+        assert _math.isfinite(c["delta"]) and _math.isfinite(c["theta"])
+        assert _math.isfinite(c["implied_vol"])
+        assert c["delta"] == 0.0 and c["theta"] == 0.0  # guarded → neutral
+
+
 def test_options_chain_expiry_param_selects_expiry() -> None:
     """A valid ?expiry= picks that expiry; an unknown one falls back to nearest."""
     exps = ["2026-06-20", "2026-07-18"]
