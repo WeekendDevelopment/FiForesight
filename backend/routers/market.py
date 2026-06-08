@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import math
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -470,13 +471,88 @@ def _parse_ipo_price_range(item: Dict[str, Any]) -> Tuple[Optional[float], Optio
     return None, None
 
 
+# --- Nasdaq IPO calendar (free, no key) parsing helpers ---------------------
+
+def _nasdaq_date_to_iso(s: Any) -> str:
+    """Convert Nasdaq's ``M/D/YYYY`` date to ISO ``YYYY-MM-DD`` ('' if invalid)."""
+    if not isinstance(s, str):
+        return ""
+    m = re.match(r"^\s*(\d{1,2})/(\d{1,2})/(\d{4})\s*$", s)
+    if not m:
+        return ""
+    mo, d, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    try:
+        return date(y, mo, d).isoformat()
+    except ValueError:
+        return ""
+
+
+def _parse_price_string(s: Any) -> Tuple[Optional[float], Optional[float]]:
+    """``"135.00"`` -> (135.0, 135.0); ``"15.00-17.00"`` -> (15.0, 17.0)."""
+    if not isinstance(s, str) or not s.strip():
+        return None, None
+
+    def _n(x: str) -> Optional[float]:
+        try:
+            return float(x.strip())
+        except (TypeError, ValueError):
+            return None
+
+    parts = [p for p in s.replace("$", "").replace(",", "").split("-") if p.strip()]
+    if len(parts) >= 2:
+        return _n(parts[0]), _n(parts[-1])
+    if len(parts) == 1:
+        v = _n(parts[0])
+        return v, v
+    return None, None
+
+
+def _parse_loose_int(s: Any) -> Optional[int]:
+    """Parse ``"555,555,555"`` / ``"$86,000,000"`` -> int (None if unparseable)."""
+    if s is None:
+        return None
+    try:
+        return int(float(str(s).replace(",", "").replace("$", "").strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_nasdaq_row(
+    row: Dict[str, Any], status: str, action: str
+) -> Optional[Dict[str, Any]]:
+    """Map a Nasdaq IPO-calendar row onto the shared IPO card shape."""
+    symbol = str(row.get("proposedTickerSymbol") or row.get("symbol") or "").strip()
+    company = str(row.get("companyName") or "").strip()
+    if not symbol and not company:
+        return None
+    low, high = _parse_price_string(row.get("proposedSharePrice"))
+    iso = _nasdaq_date_to_iso(
+        row.get("expectedPriceDate") or row.get("pricedDate")
+        or row.get("priceDate") or row.get("filedDate") or row.get("dealDate")
+    )
+    return {
+        "symbol":     symbol,
+        "company":    company or "Unknown",
+        "exchange":   str(row.get("proposedExchange") or row.get("exchange") or "").strip(),
+        "date":       iso,
+        "price_low":  low,
+        "price_high": high,
+        "shares":     _parse_loose_int(row.get("sharesOffered")),
+        "market_cap": _parse_loose_int(row.get("dollarValueOfSharesOffered")),
+        "actions":    action,
+        "status":     status,
+    }
+
+
 @router.get("/ipo/calendar")
 async def ipo_calendar() -> Dict[str, Any]:
     """Upcoming (next 90d) + recent (last 30d) public offerings.
 
-    Primary source: Financial Modeling Prep (needs a free ``FMP_API_KEY``).
-    Falls back to SEC EDGAR S-1 full-text search (no key) when the key is unset,
-    so the feature degrades gracefully. Cached 4h in Redis.
+    Source chain (each step degrades to the next on any failure):
+      1. Financial Modeling Prep — only if a (now paid) ``FMP_API_KEY`` is set.
+      2. Nasdaq IPO calendar — free, no key; the default upcoming + recent feed.
+      3. SEC EDGAR S-1 filings — keyless last resort (recent filings only).
+    Cached 4h in Redis.
     """
     from redis_cache import cache_get, cache_set
     CACHE_KEY = "ipo:calendar"
@@ -530,6 +606,64 @@ async def ipo_calendar() -> Dict[str, Any]:
             })
         return results
 
+    async def _fetch_nasdaq() -> List[Dict[str, Any]]:
+        """Free Nasdaq IPO calendar — upcoming + priced/filed/withdrawn, no key.
+
+        The endpoint is queried per calendar month, so we sweep the months that
+        cover the last ~30 and next ~90 days and de-dupe by deal id.
+        """
+        months: List[str] = []
+        base = today.year * 12 + (today.month - 1)
+        for delta in range(-1, 4):  # previous month .. +3 months
+            total = base + delta
+            months.append(f"{total // 12:04d}-{total % 12 + 1:02d}")
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Accept": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=10.0, headers=headers) as client:
+            async def _month(mo: str) -> Optional[Dict[str, Any]]:
+                try:
+                    r = await client.get(
+                        f"https://api.nasdaq.com/api/ipo/calendar?date={mo}"
+                    )
+                    r.raise_for_status()
+                    return r.json()
+                except Exception as exc:
+                    logger.info(f"[IPO] Nasdaq month {mo} failed: {exc}")
+                    return None
+
+            payloads = await asyncio.gather(*[_month(mo) for mo in months])
+
+        # (status, action, row-extractor) for each Nasdaq sub-table.
+        tables = [
+            ("upcoming", "Expected",
+             lambda d: ((d.get("upcoming") or {}).get("upcomingTable") or {}).get("rows") or []),
+            ("recent",   "Priced",    lambda d: (d.get("priced") or {}).get("rows") or []),
+            ("recent",   "Filed",     lambda d: (d.get("filed") or {}).get("rows") or []),
+            ("recent",   "Withdrawn", lambda d: (d.get("withdrawn") or {}).get("rows") or []),
+        ]
+        results: List[Dict[str, Any]] = []
+        seen: set = set()
+        for payload in payloads:
+            data = (payload or {}).get("data") or {}
+            if not isinstance(data, dict):
+                continue
+            for status, action, getter in tables:
+                for row in getter(data):
+                    norm = _normalize_nasdaq_row(row, status, action)
+                    if norm is None:
+                        continue
+                    key = row.get("dealID") or f"{norm['symbol']}|{norm['company']}|{norm['date']}"
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    results.append(norm)
+        if not results:
+            raise RuntimeError("Nasdaq returned no IPO rows")
+        return results
+
     async def _fetch_edgar_fallback() -> List[Dict[str, Any]]:
         """Lightweight fallback: recent S-1 filings from EDGAR full-text search."""
         from_date = (today - timedelta(days=30)).isoformat()
@@ -564,21 +698,28 @@ async def ipo_calendar() -> Dict[str, Any]:
             })
         return results
 
-    # Try FMP first when a key is configured, but degrade to SEC EDGAR on ANY
-    # FMP failure (retired/paywalled endpoint, bad key, timeout) rather than
-    # failing the whole tab — EDGAR needs no key and is always free.
     data: Optional[List[Dict[str, Any]]] = None
     source = "edgar"
+
+    # 1) Paid FMP first, only when a key is configured (richest data).
     if fmp_key:
         try:
             data = await asyncio.wait_for(_fetch_fmp(), timeout=12.0)
             source = "fmp"
         except Exception as e:
-            logger.warning(f"[IPO] FMP fetch failed ({e!r}); falling back to SEC EDGAR")
+            logger.warning(f"[IPO] FMP fetch failed ({e!r}); trying Nasdaq")
             data = None
-    else:
-        logger.info("[IPO] FMP_API_KEY not set — using SEC EDGAR fallback")
 
+    # 2) Free Nasdaq IPO calendar — the default upcoming + recent source.
+    if data is None:
+        try:
+            data = await asyncio.wait_for(_fetch_nasdaq(), timeout=12.0)
+            source = "nasdaq"
+        except Exception as e:
+            logger.warning(f"[IPO] Nasdaq fetch failed ({e!r}); falling back to SEC EDGAR")
+            data = None
+
+    # 3) SEC EDGAR S-1 filings — keyless last resort (recent only).
     if data is None:
         try:
             data = await asyncio.wait_for(_fetch_edgar_fallback(), timeout=12.0)

@@ -504,9 +504,59 @@ def _mock_httpx_client_router(routes: list) -> MagicMock:
     return MagicMock(return_value=cm)
 
 
-def test_ipo_calendar_fmp_error_falls_back_to_edgar() -> None:
-    # FMP returns a 200 error-shaped body (as it does for retired/paywalled
-    # endpoints); the endpoint must degrade to EDGAR rather than 502.
+# A minimal Nasdaq IPO-calendar payload (one upcoming + one priced row).
+_NASDAQ_SAMPLE = {
+    "data": {
+        "upcoming": {"upcomingTable": {"rows": [
+            {
+                "dealID": "1", "proposedTickerSymbol": "SPCX",
+                "companyName": "Space Exploration Technologies Corp",
+                "proposedExchange": "NASDAQ", "proposedSharePrice": "135.00",
+                "sharesOffered": "555,555,555", "expectedPriceDate": "6/12/2026",
+                "dollarValueOfSharesOffered": "$86,249,999,880",
+            },
+        ]}},
+        "priced": {"rows": [
+            {
+                "dealID": "2", "proposedTickerSymbol": "ACME",
+                "companyName": "Acme Inc", "proposedExchange": "NYSE",
+                "proposedSharePrice": "15.00-17.00", "sharesOffered": "3,000,000",
+                "pricedDate": "5/20/2026", "dollarValueOfSharesOffered": "$48,000,000",
+            },
+        ]},
+        "filed": None,
+        "withdrawn": None,
+    }
+}
+
+
+def test_ipo_calendar_nasdaq_free_source() -> None:
+    # No FMP key -> the free Nasdaq calendar is the primary source. (The same
+    # payload is returned for every month query; rows de-dupe by deal id.)
+    with patch("backend.routers.market.Config.FMP_API_KEY", ""), \
+            patch("backend.routers.market.httpx.AsyncClient", _mock_httpx_client(_NASDAQ_SAMPLE)):
+        resp = client.get("/ipo/calendar")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["source"] == "nasdaq"
+    assert len(payload["upcoming"]) == 1
+    assert len(payload["recent"]) == 1
+
+    up = payload["upcoming"][0]
+    assert up["symbol"] == "SPCX" and up["status"] == "upcoming"
+    assert up["date"] == "2026-06-12"              # "6/12/2026" -> ISO
+    assert up["price_low"] == 135.0 and up["price_high"] == 135.0
+    assert up["shares"] == 555_555_555             # commas stripped
+    assert up["market_cap"] == 86_249_999_880      # "$..." stripped
+
+    rec = payload["recent"][0]
+    assert rec["symbol"] == "ACME" and rec["actions"] == "Priced"
+    assert rec["price_low"] == 15.0 and rec["price_high"] == 17.0  # range parsed
+
+
+def test_ipo_calendar_fmp_error_falls_through_to_edgar() -> None:
+    # FMP returns a 200 error-shaped body AND Nasdaq yields nothing; the chain
+    # must continue to EDGAR rather than 502.
     fmp_error = {"Error Message": "Legacy Endpoint : no longer supported"}
     edgar_payload = {
         "hits": {"hits": [
@@ -515,6 +565,7 @@ def test_ipo_calendar_fmp_error_falls_back_to_edgar() -> None:
     }
     router = _mock_httpx_client_router([
         ("financialmodelingprep.com", fmp_error),
+        ("api.nasdaq.com", {"data": {}}),          # Nasdaq -> no rows -> raises
         ("efts.sec.gov", edgar_payload),
     ])
     with patch("backend.routers.market.Config.FMP_API_KEY", "valid-but-paywalled"), \
@@ -522,7 +573,7 @@ def test_ipo_calendar_fmp_error_falls_back_to_edgar() -> None:
         resp = client.get("/ipo/calendar")
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["source"] == "edgar"          # fell back, did NOT 502
+    assert payload["source"] == "edgar"          # fell all the way through, no 502
     assert len(payload["recent"]) == 1
     assert payload["recent"][0]["company"] == "Foo Inc."
 
