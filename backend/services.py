@@ -1484,7 +1484,7 @@ class SentimentService:
 #
 #   LLAMA-4-SCOUT → Groq meta-llama/llama-4-scout-17b-16e-instruct (free tier) — Macro & Risk lens
 #   LLAMA-70B → Groq llama-3.3-70b-versatile    (14,400 RPD free) — Growth lens
-#   QWEN3-32B   → Groq qwen/qwen3-32b            (free tier)       — Quant lens
+#   MAVERICK    → Groq meta-llama/llama-4-maverick-17b-128e-instruct (free) — Quant lens
 #
 #   _ai_note uses Groq llama-3.3-70b independently (header note, not jury)
 # ---------------------------------------------------------------------------
@@ -1534,16 +1534,16 @@ ANALYST_PERSONAS = [
         ),
     },
     {
-        "id":          "QWEN3-32B",
-        "avatar":      "QW",
+        "id":          "MAVERICK",
+        "avatar":      "MV",
         "title":       "Quant Lens",
-        "model_label": "Groq · Qwen3 32B",
+        "model_label": "Groq · Llama 4 Maverick",
         "provider":    "groq",
-        "api_model":   "qwen/qwen3-32b",
+        "api_model":   "meta-llama/llama-4-maverick-17b-128e-instruct",
         "max_tokens":  2048,
         "color":       "#10b981",
         "system": (
-            "You are QWEN3-32B, a quantitative signal analyst running on Qwen3 32B. "
+            "You are MAVERICK, a quantitative signal analyst running on Llama 4 Maverick. "
             "You operate purely on technical indicators and statistical signals — no macro bias, no news sentiment. "
             "Analyse the provided OHLCV data and indicator outputs. "
             "Interpret RSI regime, MACD histogram crossover state, Bollinger Band width and price position, "

@@ -216,7 +216,7 @@ async def _run_analyst_jury(
     Run all 3 analyst personas concurrently via AnalystJuryService.
       - LLAMA-4-SCOUT → Groq meta-llama/llama-4-scout-17b-16e-instruct (macro & risk lens, Meta)
       - LLAMA-70B     → Groq llama-3.3-70b-versatile  (growth lens, Meta)
-      - QWEN3-32B     → Groq qwen/qwen3-32b             (quant lens, Alibaba)
+      - MAVERICK      → Groq meta-llama/llama-4-maverick-17b-128e-instruct (quant lens, Meta)
 
     All provider routing and response parsing are handled inside
     AnalystJuryService — no per-provider branching needed here.
