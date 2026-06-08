@@ -72,7 +72,8 @@ function ChainTable({ rows, isDark }: { rows: OptionContract[]; isDark: boolean 
                 key={h}
                 sx={{
                   ...cell, fontWeight: 700, opacity: 0.5,
-                  fontSize: '0.6rem', letterSpacing: '0.05em', background: 'inherit',
+                  fontSize: '0.6rem', letterSpacing: '0.05em',
+                  background: (theme) => theme.palette.background.default,
                 }}
               >
                 {h}

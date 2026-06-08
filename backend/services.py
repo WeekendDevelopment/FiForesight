@@ -1484,7 +1484,7 @@ class SentimentService:
 #
 #   LLAMA-4-SCOUT → Groq meta-llama/llama-4-scout-17b-16e-instruct (free tier) — Macro & Risk lens
 #   LLAMA-70B → Groq llama-3.3-70b-versatile    (14,400 RPD free) — Growth lens
-#   GPT-OSS-20B → Groq openai/gpt-oss-20b       (free tier)       — Quant lens
+#   QWEN3-32B   → Groq qwen/qwen3-32b            (free tier)       — Quant lens
 #
 #   _ai_note uses Groq llama-3.3-70b independently (header note, not jury)
 # ---------------------------------------------------------------------------
@@ -1534,16 +1534,16 @@ ANALYST_PERSONAS = [
         ),
     },
     {
-        "id":          "GPT-OSS-20B",
-        "avatar":      "GO",
+        "id":          "QWEN3-32B",
+        "avatar":      "QW",
         "title":       "Quant Lens",
-        "model_label": "Groq · GPT-OSS 20B",
+        "model_label": "Groq · Qwen3 32B",
         "provider":    "groq",
-        "api_model":   "openai/gpt-oss-20b",
+        "api_model":   "qwen/qwen3-32b",
         "max_tokens":  2048,
         "color":       "#10b981",
         "system": (
-            "You are GPT-OSS-20B, a quantitative signal analyst running on OpenAI GPT-OSS 20B. "
+            "You are QWEN3-32B, a quantitative signal analyst running on Qwen3 32B. "
             "You operate purely on technical indicators and statistical signals — no macro bias, no news sentiment. "
             "Analyse the provided OHLCV data and indicator outputs. "
             "Interpret RSI regime, MACD histogram crossover state, Bollinger Band width and price position, "
