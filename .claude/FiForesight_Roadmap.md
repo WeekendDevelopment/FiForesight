@@ -50,7 +50,7 @@
 - Options Greeks (Δ, Θ) + aggregate stats (IV, put/call ratio, IV skew) (#225)
 - Expiry selector on options chain (#225)
 
-- IPO Tracker tab (`/ipo`) — FMP primary + SEC EDGAR S-1 fallback, upcoming 90d + recent 30d, Redis 4h TTL, responsive card grid, status chips, SEC EDGAR links, AbortController on unmount (`#230`)
+- IPO Tracker tab (`/ipo`) — free **Nasdaq** IPO calendar (primary) → **SEC EDGAR** S-1 fallback, **no API key**. Upcoming 90d + recent 30d, Redis 4h TTL (`?refresh=true` to bypass), responsive card grid, status chips, `/analysis` links, AbortController on unmount. FMP was dropped (it retired its free IPO calendar 2025-08-31). (`#229`, `#231`)
 
 ### Auth & Backend
 - Supabase email/password auth — `AuthContext`, `AuthModal`, watchlist groundwork (#193)
@@ -64,7 +64,7 @@
 - InfluxDB OHLCV cache (2Y)
 - New Relic APM (backend + frontend)
 - HTTPS, Docker multi-stage, Koyeb + Oracle Cloud deploys
-- GitHub Actions: PR preview + prod deploy; Alpaca + FMP API keys wired through deploy pipeline (#209 + workflow updates)
+- GitHub Actions: PR preview + prod deploy; Alpaca API keys wired through deploy pipeline (#209 + workflow updates)
 - FastMCP server (`mcp_server.py`)
 
 ---
@@ -127,7 +127,7 @@ All features use free APIs / free tiers / self-hosted:
 | **Supabase** | Auth + watchlist persistence | Yes (free tier) |
 | **FRED API** | Macro indicators (Phase B) | No (read-only) |
 | **SEC EDGAR** | Form 4 insider filings, S-1 IPO filings | No |
-| **FMP** | IPO calendar (Feature 8) | Yes (free tier, 250 req/day) |
+| **Nasdaq** | IPO calendar — free upcoming + recent (primary) | No (browser UA) |
 | **Alpaca** | Level 2 order book — US equities | Yes (free paper trading) |
 | **Coinbase** | Level 2 order book — crypto | No (public WebSocket) |
 | **PRAW / Reddit** | Social sentiment (Phase B) | Yes (free dev account) |
