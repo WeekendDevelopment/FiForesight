@@ -938,7 +938,8 @@ class YFinanceService:
                     else:
                         from datetime import datetime
                         result.append(datetime.strptime(str(d)[:10], "%Y-%m-%d").strftime("%m/%d"))
-                except Exception:
+                except Exception as _exc:
+                    logger.debug("[YFINANCE] earnings date parse error for %r: %s", d, _exc)
                     continue
             result = list(dict.fromkeys(result))[:4]  # deduplicate, cap at 4
             logger.info(f"[YFINANCE] ✓ fetch_earnings_dates — {ticker}: {result}")

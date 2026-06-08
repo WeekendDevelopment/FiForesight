@@ -6,7 +6,8 @@ import re
 from datetime import datetime, timedelta, timezone, date
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from slowapi.util import get_remote_address
 from pydantic import BaseModel
 
 from config import Config
@@ -19,6 +20,7 @@ from services import DataCleaner, ANALYST_PERSONAS
 from dependencies import (
     influx_svc, forecast_store, serp_svc, yf_svc,
     analyst_jury_svc, sentiment_svc, finnhub_svc, stocktwits_svc, yahoo_rss_svc,
+    limiter, require_user, _user_rate_key,
 )
 from jury_graph import run_jury_graph
 from redis_cache import cache_get, cache_set
@@ -404,7 +406,8 @@ async def _run_analyst_jury(
 # ---------------------------------------------------------------------------
 
 @router.post("/jury/reanalyze")
-async def reanalyze_jury(payload: JuryReanalyzeRequest):
+@limiter.limit(lambda: Config.RATE_LIMIT_JURY, key_func=_user_rate_key)
+async def reanalyze_jury(request: Request, payload: JuryReanalyzeRequest, _user: str = Depends(require_user)):
     """
     Re-run the analyst jury for a symbol with Groq function-calling tools
     FORCED on (each analyst must invoke ≥1 live tool: VIX, put/call, insider,
@@ -726,7 +729,8 @@ async def health():
 
 
 @router.get("/sparklines")
-async def sparklines(tickers: str):
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def sparklines(request: Request, tickers: str):
     """Return last-5-close prices for a comma-separated list of tickers."""
     symbols = [t.strip().upper() for t in tickers.split(",") if t.strip()][:18]
     result: Dict[str, List[float]] = {}
@@ -786,6 +790,8 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     import numpy as np
 
     symbol = payload.data.upper()
+    if not re.fullmatch(r"[A-Za-z0-9.\-:]{1,15}", symbol):
+        raise HTTPException(status_code=422, detail="Invalid symbol.")
     now    = datetime.now(timezone.utc)
 
     logger.info("[REQUEST] ════════════════════════════════════════════")
@@ -1441,7 +1447,12 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
 
 
 @router.post("/predict", response_model=PredictionResponse)
-async def predict(payload: PredictRequest):
+@limiter.limit(lambda: Config.RATE_LIMIT_PREDICT_AUTH, key_func=_user_rate_key)
+async def predict(request: Request, payload: PredictRequest):
+    symbol = payload.data.strip().upper()
+    if not re.fullmatch(r"[A-Za-z0-9.\-:]{1,15}", symbol):
+        raise HTTPException(status_code=422, detail="Invalid symbol.")
+    payload.data = symbol  # normalised for _predict_inner
     try:
         # 60s overall budget: the tool-using jury alone may take up to 30s
         # (Groq function-calling round-trips) on top of data + forecast steps.

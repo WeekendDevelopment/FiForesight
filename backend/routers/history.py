@@ -3,9 +3,12 @@ import asyncio
 import logging
 from typing import Any
 
+import re
+
 import numpy as np
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+from slowapi.util import get_remote_address
 
 from models import (
     calculate_bollinger_bands,
@@ -13,11 +16,14 @@ from models import (
     calculate_rsi_series,
     calculate_sma_series,
 )
-from dependencies import influx_svc
+from config import Config
+from dependencies import influx_svc, limiter
 from redis_cache import cache_get, cache_set
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+_SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-:]{1,15}$")
 
 # Valid period → required interval
 VALID_COMBINATIONS: dict[str, str] = {
@@ -112,12 +118,16 @@ def _fetch_df(symbol: str, period: str, interval: str) -> pd.DataFrame:
 
 
 @router.get("/history")
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
 async def get_history(
+    request:  Request,
     symbol:   str = Query(..., min_length=1, max_length=20),
     period:   str = Query("2y"),
     interval: str = Query("1d"),
 ) -> dict[str, Any]:
     symbol   = symbol.strip().upper()
+    if not _SYMBOL_RE.match(symbol):
+        raise HTTPException(status_code=422, detail="Invalid symbol.")
     period   = period.strip().lower()
     interval = interval.strip().lower()
 

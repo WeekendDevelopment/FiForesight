@@ -166,7 +166,8 @@ def _insider_sync(symbol: str) -> dict:
                     ts = ts.replace(tzinfo=timezone.utc)
                 if ts < cutoff:
                     continue
-            except Exception:
+            except Exception as _exc:
+                logger.debug("[INSIDER] date parse error for row: %s", _exc)
                 pass  # undated row — count it rather than drop it
         text = f"{row.get('Text', '')} {row.get('Transaction', '')}".lower()
         if any(k in text for k in ("purchase", "buy", "acquisition", "bought")):
