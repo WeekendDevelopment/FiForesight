@@ -2,7 +2,6 @@
 Router tests — trade setup, DCF valuation, options chain.
 All external calls are mocked; no network required.
 """
-from datetime import date, timedelta
 from typing import Any, Dict, List, Tuple
 from unittest.mock import patch, AsyncMock, MagicMock
 from fastapi import FastAPI
@@ -436,74 +435,6 @@ def _mock_httpx_client(json_payload: Any) -> MagicMock:
     return MagicMock(return_value=cm)
 
 
-def test_ipo_calendar_fmp_split_and_shapes() -> None:
-    today = date.today()
-    upcoming_date = (today + timedelta(days=10)).isoformat()
-    recent_date = (today - timedelta(days=5)).isoformat()
-    raw = [
-        {
-            "date": upcoming_date, "company": "Upcoming Co", "symbol": "UPCO",
-            "exchange": "NASDAQ", "actions": "expected", "shares": 5_200_000,
-            "marketCap": 1_200_000_000, "priceRange": "$18-$22",
-        },
-        {
-            "date": recent_date, "company": "Recent Co", "symbol": "RECO",
-            "exchange": "NYSE", "actions": "priced", "shares": 3_000_000,
-            "marketCap": 800_000_000, "priceLow": 20, "priceHigh": 24,
-        },
-    ]
-    with patch("backend.routers.market.Config.FMP_API_KEY", "test-key"), \
-            patch("backend.routers.market.httpx.AsyncClient", _mock_httpx_client(raw)):
-        resp = client.get("/ipo/calendar")
-    assert resp.status_code == 200
-    payload = resp.json()
-    assert payload["source"] == "fmp"
-    assert "generated_at" in payload
-
-    # Upcoming / recent split is driven by date vs. today.
-    assert len(payload["upcoming"]) == 1
-    assert len(payload["recent"]) == 1
-
-    up = payload["upcoming"][0]
-    assert up["symbol"] == "UPCO" and up["status"] == "upcoming"
-    assert up["price_low"] == 18 and up["price_high"] == 22  # parsed from "$18-$22"
-
-    rec = payload["recent"][0]
-    assert rec["symbol"] == "RECO" and rec["status"] == "recent"
-    assert rec["price_low"] == 20 and rec["price_high"] == 24
-
-    # Every card carries the full, stable shape the frontend renders.
-    for key in (
-        "symbol", "company", "exchange", "date", "price_low",
-        "price_high", "shares", "market_cap", "actions", "status",
-    ):
-        assert key in up
-
-
-def _mock_httpx_client_router(routes: List[Tuple[str, Any]]) -> MagicMock:
-    """httpx.AsyncClient mock whose .get() picks a response by URL substring.
-
-    `routes` is a list of (url_substring, json_payload). Lets one test drive a
-    failing FMP call (error-shaped body) followed by a successful EDGAR call.
-    """
-    async def _get(url: str, *a: Any, **k: Any) -> MagicMock:
-        for sub, payload in routes:
-            if sub in url:
-                resp = MagicMock()
-                resp.status_code = 200
-                resp.raise_for_status = MagicMock()
-                resp.json = MagicMock(return_value=payload)
-                return resp
-        raise AssertionError(f"unexpected URL: {url}")
-
-    http = MagicMock()
-    http.get = AsyncMock(side_effect=_get)
-    cm = MagicMock()
-    cm.__aenter__ = AsyncMock(return_value=http)
-    cm.__aexit__ = AsyncMock(return_value=False)
-    return MagicMock(return_value=cm)
-
-
 # A minimal Nasdaq IPO-calendar payload (one upcoming + one priced row).
 _NASDAQ_SAMPLE = {
     "data": {
@@ -531,10 +462,9 @@ _NASDAQ_SAMPLE = {
 
 
 def test_ipo_calendar_nasdaq_free_source() -> None:
-    # No FMP key -> the free Nasdaq calendar is the primary source. (The same
-    # payload is returned for every month query; rows de-dupe by deal id.)
-    with patch("backend.routers.market.Config.FMP_API_KEY", ""), \
-            patch("backend.routers.market.httpx.AsyncClient", _mock_httpx_client(_NASDAQ_SAMPLE)):
+    # The free Nasdaq calendar is the primary source (no API key). The same
+    # payload is returned for every month query; rows de-dupe by deal id.
+    with patch("backend.routers.market.httpx.AsyncClient", _mock_httpx_client(_NASDAQ_SAMPLE)):
         resp = client.get("/ipo/calendar")
     assert resp.status_code == 200
     payload = resp.json()
@@ -571,8 +501,7 @@ def test_ipo_calendar_nasdaq_upcoming_wins_dedup() -> None:
             ]},
         }
     }
-    with patch("backend.routers.market.Config.FMP_API_KEY", ""), \
-            patch("backend.routers.market.httpx.AsyncClient", _mock_httpx_client(payload)):
+    with patch("backend.routers.market.httpx.AsyncClient", _mock_httpx_client(payload)):
         resp = client.get("/ipo/calendar")
     assert resp.status_code == 200
     body = resp.json()
@@ -581,31 +510,11 @@ def test_ipo_calendar_nasdaq_upcoming_wins_dedup() -> None:
     assert len(body["recent"]) == 0          # not double-counted as recent
 
 
-def test_ipo_calendar_fmp_error_falls_through_to_edgar() -> None:
-    # FMP returns a 200 error-shaped body AND Nasdaq yields nothing; the chain
-    # must continue to EDGAR rather than 502.
-    fmp_error = {"Error Message": "Legacy Endpoint : no longer supported"}
-    edgar_payload = {
-        "hits": {"hits": [
-            {"_source": {"display_names": ["Foo Inc."], "file_date": "2026-05-20"}},
-        ]}
-    }
-    router = _mock_httpx_client_router([
-        ("financialmodelingprep.com", fmp_error),
-        ("api.nasdaq.com", {"data": {}}),          # Nasdaq -> no rows -> raises
-        ("efts.sec.gov", edgar_payload),
-    ])
-    with patch("backend.routers.market.Config.FMP_API_KEY", "valid-but-paywalled"), \
-            patch("backend.routers.market.httpx.AsyncClient", router):
-        resp = client.get("/ipo/calendar")
-    assert resp.status_code == 200
-    payload = resp.json()
-    assert payload["source"] == "edgar"          # fell all the way through, no 502
-    assert len(payload["recent"]) == 1
-    assert payload["recent"][0]["company"] == "Foo Inc."
-
-
-def test_ipo_calendar_edgar_fallback_without_key() -> None:
+def test_ipo_calendar_edgar_fallback_when_nasdaq_unavailable() -> None:
+    # When Nasdaq returns nothing usable, the chain degrades to the keyless
+    # SEC EDGAR S-1 feed rather than failing. The mock serves this EDGAR-shaped
+    # payload for every URL; Nasdaq finds no rows in it and raises, so the
+    # endpoint falls through to EDGAR parsing.
     edgar_payload = {
         "hits": {
             "hits": [
@@ -614,9 +523,7 @@ def test_ipo_calendar_edgar_fallback_without_key() -> None:
             ]
         }
     }
-    # Empty key (after strip) forces the EDGAR fallback branch.
-    with patch("backend.routers.market.Config.FMP_API_KEY", ""), \
-            patch("backend.routers.market.httpx.AsyncClient", _mock_httpx_client(edgar_payload)):
+    with patch("backend.routers.market.httpx.AsyncClient", _mock_httpx_client(edgar_payload)):
         resp = client.get("/ipo/calendar")
     assert resp.status_code == 200
     payload = resp.json()

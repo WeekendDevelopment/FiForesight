@@ -215,7 +215,7 @@ export interface IpoEntry {
 export interface IpoCalendarResult {
   upcoming:     IpoEntry[];
   recent:       IpoEntry[];
-  source:       'fmp' | 'nasdaq' | 'edgar';
+  source:       'nasdaq' | 'edgar';
   generated_at: string;
 }
 

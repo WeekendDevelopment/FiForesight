@@ -102,10 +102,7 @@ export default function IpoPage() {
   const hoverBg   = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)';
   const metaCol   = isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)';
 
-  const sourceLabel =
-    data?.source === 'fmp'    ? 'Powered by FMP'
-    : data?.source === 'nasdaq' ? 'Powered by Nasdaq'
-    : 'Powered by SEC EDGAR';
+  const sourceLabel = data?.source === 'nasdaq' ? 'Powered by Nasdaq' : 'Powered by SEC EDGAR';
   const entries = data ? (view === 'upcoming' ? data.upcoming : data.recent) : [];
 
   // ── IPO card ───────────────────────────────────────────────────────────────

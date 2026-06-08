@@ -440,37 +440,6 @@ async def earnings_calendar():
 # IPO Calendar
 # ---------------------------------------------------------------------------
 
-def _parse_ipo_price_range(item: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
-    """Extract (low, high) numeric price bounds from an FMP IPO row.
-
-    FMP variously returns explicit ``priceLow``/``priceHigh`` numbers or a
-    ``priceRange`` string like ``"$18-$22"`` / ``"18.00 - 22.00"`` / ``"$20"``.
-    Returns ``(None, None)`` when nothing parseable is present.
-    """
-    def _num(v: Any) -> Optional[float]:
-        try:
-            if v is None or v == "":
-                return None
-            return float(str(v).replace("$", "").replace(",", "").strip())
-        except (TypeError, ValueError):
-            return None
-
-    low = _num(item.get("priceLow"))
-    high = _num(item.get("priceHigh"))
-    if low is not None or high is not None:
-        return low, high
-
-    rng = item.get("priceRange")
-    if isinstance(rng, str) and rng.strip():
-        parts = [p for p in rng.replace("$", "").split("-") if p.strip()]
-        if len(parts) >= 2:
-            return _num(parts[0]), _num(parts[-1])
-        if len(parts) == 1:
-            v = _num(parts[0])
-            return v, v
-    return None, None
-
-
 # --- Nasdaq IPO calendar (free, no key) parsing helpers ---------------------
 
 def _nasdaq_date_to_iso(s: Any) -> str:
@@ -548,10 +517,9 @@ def _normalize_nasdaq_row(
 async def ipo_calendar(refresh: bool = False) -> Dict[str, Any]:
     """Upcoming (next 90d) + recent (last 30d) public offerings.
 
-    Source chain (each step degrades to the next on any failure):
-      1. Financial Modeling Prep — only if a (now paid) ``FMP_API_KEY`` is set.
-      2. Nasdaq IPO calendar — free, no key; the default upcoming + recent feed.
-      3. SEC EDGAR S-1 filings — keyless last resort (recent filings only).
+    Source chain (degrades on failure):
+      1. Nasdaq IPO calendar — free, no key; the default upcoming + recent feed.
+      2. SEC EDGAR S-1 filings — keyless last resort (recent filings only).
     Cached 4h in Redis; pass ``?refresh=true`` to force a live re-fetch.
     """
     from redis_cache import cache_get, cache_set
@@ -561,51 +529,7 @@ async def ipo_calendar(refresh: bool = False) -> Dict[str, Any]:
         if cached:
             return cached
 
-    fmp_key = (Config.FMP_API_KEY or "").strip()
     today = date.today()
-
-    async def _fetch_fmp() -> List[Dict[str, Any]]:
-        from_date = (today - timedelta(days=30)).isoformat()
-        to_date = (today + timedelta(days=90)).isoformat()
-        # FMP retired the v3/v4 `ipo_calendar` endpoints on 2025-08-31; the
-        # current one lives under `/stable`. It's a paid endpoint now, so for a
-        # free key this 4xx's and we degrade to SEC EDGAR (see the caller).
-        url = (
-            "https://financialmodelingprep.com/stable/ipos-calendar"
-            f"?from={from_date}&to={to_date}&apikey={fmp_key}"
-        )
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            raw = resp.json()
-
-        # FMP signals errors either via HTTP status (handled above) or a 200
-        # body shaped like {"Error Message": ...} / {"message": ...}. Treat any
-        # non-list payload as an error so the caller falls back to EDGAR.
-        if not isinstance(raw, list):
-            msg = ""
-            if isinstance(raw, dict):
-                msg = str(raw.get("Error Message") or raw.get("message") or raw)[:200]
-            raise RuntimeError(f"FMP returned a non-list payload: {msg}")
-
-        results: List[Dict[str, Any]] = []
-        for item in raw:
-            ipo_date = str(item.get("date") or "")
-            low, high = _parse_ipo_price_range(item)
-            results.append({
-                "symbol":     item.get("symbol") or "",
-                # field names vary across FMP API versions — accept both
-                "company":    item.get("company") or item.get("companyName") or "",
-                "exchange":   item.get("exchange") or item.get("exchangeShortName") or "",
-                "date":       ipo_date,
-                "price_low":  low,
-                "price_high": high,
-                "shares":     item.get("shares"),
-                "market_cap": item.get("marketCap") or item.get("mktCap"),
-                "actions":    item.get("actions") or "",  # "expected" | "priced" | "withdrawn"
-                "status":     "upcoming" if ipo_date >= today.isoformat() else "recent",
-            })
-        return results
 
     async def _fetch_nasdaq() -> List[Dict[str, Any]]:
         """Free Nasdaq IPO calendar — upcoming + priced/filed/withdrawn, no key.
@@ -713,25 +637,15 @@ async def ipo_calendar(refresh: bool = False) -> Dict[str, Any]:
     data: Optional[List[Dict[str, Any]]] = None
     source = "edgar"
 
-    # 1) Paid FMP first, only when a key is configured (richest data).
-    if fmp_key:
-        try:
-            data = await asyncio.wait_for(_fetch_fmp(), timeout=12.0)
-            source = "fmp"
-        except Exception as e:
-            logger.warning(f"[IPO] FMP fetch failed ({e!r}); trying Nasdaq")
-            data = None
+    # 1) Free Nasdaq IPO calendar — the default upcoming + recent source.
+    try:
+        data = await asyncio.wait_for(_fetch_nasdaq(), timeout=12.0)
+        source = "nasdaq"
+    except Exception as e:
+        logger.warning(f"[IPO] Nasdaq fetch failed ({e!r}); falling back to SEC EDGAR")
+        data = None
 
-    # 2) Free Nasdaq IPO calendar — the default upcoming + recent source.
-    if data is None:
-        try:
-            data = await asyncio.wait_for(_fetch_nasdaq(), timeout=12.0)
-            source = "nasdaq"
-        except Exception as e:
-            logger.warning(f"[IPO] Nasdaq fetch failed ({e!r}); falling back to SEC EDGAR")
-            data = None
-
-    # 3) SEC EDGAR S-1 filings — keyless last resort (recent only).
+    # 2) SEC EDGAR S-1 filings — keyless last resort (recent only).
     if data is None:
         try:
             data = await asyncio.wait_for(_fetch_edgar_fallback(), timeout=12.0)
