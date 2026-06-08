@@ -554,6 +554,33 @@ def test_ipo_calendar_nasdaq_free_source() -> None:
     assert rec["price_low"] == 15.0 and rec["price_high"] == 17.0  # range parsed
 
 
+def test_ipo_calendar_nasdaq_upcoming_wins_dedup() -> None:
+    # The same deal id appears in BOTH the upcoming table and a later month's
+    # priced table; it must be classified "upcoming", not duplicated into recent.
+    payload = {
+        "data": {
+            "upcoming": {"upcomingTable": {"rows": [
+                {"dealID": "DUP", "proposedTickerSymbol": "DUP", "companyName": "Dup Co",
+                 "proposedExchange": "NASDAQ", "proposedSharePrice": "10.00",
+                 "expectedPriceDate": "7/01/2026"},
+            ]}},
+            "priced": {"rows": [
+                {"dealID": "DUP", "proposedTickerSymbol": "DUP", "companyName": "Dup Co",
+                 "proposedExchange": "NASDAQ", "proposedSharePrice": "10.00",
+                 "pricedDate": "6/01/2026"},
+            ]},
+        }
+    }
+    with patch("backend.routers.market.Config.FMP_API_KEY", ""), \
+            patch("backend.routers.market.httpx.AsyncClient", _mock_httpx_client(payload)):
+        resp = client.get("/ipo/calendar")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["source"] == "nasdaq"
+    assert len(body["upcoming"]) == 1 and body["upcoming"][0]["symbol"] == "DUP"
+    assert len(body["recent"]) == 0          # not double-counted as recent
+
+
 def test_ipo_calendar_fmp_error_falls_through_to_edgar() -> None:
     # FMP returns a 200 error-shaped body AND Nasdaq yields nothing; the chain
     # must continue to EDGAR rather than 502.

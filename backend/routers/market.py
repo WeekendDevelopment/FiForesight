@@ -637,30 +637,41 @@ async def ipo_calendar(refresh: bool = False) -> Dict[str, Any]:
 
             payloads = await asyncio.gather(*[_month(mo) for mo in months])
 
-        # (status, action, row-extractor) for each Nasdaq sub-table.
-        tables = [
-            ("upcoming", "Expected",
-             lambda d: ((d.get("upcoming") or {}).get("upcomingTable") or {}).get("rows") or []),
-            ("recent",   "Priced",    lambda d: (d.get("priced") or {}).get("rows") or []),
-            ("recent",   "Filed",     lambda d: (d.get("filed") or {}).get("rows") or []),
-            ("recent",   "Withdrawn", lambda d: (d.get("withdrawn") or {}).get("rows") or []),
+        datas = [
+            d for d in ((p or {}).get("data") for p in payloads) if isinstance(d, dict)
         ]
+
+        def _rows(data: Dict[str, Any], table: str) -> List[Dict[str, Any]]:
+            tbl = data.get(table) or {}
+            if table == "upcoming":
+                tbl = tbl.get("upcomingTable") or {}
+            return tbl.get("rows") or []
+
         results: List[Dict[str, Any]] = []
         seen: set = set()
-        for payload in payloads:
-            data = (payload or {}).get("data") or {}
-            if not isinstance(data, dict):
-                continue
-            for status, action, getter in tables:
-                for row in getter(data):
-                    norm = _normalize_nasdaq_row(row, status, action)
-                    if norm is None:
-                        continue
-                    key = row.get("dealID") or f"{norm['symbol']}|{norm['company']}|{norm['date']}"
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    results.append(norm)
+
+        def _ingest(rows: List[Dict[str, Any]], status: str, action: str) -> None:
+            for row in rows:
+                norm = _normalize_nasdaq_row(row, status, action)
+                if norm is None:
+                    continue
+                key = row.get("dealID") or f"{norm['symbol']}|{norm['company']}|{norm['date']}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                results.append(norm)
+
+        # Pass 1 — upcoming first so a scheduled deal wins dedup over any later
+        # "recent" duplicate of itself (the same IPO often also appears in the
+        # priced/withdrawn tables of an adjacent month).
+        for data in datas:
+            _ingest(_rows(data, "upcoming"), "upcoming", "Expected")
+        # Pass 2 — recently actioned IPOs. The "filed" table (raw S-1 filings) is
+        # intentionally skipped: it's huge, undated, and overlaps EDGAR's role.
+        for data in datas:
+            _ingest(_rows(data, "priced"), "recent", "Priced")
+            _ingest(_rows(data, "withdrawn"), "recent", "Withdrawn")
+
         if not results:
             raise RuntimeError("Nasdaq returned no IPO rows")
         return results
@@ -738,7 +749,7 @@ async def ipo_calendar(refresh: bool = False) -> Dict[str, Any]:
     )
     recent = sorted(
         [x for x in data if x["status"] == "recent"], key=lambda x: x["date"], reverse=True
-    )
+    )[:60]  # cap the recent list so a busy filing window can't bloat the payload
 
     payload = {
         "upcoming":     upcoming,
