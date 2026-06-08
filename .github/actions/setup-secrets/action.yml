@@ -82,12 +82,6 @@ runs:
         secret-name: ALPACA_SECRET_KEY
         secret-value: "${{ env.ALPACA_SECRET_KEY }}"
 
-    - name: Create FMP_API_KEY secret
-      uses: koyeb/action-git-deploy/secret@v1
-      with:
-        secret-name: FMP_API_KEY
-        secret-value: "${{ env.FMP_API_KEY }}"
-
     - name: Create NEW_RELIC_LICENSE_KEY secret
       uses: koyeb/action-git-deploy/secret@v1
       with:
