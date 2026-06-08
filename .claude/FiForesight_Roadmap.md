@@ -1,7 +1,7 @@
 # FiForesight Roadmap
 
 > Source of truth for planned work. Feature-based, free-tier only.
-> Last synced: 2026-06-07 — Features 5–7 shipped; Phase C items (L2, jury tools, backtester) shipped ahead of schedule. Feature 8 (IPO Tracker) is the only open Next Up item.
+> Last synced: 2026-06-08 — All Features 5–8 shipped. Phase C items (L2, jury tools, backtester) also shipped. No open Next Up items — backlog is Phases A/B and Quick Wins.
 
 ---
 
@@ -50,6 +50,8 @@
 - Options Greeks (Δ, Θ) + aggregate stats (IV, put/call ratio, IV skew) (#225)
 - Expiry selector on options chain (#225)
 
+- IPO Tracker tab (`/ipo`) — FMP primary + SEC EDGAR S-1 fallback, upcoming 90d + recent 30d, Redis 4h TTL, responsive card grid, status chips, SEC EDGAR links, AbortController on unmount (no PR — pushed direct to main)
+
 ### Auth & Backend
 - Supabase email/password auth — `AuthContext`, `AuthModal`, watchlist groundwork (#193)
 - Backend pytest harness — 22 tests, no network calls (`backend/tests/`) (#192)
@@ -62,43 +64,15 @@
 - InfluxDB OHLCV cache (2Y)
 - New Relic APM (backend + frontend)
 - HTTPS, Docker multi-stage, Koyeb + Oracle Cloud deploys
-- GitHub Actions: PR preview + prod deploy; Alpaca API key wired through pipeline (#209)
+- GitHub Actions: PR preview + prod deploy; Alpaca + FMP API keys wired through deploy pipeline (#209 + workflow updates)
 - FastMCP server (`mcp_server.py`)
 
 ---
 
 ## Next Up
 
-### Feature 8 · IPO Tracker Tab
-**Branch:** `feat/ipo-tracker`
-**Depends on:** Features 5, 6, 7 (all merged ✅)
+> All planned Features 5–8 are shipped. The next work items are Quick Wins (QW-1) and Phase A/B backlog below.
 
-Standalone `/ipo` tab replacing the placeholder left by Feature 5.
-
-- New `GET /ipo/calendar` endpoint in `backend/routers/market.py`
-- **Primary source:** Financial Modeling Prep free tier (`FMP_API_KEY` env var, optional)
-  → upcoming 90 days + recent 30 days IPOs: symbol, exchange, price range, shares, market cap, status
-- **Fallback:** SEC EDGAR S-1 filings search (no key, always available)
-- `httpx` for async HTTP (verify it's in `requirements.txt`, add if missing)
-- Redis 4h TTL
-- Frontend: "Upcoming / Recent" tabs, IPO cards with all details
-- Clicking a priced IPO with known symbol → `/analysis?symbol=X`
-- Graceful degradation: EDGAR fallback with note explaining how to add FMP key
-
-**New optional env var:**
-```
-FMP_API_KEY=    # Free at financialmodelingprep.com — unlocks full IPO calendar
-```
-
-**Files:**
-```
-MODIFY  backend/routers/market.py
-MODIFY  backend/requirements.txt      ← add httpx if missing
-CREATE  frontend/app/(app)/ipo/page.tsx
-CREATE  frontend/app/api/ipo/route.ts
-```
-
----
 
 ## Quick Wins
 
