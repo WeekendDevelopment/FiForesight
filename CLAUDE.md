@@ -34,7 +34,7 @@ FiForesight/
 │   │   ├── predict.py          # /health /debug /predict /sparklines /compare
 │   │   ├── simulation.py       # /simulation/suggest /simulation/performance /simulation/state
 │   │   ├── trade.py            # /trade-setup /chat
-│   │   └── market.py           # /dcf/{symbol} /options/{symbol}
+│   │   └── market.py           # /dcf /options /ipo/calendar /earnings/calendar /sectors /briefing /orderbook
 │   ├── config.py               # Env var loading (InfluxDB, Groq, SerpAPI)
 │   ├── models.py               # Pydantic schemas + run_monte_carlo
 │   ├── services.py             # YFinanceService, InfluxService, SerpService, SentimentService, AnalystJuryService
@@ -114,7 +114,7 @@ INFLUXDB_TOKEN=
 INFLUXDB_ORG=WeekendDevelopment
 INFLUXDB_BUCKET=FiForesightBucket
 SERP_API_KEY=            # Optional — news/trending
-FMP_API_KEY=             # Optional — IPO calendar (falls back to SEC EDGAR S-1 filings)
+FMP_API_KEY=             # Optional — paid FMP IPO calendar. Free default: Nasdaq → SEC EDGAR
 PORT=8000
 ```
 
@@ -182,6 +182,8 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 | Supabase email auth | #193 |
 | Options chain panel | #194 |
 | Router split (main.py → routers/) | #195 |
+| IPO tracker tab | #229 |
+| Free IPO sources (Nasdaq → EDGAR; FMP now paid) | #231 |
 
 ---
 
@@ -210,3 +212,4 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 - pnpm workspace root has no source — all code in `frontend/` or `backend/`.
 - Deploys: PRs → preview (`fiforesight-preview.duckdns.org`), main → prod (`fiforesight.duckdns.org` + Koyeb).
 - `/compare` frontend route exists; backend endpoint is implemented in `routers/predict.py`.
+- **IPO calendar** (`GET /ipo/calendar` in `market.py`) — source chain, each degrading to the next: paid **FMP** (only if `FMP_API_KEY` set) → free **Nasdaq** (`api.nasdaq.com/api/ipo/calendar`, no key, the default; needs a browser User-Agent) → **SEC EDGAR** S-1 search (keyless last resort, recent filings only, no upcoming). FMP retired its *free* IPO calendar on 2025-08-31. Response carries `source: "fmp"|"nasdaq"|"edgar"`. `?refresh=true` bypasses the 4h Redis cache. Nasdaq dedup is upcoming-first (a scheduled deal also appears in priced/withdrawn tables).

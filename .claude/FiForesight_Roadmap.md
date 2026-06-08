@@ -50,7 +50,7 @@
 - Options Greeks (Δ, Θ) + aggregate stats (IV, put/call ratio, IV skew) (#225)
 - Expiry selector on options chain (#225)
 
-- IPO Tracker tab (`/ipo`) — FMP primary + SEC EDGAR S-1 fallback, upcoming 90d + recent 30d, Redis 4h TTL, responsive card grid, status chips, SEC EDGAR links, AbortController on unmount (`#230`)
+- IPO Tracker tab (`/ipo`) — free **Nasdaq** IPO calendar (primary) → **SEC EDGAR** S-1 fallback; optional paid **FMP**. Upcoming 90d + recent 30d, Redis 4h TTL (`?refresh=true` to bypass), responsive card grid, status chips, `/analysis` links, AbortController on unmount. FMP retired its free IPO calendar 2025-08-31. (`#229`, `#231`)
 
 ### Auth & Backend
 - Supabase email/password auth — `AuthContext`, `AuthModal`, watchlist groundwork (#193)
