@@ -545,20 +545,21 @@ def _normalize_nasdaq_row(
 
 
 @router.get("/ipo/calendar")
-async def ipo_calendar() -> Dict[str, Any]:
+async def ipo_calendar(refresh: bool = False) -> Dict[str, Any]:
     """Upcoming (next 90d) + recent (last 30d) public offerings.
 
     Source chain (each step degrades to the next on any failure):
       1. Financial Modeling Prep — only if a (now paid) ``FMP_API_KEY`` is set.
       2. Nasdaq IPO calendar — free, no key; the default upcoming + recent feed.
       3. SEC EDGAR S-1 filings — keyless last resort (recent filings only).
-    Cached 4h in Redis.
+    Cached 4h in Redis; pass ``?refresh=true`` to force a live re-fetch.
     """
     from redis_cache import cache_get, cache_set
     CACHE_KEY = "ipo:calendar"
-    cached = await cache_get(CACHE_KEY)
-    if cached:
-        return cached
+    if not refresh:
+        cached = await cache_get(CACHE_KEY)
+        if cached:
+            return cached
 
     fmp_key = (Config.FMP_API_KEY or "").strip()
     today = date.today()
