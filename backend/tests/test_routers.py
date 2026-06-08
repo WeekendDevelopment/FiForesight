@@ -480,7 +480,7 @@ def test_ipo_calendar_fmp_split_and_shapes() -> None:
         assert key in up
 
 
-def _mock_httpx_client_router(routes: list) -> MagicMock:
+def _mock_httpx_client_router(routes: List[Tuple[str, Any]]) -> MagicMock:
     """httpx.AsyncClient mock whose .get() picks a response by URL substring.
 
     `routes` is a list of (url_substring, json_payload). Lets one test drive a
