@@ -4,17 +4,37 @@ All external calls are mocked; no network required.
 """
 from typing import Any, Dict, List, Tuple
 from unittest.mock import patch, AsyncMock, MagicMock
+import importlib as _il
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
 
 # Build a lightweight test app that includes only the routers under test.
 # This avoids the Redis lifespan in main.py while still exercising the real
 # router logic (validation, calculations, response models).
 from backend.routers import trade, market
+# Import from the bare module path so the object identity matches what the
+# routers use (they do `from dependencies import ...`, not `from backend.dependencies`).
+# Dependency overrides use object identity as the key, so paths must match.
+_deps = _il.import_module("dependencies")
+require_user = _deps.require_user
+limiter = _deps.limiter
 
 _test_app = FastAPI()
+# Register the limiter (same instance as used by router decorators) so
+# slowapi can find it on request.app.state.
+_test_app.state.limiter = limiter
+_test_app.add_exception_handler(
+    RateLimitExceeded,
+    lambda req, exc: JSONResponse({"detail": "rate limited"}, status_code=429),
+)
 _test_app.include_router(trade.router)
 _test_app.include_router(market.router)
+
+# Bypass auth so existing trade-setup tests keep passing without real JWTs.
+# Security tests in test_security.py use a fresh app without this override.
+_test_app.dependency_overrides[require_user] = lambda: "test-user-uuid"
 
 client = TestClient(_test_app)
 
