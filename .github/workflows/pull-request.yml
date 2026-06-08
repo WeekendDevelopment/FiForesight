@@ -237,7 +237,7 @@ jobs:
           X_AI_API_KEY: ${{ secrets.X_AI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
-          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_          
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}        
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
           UPSTASH_REDIS_URL: ${{ env.UPSTASH_REDIS_URL }}
           APP_ENV: "preview"
