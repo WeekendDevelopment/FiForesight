@@ -254,7 +254,7 @@ export default function IpoPage() {
         </Box>
       )}
 
-      {/* Error — surfaces optional FMP config gracefully */}
+      {/* Error — shown only if both Nasdaq and EDGAR are unreachable */}
       {!loading && error && (
         <Box sx={{ py: 8, textAlign: 'center', opacity: 0.7 }}>
           <Rocket size={44} color={primaryColor} style={{ opacity: 0.5 }} />
