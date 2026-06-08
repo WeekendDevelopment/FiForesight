@@ -23,6 +23,7 @@ runs:
         GROQ_API_KEY: ${{ env.GROQ_API_KEY }}
         ALPACA_API_KEY: ${{ env.ALPACA_API_KEY }}
         ALPACA_SECRET_KEY: ${{ env.ALPACA_SECRET_KEY }}
+        FMP_API_KEY: ${{ env.FMP_API_KEY }}
         NEW_RELIC_LICENSE_KEY: ${{ env.NEW_RELIC_LICENSE_KEY }}
         UPSTASH_REDIS_URL: ${{ env.UPSTASH_REDIS_URL }}
 
