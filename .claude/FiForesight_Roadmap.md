@@ -50,7 +50,7 @@
 - Options Greeks (Δ, Θ) + aggregate stats (IV, put/call ratio, IV skew) (#225)
 - Expiry selector on options chain (#225)
 
-- IPO Tracker tab (`/ipo`) — FMP primary + SEC EDGAR S-1 fallback, upcoming 90d + recent 30d, Redis 4h TTL, responsive card grid, status chips, SEC EDGAR links, AbortController on unmount (no PR — pushed direct to main)
+- IPO Tracker tab (`/ipo`) — FMP primary + SEC EDGAR S-1 fallback, upcoming 90d + recent 30d, Redis 4h TTL, responsive card grid, status chips, SEC EDGAR links, AbortController on unmount (`#230`)
 
 ### Auth & Backend
 - Supabase email/password auth — `AuthContext`, `AuthModal`, watchlist groundwork (#193)
