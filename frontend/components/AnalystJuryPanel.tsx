@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Box, Button, Card, CardContent, CircularProgress, Grid, Stack, Tooltip, Typography } from '@mui/material';
 import { Scale, Wrench } from 'lucide-react';
 import axios from 'axios';
+import { useAuth } from '../contexts/AuthContext';
 import type { AnalystJuror } from '../types';
 
 const RATING_COLORS: Record<string, { bg: string; text: string }> = {
@@ -35,6 +36,7 @@ const formatToolsUsed = (tools?: string[]): string => {
 
 export default function AnalystJuryPanel({ analysts, symbol }: { analysts: AnalystJuror[]; symbol?: string }) {
   const ratingColor = (r: string) => RATING_COLORS[r] ?? { bg: '#64748b22', text: '#94a3b8' };
+  const { session } = useAuth();
 
   // Local copy so a tool-driven re-analysis can replace the verdicts in place.
   // Resets whenever the upstream prediction (props.analysts) changes.
@@ -59,8 +61,11 @@ export default function AnalystJuryPanel({ analysts, symbol }: { analysts: Analy
     const reqId = ++reanalyzeReqId.current;
     setReanalyzing(true);
     setReanalyzeError(null);
+    const authHeaders = session?.access_token
+      ? { Authorization: `Bearer ${session.access_token}` }
+      : {};
     try {
-      const res = await axios.post('/api/jury/reanalyze', { symbol });
+      const res = await axios.post('/api/jury/reanalyze', { symbol }, { headers: authHeaders });
       if (reqId !== reanalyzeReqId.current) return;   // superseded — discard
       const next = res.data?.juryAnalysts as AnalystJuror[] | undefined;
       if (next && next.length > 0) {

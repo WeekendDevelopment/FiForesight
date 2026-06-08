@@ -78,8 +78,12 @@ function AnalysisContent() {
   const [chatOpen,         setChatOpen]         = useState(false);
   const [authOpen,         setAuthOpen]         = useState(false);
 
-  const { user } = useAuth();
+  const { user, session } = useAuth();
   const { watchlist, currentIsSaved, toggle: toggleWatchlist, toggling: watchlistToggling } = useWatchlist(prediction?.symbol ?? ticker);
+
+  const authHeaders = session?.access_token
+    ? { Authorization: `Bearer ${session.access_token}` }
+    : {};
 
   const fetchTradeSetup = (data: PredictionData) => {
     setTradeSetup(null);
@@ -95,7 +99,7 @@ function AnalysisContent() {
       trend:           data.prediction.trend,
       sentiment_label: data.sentiment?.label ?? 'Neutral',
       var_95:          data.monteCarlo?.var_95 ?? null,
-    })
+    }, { headers: authHeaders })
       .then(r  => setTradeSetup(r.data))
       .catch(() => { /* non-fatal */ })
       .finally(() => setTradeSetupLoading(false));
@@ -124,7 +128,7 @@ function AnalysisContent() {
     setDcfData(null);
     setChatOpen(false);
     try {
-      const response = await axios.post('/api/predict', { data: fullSymbol });
+      const response = await axios.post('/api/predict', { data: fullSymbol }, { headers: authHeaders });
       setPrediction(response.data);
       // Persist the ticker in the URL so the view is shareable, reload-safe, and
       // back/forward navigable. scroll:false keeps the current scroll position.
