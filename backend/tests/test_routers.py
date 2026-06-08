@@ -480,6 +480,53 @@ def test_ipo_calendar_fmp_split_and_shapes() -> None:
         assert key in up
 
 
+def _mock_httpx_client_router(routes: list) -> MagicMock:
+    """httpx.AsyncClient mock whose .get() picks a response by URL substring.
+
+    `routes` is a list of (url_substring, json_payload). Lets one test drive a
+    failing FMP call (error-shaped body) followed by a successful EDGAR call.
+    """
+    async def _get(url: str, *a: Any, **k: Any) -> MagicMock:
+        for sub, payload in routes:
+            if sub in url:
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.raise_for_status = MagicMock()
+                resp.json = MagicMock(return_value=payload)
+                return resp
+        raise AssertionError(f"unexpected URL: {url}")
+
+    http = MagicMock()
+    http.get = AsyncMock(side_effect=_get)
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=http)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return MagicMock(return_value=cm)
+
+
+def test_ipo_calendar_fmp_error_falls_back_to_edgar() -> None:
+    # FMP returns a 200 error-shaped body (as it does for retired/paywalled
+    # endpoints); the endpoint must degrade to EDGAR rather than 502.
+    fmp_error = {"Error Message": "Legacy Endpoint : no longer supported"}
+    edgar_payload = {
+        "hits": {"hits": [
+            {"_source": {"display_names": ["Foo Inc."], "file_date": "2026-05-20"}},
+        ]}
+    }
+    router = _mock_httpx_client_router([
+        ("financialmodelingprep.com", fmp_error),
+        ("efts.sec.gov", edgar_payload),
+    ])
+    with patch("backend.routers.market.Config.FMP_API_KEY", "valid-but-paywalled"), \
+            patch("backend.routers.market.httpx.AsyncClient", router):
+        resp = client.get("/ipo/calendar")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["source"] == "edgar"          # fell back, did NOT 502
+    assert len(payload["recent"]) == 1
+    assert payload["recent"][0]["company"] == "Foo Inc."
+
+
 def test_ipo_calendar_edgar_fallback_without_key() -> None:
     edgar_payload = {
         "hits": {

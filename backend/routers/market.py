@@ -490,8 +490,11 @@ async def ipo_calendar() -> Dict[str, Any]:
     async def _fetch_fmp() -> List[Dict[str, Any]]:
         from_date = (today - timedelta(days=30)).isoformat()
         to_date = (today + timedelta(days=90)).isoformat()
+        # FMP retired the v3/v4 `ipo_calendar` endpoints on 2025-08-31; the
+        # current one lives under `/stable`. It's a paid endpoint now, so for a
+        # free key this 4xx's and we degrade to SEC EDGAR (see the caller).
         url = (
-            "https://financialmodelingprep.com/api/v3/ipo_calendar"
+            "https://financialmodelingprep.com/stable/ipos-calendar"
             f"?from={from_date}&to={to_date}&apikey={fmp_key}"
         )
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -499,19 +502,29 @@ async def ipo_calendar() -> Dict[str, Any]:
             resp.raise_for_status()
             raw = resp.json()
 
+        # FMP signals errors either via HTTP status (handled above) or a 200
+        # body shaped like {"Error Message": ...} / {"message": ...}. Treat any
+        # non-list payload as an error so the caller falls back to EDGAR.
+        if not isinstance(raw, list):
+            msg = ""
+            if isinstance(raw, dict):
+                msg = str(raw.get("Error Message") or raw.get("message") or raw)[:200]
+            raise RuntimeError(f"FMP returned a non-list payload: {msg}")
+
         results: List[Dict[str, Any]] = []
-        for item in (raw or []):
+        for item in raw:
             ipo_date = str(item.get("date") or "")
             low, high = _parse_ipo_price_range(item)
             results.append({
                 "symbol":     item.get("symbol") or "",
-                "company":    item.get("company") or "",
-                "exchange":   item.get("exchange") or "",
+                # field names vary across FMP API versions — accept both
+                "company":    item.get("company") or item.get("companyName") or "",
+                "exchange":   item.get("exchange") or item.get("exchangeShortName") or "",
                 "date":       ipo_date,
                 "price_low":  low,
                 "price_high": high,
                 "shares":     item.get("shares"),
-                "market_cap": item.get("marketCap"),
+                "market_cap": item.get("marketCap") or item.get("mktCap"),
                 "actions":    item.get("actions") or "",  # "expected" | "priced" | "withdrawn"
                 "status":     "upcoming" if ipo_date >= today.isoformat() else "recent",
             })
@@ -551,22 +564,31 @@ async def ipo_calendar() -> Dict[str, Any]:
             })
         return results
 
-    try:
-        if fmp_key:
+    # Try FMP first when a key is configured, but degrade to SEC EDGAR on ANY
+    # FMP failure (retired/paywalled endpoint, bad key, timeout) rather than
+    # failing the whole tab — EDGAR needs no key and is always free.
+    data: Optional[List[Dict[str, Any]]] = None
+    source = "edgar"
+    if fmp_key:
+        try:
             data = await asyncio.wait_for(_fetch_fmp(), timeout=12.0)
             source = "fmp"
-        else:
-            logger.info("[IPO] FMP_API_KEY not set — using SEC EDGAR fallback")
+        except Exception as e:
+            logger.warning(f"[IPO] FMP fetch failed ({e!r}); falling back to SEC EDGAR")
+            data = None
+    else:
+        logger.info("[IPO] FMP_API_KEY not set — using SEC EDGAR fallback")
+
+    if data is None:
+        try:
             data = await asyncio.wait_for(_fetch_edgar_fallback(), timeout=12.0)
             source = "edgar"
-    except asyncio.TimeoutError:
-        logger.warning("[IPO] upstream fetch timed out")
-        raise HTTPException(status_code=504, detail="IPO calendar temporarily unavailable")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.warning(f"[IPO] fetch failed: {e}")
-        raise HTTPException(status_code=502, detail="IPO data provider error")
+        except asyncio.TimeoutError:
+            logger.warning("[IPO] EDGAR fallback timed out")
+            raise HTTPException(status_code=504, detail="IPO calendar temporarily unavailable")
+        except Exception as e:
+            logger.warning(f"[IPO] EDGAR fallback failed: {e}")
+            raise HTTPException(status_code=502, detail="IPO data provider error")
 
     # Upcoming first (ascending by date), then recent (most recent first).
     upcoming = sorted(
