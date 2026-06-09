@@ -1,7 +1,18 @@
 # FiForesight Roadmap
 
 > Source of truth for planned work. Feature-based, free-tier only.
-> Last synced: 2026-06-08 — All Features 5–8 shipped. Phase C items (L2, jury tools, backtester) also shipped. No open Next Up items — backlog is Phases A/B and Quick Wins.
+> Last synced: 2026-06-08 — Features 5–8 shipped. Features 9–12 committed (security, analytics, portfolio, alerts). Sequence: F11 → F12 → F10 → F9.
+
+---
+
+## Definition of Done (applies to Feature 9 onward)
+
+Documentation is part of the feature, not an afterthought. A feature PR is **not done** until all five exist:
+1. **Roadmap** — item moved from committed/Backlog → Shipped with PR #.
+2. **`CLAUDE.md`** — new endpoints added to Data Flow; new env vars; new gotchas/decisions.
+3. **`/docs/FiForesight-Documentation.md`** — a section for the feature (and fix the stale `/compare` "stub" claim at line ~1061 as the first instance).
+4. **API contract** — request/response shape documented in the PR description.
+5. **Tests** — each new endpoint ships ≥1 integration test (also closes the audit's coverage gaps).
 
 ---
 
@@ -66,6 +77,60 @@
 - HTTPS, Docker multi-stage, Koyeb + Oracle Cloud deploys
 - GitHub Actions: PR preview + prod deploy; Alpaca API keys wired through deploy pipeline (#209 + workflow updates)
 - FastMCP server (`mcp_server.py`)
+
+---
+
+## Next Up — Features 9–12 (committed 2026-06-08)
+
+> Build order: **F11 → F12 → F10 → F9**. Harden first (gates user-data features), then ship the high-trust dashboard, then the portfolio manager, then alerts (depend on auth + holdings).
+
+### Feature 11 · Security Hardening *(do first)*
+**Branch:** `feat/security-hardening`
+**Problem:** Backend auth is frontend-only; `/predict`, `/chat`, `/jury/reanalyze`, `/trade-setup` are public and unthrottled; `/chat` is prompt-injectable; CORS is open.
+- **Auth enforcement** — require Bearer token on compute-heavy endpoints via existing `get_user_id` in `dependencies.py`; keep read-only market endpoints public or soft-gated.
+- **Rate limiting** — add `slowapi`; per-IP quotas (e.g. `/predict` 10/min, `/chat` 20/min); 429 + `Retry-After`.
+- **Prompt-injection guards** (`routers/trade.py` `/chat`) — cap `message` length (≤500 chars), sanitize `symbol`/context before interpolation, harden system prompt against instruction-override.
+- **CORS** — `CORSMiddleware` restricted to known frontend origins.
+- **Input validation** — apply existing `_validate_tag` regex to all user symbols (`/predict` currently only `.upper()`s).
+- **Observability** — `logger.debug` on the 9 silent-failure handlers (`market.py:414,629,680`, `trade.py:279`, `services.py:941`, etc.).
+- **JWT** — require signature verification when `SUPABASE_JWT_SECRET` set; warn loudly when not.
+
+**Files:** `backend/main.py` (CORS), `backend/dependencies.py`, `backend/routers/{predict,trade,market}.py`, `backend/requirements.txt` (+slowapi)
+**Complexity:** Medium
+
+### Feature 12 · Forecast Accuracy & Sentiment Analytics Dashboard *(do second)*
+**Branch:** `feat/accuracy-sentiment-dashboard`
+**Problem:** Forecast-accuracy data is already collected in InfluxDB but never shown; sentiment is never persisted.
+- **Backend** — new `GET /analytics/accuracy/{symbol}` reading `ForecastStore.query_model_accuracy`, `query_ensemble_mae`, `query_forecast_records` + `query_price_outcomes`: per-model MAE trend, ensemble MAE by horizon (d1–d5), directional accuracy %, forecast equity curve.
+- **Sentiment history** — write VADER compound per ticker to a new InfluxDB `sentiment_score` measurement on each `/predict`; new `GET /analytics/sentiment/{symbol}` returns the trend.
+- **Frontend** — new `/insights` tab: accuracy timeline, model-performance ranking, ensemble-confidence-by-horizon chart, sentiment trend line.
+- **Reuse** — Recharts; Redis-cache analytics queries (15-min TTL).
+
+**Files:** new `backend/routers/analytics.py`, `backend/services.py` (sentiment write), `frontend/app/(app)/insights/page.tsx`, proxies
+**Complexity:** Low–Medium *(data already exists)*
+
+### Feature 10 · Portfolio Manager *(do third)*
+**Branch:** `feat/portfolio-manager`
+**Problem:** Current "portfolio" only backtests hypotheticals; no real holdings or live P&L.
+- **Schema** — Supabase `holdings(id, user_id, symbol, shares, cost_basis, opened_at)` with RLS.
+- **Backend** — `GET/POST/DELETE /portfolio/holdings` (auth-gated, F11); `GET /portfolio/summary` → live prices, per-holding + total P&L, sector allocation, diversification score, aggregate forecast (reuse ensemble + jury).
+- **Frontend** — `/portfolio` tab: holdings table (add/edit/remove), live P&L, sector pie, portfolio-level forecast; reuse `HoldingPnl` types + simulation plumbing.
+- **Edge cases** — splits/dividends documented as out-of-scope v1.
+
+**Files:** new `backend/routers/portfolio.py`, Supabase migration, `frontend/app/(app)/portfolio/page.tsx`, proxies, sidebar nav item
+**Complexity:** Medium–High
+
+### Feature 9 · Alerts & Notifications *(do last)*
+**Branch:** `feat/alerts-notifications`
+**Problem:** Engagement is pull-only; no proactive signals.
+- **Schema** — Supabase `alert_rules(id, user_id, symbol, type, operator, threshold, active, last_fired)`; types: price cross, RSI threshold, % move, earnings-tomorrow, forecast-breakout.
+- **Backend** — `GET/POST/DELETE /alerts/rules` (auth-gated); scheduled evaluator (cron/worker) checks rules against live data, records fires.
+- **Delivery** — web-push (free) and/or email via Supabase edge function; daily-briefing digest reuses `/briefing`.
+- **Frontend** — `/alerts` tab: rule builder UI, active rules list, fired history.
+- **Depends on:** F11 (auth) + ideally F10 (alert on holdings).
+
+**Files:** new `backend/routers/alerts.py` + worker, Supabase migration, `frontend/app/(app)/alerts/page.tsx`, proxies
+**Complexity:** High
 
 ---
 
