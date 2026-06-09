@@ -2,6 +2,7 @@
 import re
 import json
 import logging
+import asyncio
 import httpx
 import xml.etree.ElementTree as ET
 import pandas as pd
@@ -1540,7 +1541,15 @@ ANALYST_PERSONAS = [
         "model_label": "Groq · GPT-OSS 20B",
         "provider":    "groq",
         "api_model":   "openai/gpt-oss-20b",
-        "max_tokens":  2048,
+        # 1000 max_tokens — the full jury prompt is ~560 tokens; reasoning needs ~500;
+        # content needs ~300+.  700 was too tight (reasoning consumed all tokens, leaving
+        # zero for content).  1000 keeps each request under ~1,500 total tokens, giving
+        # ~5 calls/minute within the free-tier 8,000 TPM limit (was ~4 with max=2048).
+        "max_tokens":  1000,
+        # 1 tool round — this reasoning model tends to keep calling tools across
+        # multiple rounds, hitting the "Tool choice is none" 400 in the forced
+        # final round. Capping at 1 tool round keeps the flow clean.
+        "max_rounds":  1,
         "color":       "#10b981",
         "system": (
             "You are GPT-OSS-20B, a quantitative signal analyst running on OpenAI GPT-OSS 20B. "
@@ -1732,9 +1741,23 @@ class AnalystJuryService:
         # max_rounds tool rounds + 1 forced final (no-tools) round
         for round_idx in range(max_rounds + 1):
             include_tools = round_idx < max_rounds
+            # In the forced final round (no tools), append an explicit instruction
+            # so reasoning models don't keep trying to call more tools.
+            final_messages = messages
+            if not include_tools and len(messages) > 2:
+                final_messages = messages + [
+                    {
+                        "role":    "user",
+                        "content": (
+                            "Tool data gathered. "
+                            "Now produce ONLY the final JSON verdict: "
+                            '{"rating": "...", "confidence": N, "note": "..."}'
+                        ),
+                    }
+                ]
             body = {
                 "model":       model,
-                "messages":    messages,
+                "messages":    final_messages,
                 "max_tokens":  max_tokens,
                 "temperature": 0.65,
             }
@@ -1743,6 +1766,13 @@ class AnalystJuryService:
                 # Force at least one tool call on the opening round when asked
                 # (used by the "re-analyze with tools" path); auto otherwise.
                 body["tool_choice"] = "required" if (force_first and round_idx == 0) else "auto"
+            elif tools_used:
+                # Forced final round — include the tools schema with tool_choice="none"
+                # so the model knows the signatures but is explicitly prevented from
+                # calling them. Without this, reasoning models (e.g. GPT-OSS-20B) may
+                # keep issuing tool_calls and the loop exhausts with empty content.
+                body["tools"]       = tools
+                body["tool_choice"] = "none"
 
             logger.debug(
                 f"[GROQ-TOOLS] round={round_idx} model={model} "
@@ -1753,34 +1783,62 @@ class AnalystJuryService:
             # function calling entirely). Degrade gracefully so the analyst still
             # returns a real verdict instead of crashing to a Hold/25 fallback:
             #   required → auto → no tools.
+            # 429 rate-limit: honour Retry-After (up to 8 s) and retry once.
             try:
                 data = await self._post_groq_raw(body)
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code not in (400, 422) or "tools" not in body:
-                    raise
-                data = None
-                # Step 1: if we were forcing, try relaxing to tool_choice=auto.
-                if body.get("tool_choice") == "required":
-                    logger.warning(
-                        f"[GROQ-TOOLS] {model} rejected tool_choice=required "
-                        f"({exc.response.status_code}) — retrying with tool_choice=auto"
-                    )
-                    body["tool_choice"] = "auto"
+                status = exc.response.status_code
+                # ── 429 rate-limit: wait Retry-After (capped at 8 s) then retry ──
+                if status == 429:
+                    retry_after = 6.0
                     try:
-                        data = await self._post_groq_raw(body)
-                    except httpx.HTTPStatusError as exc2:
-                        if exc2.response.status_code not in (400, 422):
-                            raise
-                        data = None
-                # Step 2: still rejected (or model can't do tools at all) — drop them.
-                if data is None:
+                        import re as _re
+                        m = _re.search(r"try again in (\d+(?:\.\d+)?)s", exc.response.text)
+                        if m:
+                            retry_after = min(float(m.group(1)) + 0.5, 8.0)
+                    except Exception:
+                        pass
                     logger.warning(
-                        f"[GROQ-TOOLS] {model} rejected tools (400) — "
-                        f"retrying without tools (plain completion)"
+                        f"[GROQ-TOOLS] {model} hit 429 rate-limit — "
+                        f"sleeping {retry_after:.1f}s then retrying"
                     )
-                    body.pop("tools", None)
-                    body.pop("tool_choice", None)
-                    data = await self._post_groq_raw(body)
+                    await asyncio.sleep(retry_after)
+                    data = await self._post_groq_raw(body)  # re-raise on second 429
+                elif status not in (400, 422):
+                    raise
+                elif "tools" not in body:
+                    # 400 in the forced final (no-tools) round — the model tried to call a
+                    # tool even without a tools schema ("Tool choice is none, but model
+                    # called a tool"). Return empty so LAST-RESORT parser gives a fallback.
+                    logger.warning(
+                        f"[GROQ-TOOLS] {model} attempted tool call in no-tools round "
+                        f"(400) — returning empty for LAST-RESORT fallback"
+                    )
+                    return "", tools_used
+                else:
+                    data = None
+                    # Step 1: if we were forcing, try relaxing to tool_choice=auto.
+                    if body.get("tool_choice") == "required":
+                        logger.warning(
+                            f"[GROQ-TOOLS] {model} rejected tool_choice=required "
+                            f"({status}) — retrying with tool_choice=auto"
+                        )
+                        body["tool_choice"] = "auto"
+                        try:
+                            data = await self._post_groq_raw(body)
+                        except httpx.HTTPStatusError as exc2:
+                            if exc2.response.status_code not in (400, 422):
+                                raise
+                            data = None
+                    # Step 2: still rejected (or model can't do tools at all) — drop them.
+                    if data is None:
+                        logger.warning(
+                            f"[GROQ-TOOLS] {model} rejected tools (400) — "
+                            f"retrying without tools (plain completion)"
+                        )
+                        body.pop("tools", None)
+                        body.pop("tool_choice", None)
+                        data = await self._post_groq_raw(body)
             msg  = data["choices"][0]["message"]
             tool_calls = msg.get("tool_calls")
 
@@ -2011,10 +2069,12 @@ class AnalystJuryService:
         try:
             if persona["provider"] == "groq":
                 if use_tools:
+                    max_rounds_model = persona.get("max_rounds", 2)
                     raw, tools_used = await self.call_groq_with_tools(
                         model_used, persona["system"], user_prompt,
                         tools, tool_dispatcher, max_tok,
                         force_first=force_tools,
+                        max_rounds=max_rounds_model,
                     )
                 else:
                     raw = await self._call_groq(model_used, persona["system"], user_prompt, max_tok)
@@ -2027,8 +2087,15 @@ class AnalystJuryService:
             )
 
         except Exception as e:
+            # Log the HTTP response body for easier diagnosis of 4xx/429 errors
+            _body = ""
+            if isinstance(e, httpx.HTTPStatusError):
+                try:
+                    _body = f" | response_body={e.response.text[:300]}"
+                except Exception:
+                    pass
             logger.error(
-                f"[JURY/{persona['id']}] ✗ FAILED — model={model_used}, error={e} | "
+                f"[JURY/{persona['id']}] ✗ FAILED — model={model_used}, error={e}{_body} | "
                 f"FALLBACK: returning Hold/25 default verdict"
             )
             raw = (
