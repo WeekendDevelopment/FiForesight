@@ -1498,13 +1498,20 @@ class SentimentService:
 
 ANALYST_PERSONAS = [
     {
-        "id":          "LLAMA-4-SCOUT",
-        "avatar":      "L4",
-        "title":       "Macro & Risk Lens",
-        "model_label": "Groq · Llama 4 Scout",
-        "provider":    "groq",
-        "api_model":   "meta-llama/llama-4-scout-17b-16e-instruct",
-        "color":       "#94a3b8",
+        "id":           "LLAMA-4-SCOUT",
+        "avatar":       "L4",
+        "title":        "Macro & Risk Lens",
+        "model_label":  "Groq · Llama 4 Scout",
+        "provider":     "groq",
+        "api_model":    "meta-llama/llama-4-scout-17b-16e-instruct",
+        "color":        "#94a3b8",
+        # Persona-specific fallback so users can tell WHICH analyst failed
+        # and what type of analysis is missing (not all three looking identical).
+        "fallback_note": (
+            "Macro & risk analysis unavailable this run — "
+            "downside signals, systemic headwinds, and risk-adjusted positioning "
+            "could not be evaluated."
+        ),
         "system": (
             "You are a macro-economic and risk analyst running on Meta Llama 4 Scout. "
             "Your lens is downside scenarios, warning signals, and risk-adjusted positioning. "
@@ -1520,13 +1527,18 @@ ANALYST_PERSONAS = [
         ),
     },
     {
-        "id":          "LLAMA-70B",
-        "avatar":      "70B",
-        "title":       "Growth Lens",
-        "model_label": "Groq · llama-3.3-70b",
-        "provider":    "groq",
-        "api_model":   "llama-3.3-70b-versatile",
-        "color":       "#00f2ff",
+        "id":           "LLAMA-70B",
+        "avatar":       "70B",
+        "title":        "Growth Lens",
+        "model_label":  "Groq · llama-3.3-70b",
+        "provider":     "groq",
+        "api_model":    "llama-3.3-70b-versatile",
+        "color":        "#00f2ff",
+        "fallback_note": (
+            "Growth analysis unavailable this run — "
+            "momentum catalysts, earnings trajectory, and upside price targets "
+            "could not be evaluated."
+        ),
         "system": (
             "You are LLAMA-70B, a fundamental growth equity analyst running on Llama 3.3 70B. "
             "Your lens is momentum, corporate catalysts, and upside potential. "
@@ -1541,15 +1553,20 @@ ANALYST_PERSONAS = [
         ),
     },
     {
-        "id":          "LLAMA-8B",
-        "avatar":      "8B",
-        "title":       "Quant Lens",
-        "model_label": "Groq · Llama 3.1 8B",
-        "provider":    "groq",
-        "api_model":   "llama-3.1-8b-instant",
+        "id":           "LLAMA-8B",
+        "avatar":       "8B",
+        "title":        "Quant Lens",
+        "model_label":  "Groq · Llama 3.1 8B",
+        "provider":     "groq",
+        "api_model":    "llama-3.1-8b-instant",
         # Standard 320 max_tokens — llama-3.1-8b-instant is not a reasoning model so
         # no extra token budget is needed; output is direct JSON, no hidden reasoning.
-        "color":       "#10b981",
+        "color":        "#10b981",
+        "fallback_note": (
+            "Quantitative signal analysis unavailable this run — "
+            "RSI regime, MACD crossover, Bollinger Band position, and statistical signals "
+            "could not be processed."
+        ),
         "system": (
             "You are a quantitative signal analyst running on Llama 3.1 8B Instant. "
             "Your lens is pure technical indicators and statistical signals — no macro bias, no news sentiment. "
@@ -2095,11 +2112,18 @@ class AnalystJuryService:
                     pass
             logger.error(
                 f"[JURY/{persona['id']}] ✗ FAILED — model={model_used}, error={e}{_body} | "
-                f"FALLBACK: returning Hold/25 default verdict"
+                f"FALLBACK: returning Hold/25 with persona-specific note"
+            )
+            # Use each persona's own fallback_note so the three cards stay visually
+            # distinct even when a model is down — user can tell WHICH analyst failed
+            # and what type of analysis is missing, rather than all three reading
+            # identically as "Model unavailable — no verdict at this time."
+            _fallback_note = persona.get(
+                "fallback_note", "Model unavailable — no verdict at this time."
             )
             raw = (
                 '{"rating": "Hold", '
-                '"note": "Model unavailable — no verdict at this time.", '
+                f'"note": {__import__("json").dumps(_fallback_note)}, '
                 '"confidence": 25}'
             )
             model_used = "error"

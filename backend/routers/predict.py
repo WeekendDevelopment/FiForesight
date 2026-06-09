@@ -377,9 +377,17 @@ async def _run_analyst_jury(
         logger.debug(f"[JURY-GRAPH] ctx cache_set failed (non-fatal): {exc}")
 
     try:
+        # Prepend UTC minute-timestamp to the live context so Groq never returns a
+        # server-side cached completion when the same ticker is queried repeatedly
+        # within a short window (prices identical → prompts would otherwise match).
+        # The cached `ctx` above stays clean (no timestamp) for /jury/reanalyze.
+        ts_prefix = (
+            f"[Analysis timestamp: "
+            f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC]\n"
+        )
         # 30s budget accommodates tool-call round-trips (Groq function calling).
         return await asyncio.wait_for(
-            run_jury_graph(analyst_jury_svc, ANALYST_PERSONAS, ctx, symbol=symbol),
+            run_jury_graph(analyst_jury_svc, ANALYST_PERSONAS, ts_prefix + ctx, symbol=symbol),
             timeout=30.0,
         )
     except Exception as exc:

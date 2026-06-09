@@ -308,14 +308,16 @@ def _make_analyst_node(persona: dict, analyst_jury_svc, tools=None, tool_dispatc
             return {"verdicts": {pid: verdict}}
         except Exception as exc:
             logger.error(f"[JURY-GRAPH/{pid}] ✗ node failed: {exc}", exc_info=True)
-            # Surface a useful message: timeout, 429 = quota, else generic
+            # Use the persona's own fallback_note as the base so each analyst card
+            # tells users specifically which lens failed, then append a reason suffix.
+            _base = persona.get("fallback_note", "Analysis unavailable.")
             exc_str = str(exc)
             if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
-                fallback_note = "Analysis timed out."
+                fallback_note = _base + " (request timed out)"
             elif "429" in exc_str or "rate_limit" in exc_str.lower() or "rate limit" in exc_str.lower():
-                fallback_note = "Rate limit reached — daily Groq quota exhausted."
+                fallback_note = _base + " (daily rate limit reached)"
             else:
-                fallback_note = "Analysis unavailable."
+                fallback_note = _base
             fallback = {
                 "id":          persona["id"],
                 "avatar":      persona["avatar"],
