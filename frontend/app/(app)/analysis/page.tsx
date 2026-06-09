@@ -308,10 +308,9 @@ function AnalysisContent() {
                 {/* ── Walk-forward backtest (on-demand) ────────────── */}
                 <BacktestPanel symbol={prediction.symbol} isDark={isDark} primaryColor={primaryColor} />
 
-                {/* ── Analyst Jury ──────────────────────────────────── */}
-                {prediction.juryAnalysts && prediction.juryAnalysts.length > 0 && (
-                  <AnalystJuryPanel analysts={prediction.juryAnalysts} symbol={prediction.symbol} />
-                )}
+                {/* ── Analyst Jury (on-demand — panel shows a Run button
+                     when the prediction ships without verdicts) ───────── */}
+                <AnalystJuryPanel analysts={prediction.juryAnalysts ?? []} symbol={prediction.symbol} />
 
                 {/* ── Trade Setup ──────────────────────────────────── */}
                 {user ? (
