@@ -14,7 +14,7 @@ AI-driven quantitative financial forecasting SaaS. Ticker lookup → ensemble ML
 | ML/Forecasting | Prophet, SARIMAX (statsmodels), RandomForestRegressor (scikit-learn) |
 | Market Data | yfinance, SerpAPI (news/trending) |
 | Sentiment | VADER (vaderSentiment) — headline scoring, compound score + label |
-| AI / LLM Jury | Groq API — Llama 4 Scout, Llama 3.3 70B, GPT-OSS 20B (3-analyst jury via LangGraph) |
+| AI / LLM Jury | Groq API — Llama 4 Scout, Llama 3.3 70B, Llama 3.1 8B (3-analyst jury via LangGraph) |
 | Time-Series DB | InfluxDB |
 | Auth | Supabase (email/password, free tier) |
 | Observability | New Relic APM (backend + frontend) |
@@ -151,7 +151,7 @@ User enters ticker
       → SerpAPI: news headlines + trending symbols
       → VADER SentimentService: compound [-1,1] + label (Bullish/Bearish/Neutral)
       → LangGraph StateGraph parallel fan-out (Groq):
-          Llama 4 Scout (Macro & Risk) · Llama 3.3 70B (Growth) · GPT-OSS 20B (Quant)
+          Llama 4 Scout (Macro & Risk) · Llama 3.3 70B (Growth) · Llama 3.1 8B Instant (Quant)
           Each isolated — failures degrade to Hold/25, not 500
       → Response: history, fundamentals, indicators, forecasts, jury verdicts, news, sentiment, monte carlo
 
@@ -212,7 +212,8 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 
 - InfluxDB is primary store; yfinance is fallback only.
 - LLM jury runs via **LangGraph** (`jury_graph.py`) — parallel StateGraph fan-out. Each analyst node isolated so failures → Hold/25, not 500.
-- **Llama 4 Scout** (`meta-llama/llama-4-scout-17b-16e-instruct`) is the Macro & Risk analyst. Kimi K2 was deprecated and removed.
+- **Llama 4 Scout** (`meta-llama/llama-4-scout-17b-16e-instruct`) is the Macro & Risk analyst. Kimi K2 was deprecated; GPT-OSS-20B was replaced (reasoning model with 1K RPD burned out).
+- **Llama 3.1 8B Instant** (`llama-3.1-8b-instant`) is the Quant Lens analyst — chosen for its **14,400 RPD** free-tier limit (14.4× more than any other model). Rate limits: 30 RPM | 6K TPM | 14.4K RPD.
 - **VADER sentiment** (`SentimentService` in `services.py`) scores headlines before the jury runs; compound score + label passed in each analyst's context.
 - **FastMCP server** — `fastmcp dev backend/mcp_server.py` exposes predict/sparklines/health as Claude Code tools.
 - **Backend router split** — `main.py` is now ~50 lines; all routes live in `backend/routers/`. Service singletons in `dependencies.py`.

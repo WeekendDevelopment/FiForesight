@@ -1483,9 +1483,15 @@ class SentimentService:
 # ---------------------------------------------------------------------------
 # Analyst Jury  —  3 personas, each pinned to a different model & provider
 #
-#   LLAMA-4-SCOUT → Groq meta-llama/llama-4-scout-17b-16e-instruct (free tier) — Macro & Risk lens
-#   LLAMA-70B → Groq llama-3.3-70b-versatile    (14,400 RPD free) — Growth lens
-#   GPT-OSS-20B → Groq openai/gpt-oss-20b       (free tier)       — Quant lens
+# Free-tier rate limits (Groq on-demand plan, as of 2025-06):
+#   LLAMA-4-SCOUT → meta-llama/llama-4-scout-17b-16e-instruct  30 RPM | 30K TPM |  1K RPD
+#   LLAMA-70B     → llama-3.3-70b-versatile                    30 RPM | 12K TPM |  1K RPD
+#   LLAMA-8B      → llama-3.1-8b-instant                       30 RPM |  6K TPM | 14.4K RPD ← best daily budget
+#
+# llama-3.1-8b-instant was chosen for the Quant slot because its 14,400 RPD (vs 1K for all
+# other models) makes it resilient to back-to-back predicts without exhausting the daily budget.
+# GPT-OSS-20B (1K RPD, reasoning model) was replaced: reasoning tokens consumed the entire
+# max_tokens budget, leaving zero for content, and required per-model workarounds.
 #
 #   _ai_note uses Groq llama-3.3-70b independently (header note, not jury)
 # ---------------------------------------------------------------------------
@@ -1535,25 +1541,18 @@ ANALYST_PERSONAS = [
         ),
     },
     {
-        "id":          "GPT-OSS-20B",
-        "avatar":      "GO",
+        "id":          "LLAMA-8B",
+        "avatar":      "8B",
         "title":       "Quant Lens",
-        "model_label": "Groq · GPT-OSS 20B",
+        "model_label": "Groq · Llama 3.1 8B",
         "provider":    "groq",
-        "api_model":   "openai/gpt-oss-20b",
-        # 1000 max_tokens — the full jury prompt is ~560 tokens; reasoning needs ~500;
-        # content needs ~300+.  700 was too tight (reasoning consumed all tokens, leaving
-        # zero for content).  1000 keeps each request under ~1,500 total tokens, giving
-        # ~5 calls/minute within the free-tier 8,000 TPM limit (was ~4 with max=2048).
-        "max_tokens":  1000,
-        # 1 tool round — this reasoning model tends to keep calling tools across
-        # multiple rounds, hitting the "Tool choice is none" 400 in the forced
-        # final round. Capping at 1 tool round keeps the flow clean.
-        "max_rounds":  1,
+        "api_model":   "llama-3.1-8b-instant",
+        # Standard 320 max_tokens — llama-3.1-8b-instant is not a reasoning model so
+        # no extra token budget is needed; output is direct JSON, no hidden reasoning.
         "color":       "#10b981",
         "system": (
-            "You are GPT-OSS-20B, a quantitative signal analyst running on OpenAI GPT-OSS 20B. "
-            "You operate purely on technical indicators and statistical signals — no macro bias, no news sentiment. "
+            "You are a quantitative signal analyst running on Llama 3.1 8B Instant. "
+            "Your lens is pure technical indicators and statistical signals — no macro bias, no news sentiment. "
             "Analyse the provided OHLCV data and indicator outputs. "
             "Interpret RSI regime, MACD histogram crossover state, Bollinger Band width and price position, "
             "SMA50/200 crossover proximity and % distance, annualised volatility, "
@@ -1783,19 +1782,19 @@ class AnalystJuryService:
             # function calling entirely). Degrade gracefully so the analyst still
             # returns a real verdict instead of crashing to a Hold/25 fallback:
             #   required → auto → no tools.
-            # 429 rate-limit: honour Retry-After (up to 8 s) and retry once.
+            # 429 rate-limit: honour Retry-After (up to 20 s) and retry once.
             try:
                 data = await self._post_groq_raw(body)
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
-                # ── 429 rate-limit: wait Retry-After (capped at 8 s) then retry ──
+                # ── 429 rate-limit: wait Retry-After (capped at 20 s) then retry ──
                 if status == 429:
                     retry_after = 6.0
                     try:
                         import re as _re
                         m = _re.search(r"try again in (\d+(?:\.\d+)?)s", exc.response.text)
                         if m:
-                            retry_after = min(float(m.group(1)) + 0.5, 8.0)
+                            retry_after = min(float(m.group(1)) + 0.5, 20.0)
                     except Exception:
                         pass
                     logger.warning(

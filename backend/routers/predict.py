@@ -150,9 +150,9 @@ def _safe_background(coro_or_future, *, name: str = "background"):
 
 async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict) -> str:
     """
-    Header analyst note via Groq llama-3.3-70b (14,400 RPD free, no quota issues).
-    Replaces Gemini which has a 20 RPD free-tier limit — too scarce for per-request use.
-    Falls back to the ensemble model's own note if Groq is unavailable.
+    Header analyst note via Groq llama-3.1-8b-instant (14,400 RPD free — highest budget).
+    Uses 8B instead of 70B to preserve llama-3.3-70b-versatile's 1K RPD exclusively for
+    the LLAMA-70B jury analyst.  Falls back to the ensemble model's own note if unavailable.
     """
     recent    = closes[-20:]
     price_str = ", ".join(f"{p:.2f}" for p in recent)
@@ -169,14 +169,14 @@ async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict)
     )
     logger.info(
         f"[AI-NOTE] Requesting header note — "
-        f"model=llama-3.3-70b-versatile, symbol={symbol}, RSI={rsi:.1f}, "
+        f"model=llama-3.1-8b-instant, symbol={symbol}, RSI={rsi:.1f}, "
         f"forecast_high=${forecast['high']:.2f}, forecast_low=${forecast['low']:.2f}, "
         f"conf={forecast.get('conf', 'low')} | "
         f"data_sent: last 20 closes of {len(closes)} total"
     )
     try:
         raw = await analyst_jury_svc._call_groq(
-            "llama-3.3-70b-versatile", system, prompt
+            "llama-3.1-8b-instant", system, prompt
         )
         note = raw.strip()
         logger.info(
@@ -216,7 +216,7 @@ async def _run_analyst_jury(
     Run all 3 analyst personas concurrently via AnalystJuryService.
       - LLAMA-4-SCOUT → Groq meta-llama/llama-4-scout-17b-16e-instruct (macro & risk lens, Meta)
       - LLAMA-70B     → Groq llama-3.3-70b-versatile  (growth lens, Meta)
-      - GPT-OSS-20B   → Groq openai/gpt-oss-20b        (quant lens, OpenAI)
+      - LLAMA-8B      → Groq llama-3.1-8b-instant        (quant lens, 14.4K RPD)
 
     All provider routing and response parsing are handled inside
     AnalystJuryService — no per-provider branching needed here.
