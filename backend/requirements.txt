@@ -21,3 +21,5 @@ fastmcp
 redis[hiredis]
 # JWT verification for Supabase auth tokens
 PyJWT
+# Per-IP / per-user rate limiting
+slowapi

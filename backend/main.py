@@ -6,9 +6,12 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
 
 from config import Config, SanitizeHttpxFilter
+from dependencies import limiter
 from redis_cache import init_redis, close_redis
 from routers import predict, simulation, trade, market, history, backtest
 
@@ -30,7 +33,37 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="FiForesight Quantum Engine", lifespan=lifespan)
 
+# --- Rate limiting -----------------------------------------------------------
+app.state.limiter = limiter
 
+
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    retry_after = getattr(exc, "retry_after", None)
+    headers = {"Retry-After": str(int(retry_after))} if retry_after else {"Retry-After": "60"}
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Too many requests — please slow down."},
+        headers=headers,
+    )
+
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
+
+# --- CORS --------------------------------------------------------------------
+_origins = [o.strip() for o in Config.ALLOWED_ORIGINS.split(",") if o.strip() and o.strip() != "*"]
+if not _origins:
+    logger.error("[CORS] ALLOWED_ORIGINS resolved to an empty list — no cross-origin requests will be permitted.")
+elif len(_origins) != len([o.strip() for o in Config.ALLOWED_ORIGINS.split(",") if o.strip()]):
+    logger.error("[CORS] ALLOWED_ORIGINS contained a wildcard '*' entry — it was removed. Set explicit origins only.")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+# --- Global exception handler ------------------------------------------------
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     tb = traceback.format_exc()

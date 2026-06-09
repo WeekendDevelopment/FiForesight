@@ -2,6 +2,7 @@
 import re
 import json
 import logging
+import asyncio
 import httpx
 import xml.etree.ElementTree as ET
 import pandas as pd
@@ -938,7 +939,8 @@ class YFinanceService:
                     else:
                         from datetime import datetime
                         result.append(datetime.strptime(str(d)[:10], "%Y-%m-%d").strftime("%m/%d"))
-                except Exception:
+                except Exception as _exc:
+                    logger.debug("[YFINANCE] earnings date parse error for %r: %s", d, _exc)
                     continue
             result = list(dict.fromkeys(result))[:4]  # deduplicate, cap at 4
             logger.info(f"[YFINANCE] ✓ fetch_earnings_dates — {ticker}: {result}")
@@ -1481,22 +1483,35 @@ class SentimentService:
 # ---------------------------------------------------------------------------
 # Analyst Jury  —  3 personas, each pinned to a different model & provider
 #
-#   LLAMA-4-SCOUT → Groq meta-llama/llama-4-scout-17b-16e-instruct (free tier) — Macro & Risk lens
-#   LLAMA-70B → Groq llama-3.3-70b-versatile    (14,400 RPD free) — Growth lens
-#   GPT-OSS-20B → Groq openai/gpt-oss-20b       (free tier)       — Quant lens
+# Free-tier rate limits (Groq on-demand plan, as of 2025-06):
+#   LLAMA-4-SCOUT → meta-llama/llama-4-scout-17b-16e-instruct  30 RPM | 30K TPM |  1K RPD
+#   LLAMA-70B     → llama-3.3-70b-versatile                    30 RPM | 12K TPM |  1K RPD
+#   LLAMA-8B      → llama-3.1-8b-instant                       30 RPM |  6K TPM | 14.4K RPD ← best daily budget
+#
+# llama-3.1-8b-instant was chosen for the Quant slot because its 14,400 RPD (vs 1K for all
+# other models) makes it resilient to back-to-back predicts without exhausting the daily budget.
+# GPT-OSS-20B (1K RPD, reasoning model) was replaced: reasoning tokens consumed the entire
+# max_tokens budget, leaving zero for content, and required per-model workarounds.
 #
 #   _ai_note uses Groq llama-3.3-70b independently (header note, not jury)
 # ---------------------------------------------------------------------------
 
 ANALYST_PERSONAS = [
     {
-        "id":          "LLAMA-4-SCOUT",
-        "avatar":      "L4",
-        "title":       "Macro & Risk Lens",
-        "model_label": "Groq · Llama 4 Scout",
-        "provider":    "groq",
-        "api_model":   "meta-llama/llama-4-scout-17b-16e-instruct",
-        "color":       "#94a3b8",
+        "id":           "LLAMA-4-SCOUT",
+        "avatar":       "L4",
+        "title":        "Macro & Risk Lens",
+        "model_label":  "Groq · Llama 4 Scout",
+        "provider":     "groq",
+        "api_model":    "meta-llama/llama-4-scout-17b-16e-instruct",
+        "color":        "#94a3b8",
+        # Persona-specific fallback so users can tell WHICH analyst failed
+        # and what type of analysis is missing (not all three looking identical).
+        "fallback_note": (
+            "Macro & risk analysis unavailable this run — "
+            "downside signals, systemic headwinds, and risk-adjusted positioning "
+            "could not be evaluated."
+        ),
         "system": (
             "You are a macro-economic and risk analyst running on Meta Llama 4 Scout. "
             "Your lens is downside scenarios, warning signals, and risk-adjusted positioning. "
@@ -1512,13 +1527,18 @@ ANALYST_PERSONAS = [
         ),
     },
     {
-        "id":          "LLAMA-70B",
-        "avatar":      "70B",
-        "title":       "Growth Lens",
-        "model_label": "Groq · llama-3.3-70b",
-        "provider":    "groq",
-        "api_model":   "llama-3.3-70b-versatile",
-        "color":       "#00f2ff",
+        "id":           "LLAMA-70B",
+        "avatar":       "70B",
+        "title":        "Growth Lens",
+        "model_label":  "Groq · llama-3.3-70b",
+        "provider":     "groq",
+        "api_model":    "llama-3.3-70b-versatile",
+        "color":        "#00f2ff",
+        "fallback_note": (
+            "Growth analysis unavailable this run — "
+            "momentum catalysts, earnings trajectory, and upside price targets "
+            "could not be evaluated."
+        ),
         "system": (
             "You are LLAMA-70B, a fundamental growth equity analyst running on Llama 3.3 70B. "
             "Your lens is momentum, corporate catalysts, and upside potential. "
@@ -1533,17 +1553,23 @@ ANALYST_PERSONAS = [
         ),
     },
     {
-        "id":          "GPT-OSS-20B",
-        "avatar":      "GO",
-        "title":       "Quant Lens",
-        "model_label": "Groq · GPT-OSS 20B",
-        "provider":    "groq",
-        "api_model":   "openai/gpt-oss-20b",
-        "max_tokens":  2048,
-        "color":       "#10b981",
+        "id":           "LLAMA-8B",
+        "avatar":       "8B",
+        "title":        "Quant Lens",
+        "model_label":  "Groq · Llama 3.1 8B",
+        "provider":     "groq",
+        "api_model":    "llama-3.1-8b-instant",
+        # Standard 320 max_tokens — llama-3.1-8b-instant is not a reasoning model so
+        # no extra token budget is needed; output is direct JSON, no hidden reasoning.
+        "color":        "#10b981",
+        "fallback_note": (
+            "Quantitative signal analysis unavailable this run — "
+            "RSI regime, MACD crossover, Bollinger Band position, and statistical signals "
+            "could not be processed."
+        ),
         "system": (
-            "You are GPT-OSS-20B, a quantitative signal analyst running on OpenAI GPT-OSS 20B. "
-            "You operate purely on technical indicators and statistical signals — no macro bias, no news sentiment. "
+            "You are a quantitative signal analyst running on Llama 3.1 8B Instant. "
+            "Your lens is pure technical indicators and statistical signals — no macro bias, no news sentiment. "
             "Analyse the provided OHLCV data and indicator outputs. "
             "Interpret RSI regime, MACD histogram crossover state, Bollinger Band width and price position, "
             "SMA50/200 crossover proximity and % distance, annualised volatility, "
@@ -1731,9 +1757,23 @@ class AnalystJuryService:
         # max_rounds tool rounds + 1 forced final (no-tools) round
         for round_idx in range(max_rounds + 1):
             include_tools = round_idx < max_rounds
+            # In the forced final round (no tools), append an explicit instruction
+            # so reasoning models don't keep trying to call more tools.
+            final_messages = messages
+            if not include_tools and len(messages) > 2:
+                final_messages = messages + [
+                    {
+                        "role":    "user",
+                        "content": (
+                            "Tool data gathered. "
+                            "Now produce ONLY the final JSON verdict: "
+                            '{"rating": "...", "confidence": N, "note": "..."}'
+                        ),
+                    }
+                ]
             body = {
                 "model":       model,
-                "messages":    messages,
+                "messages":    final_messages,
                 "max_tokens":  max_tokens,
                 "temperature": 0.65,
             }
@@ -1742,6 +1782,13 @@ class AnalystJuryService:
                 # Force at least one tool call on the opening round when asked
                 # (used by the "re-analyze with tools" path); auto otherwise.
                 body["tool_choice"] = "required" if (force_first and round_idx == 0) else "auto"
+            elif tools_used:
+                # Forced final round — include the tools schema with tool_choice="none"
+                # so the model knows the signatures but is explicitly prevented from
+                # calling them. Without this, reasoning models (e.g. GPT-OSS-20B) may
+                # keep issuing tool_calls and the loop exhausts with empty content.
+                body["tools"]       = tools
+                body["tool_choice"] = "none"
 
             logger.debug(
                 f"[GROQ-TOOLS] round={round_idx} model={model} "
@@ -1752,34 +1799,64 @@ class AnalystJuryService:
             # function calling entirely). Degrade gracefully so the analyst still
             # returns a real verdict instead of crashing to a Hold/25 fallback:
             #   required → auto → no tools.
+            # 429 rate-limit: honour Retry-After (up to 20 s) and retry once.
             try:
                 data = await self._post_groq_raw(body)
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code != 400 or "tools" not in body:
-                    raise
-                data = None
-                # Step 1: if we were forcing, try relaxing to tool_choice=auto.
-                if body.get("tool_choice") == "required":
-                    logger.warning(
-                        f"[GROQ-TOOLS] {model} rejected tool_choice=required (400) — "
-                        f"retrying with tool_choice=auto"
-                    )
-                    body["tool_choice"] = "auto"
+                status = exc.response.status_code
+                # ── 429 rate-limit: wait Retry-After (capped at 20 s) then retry ──
+                if status == 429:
+                    retry_after = 6.0
                     try:
-                        data = await self._post_groq_raw(body)
-                    except httpx.HTTPStatusError as exc2:
-                        if exc2.response.status_code != 400:
-                            raise
-                        data = None
-                # Step 2: still rejected (or model can't do tools at all) — drop them.
-                if data is None:
+                        m = re.search(r"try again in (\d+(?:\.\d+)?)s", exc.response.text)
+                        if m:
+                            retry_after = min(float(m.group(1)) + 0.5, 20.0)
+                    except Exception as parse_exc:
+                        logger.debug(
+                            f"[GROQ-TOOLS] Could not parse Retry-After from 429 body "
+                            f"({parse_exc!r}) — using default {retry_after:.1f}s backoff"
+                        )
                     logger.warning(
-                        f"[GROQ-TOOLS] {model} rejected tools (400) — "
-                        f"retrying without tools (plain completion)"
+                        f"[GROQ-TOOLS] {model} hit 429 rate-limit — "
+                        f"sleeping {retry_after:.1f}s then retrying"
                     )
-                    body.pop("tools", None)
-                    body.pop("tool_choice", None)
-                    data = await self._post_groq_raw(body)
+                    await asyncio.sleep(retry_after)
+                    data = await self._post_groq_raw(body)  # re-raise on second 429
+                elif status not in (400, 422):
+                    raise
+                elif "tools" not in body:
+                    # 400 in the forced final (no-tools) round — the model tried to call a
+                    # tool even without a tools schema ("Tool choice is none, but model
+                    # called a tool"). Return empty so LAST-RESORT parser gives a fallback.
+                    logger.warning(
+                        f"[GROQ-TOOLS] {model} attempted tool call in no-tools round "
+                        f"(400) — returning empty for LAST-RESORT fallback"
+                    )
+                    return "", tools_used
+                else:
+                    data = None
+                    # Step 1: if we were forcing, try relaxing to tool_choice=auto.
+                    if body.get("tool_choice") == "required":
+                        logger.warning(
+                            f"[GROQ-TOOLS] {model} rejected tool_choice=required "
+                            f"({status}) — retrying with tool_choice=auto"
+                        )
+                        body["tool_choice"] = "auto"
+                        try:
+                            data = await self._post_groq_raw(body)
+                        except httpx.HTTPStatusError as exc2:
+                            if exc2.response.status_code not in (400, 422):
+                                raise
+                            data = None
+                    # Step 2: still rejected (or model can't do tools at all) — drop them.
+                    if data is None:
+                        logger.warning(
+                            f"[GROQ-TOOLS] {model} rejected tools (400) — "
+                            f"retrying without tools (plain completion)"
+                        )
+                        body.pop("tools", None)
+                        body.pop("tool_choice", None)
+                        data = await self._post_groq_raw(body)
             msg  = data["choices"][0]["message"]
             tool_calls = msg.get("tool_calls")
 
@@ -2010,10 +2087,12 @@ class AnalystJuryService:
         try:
             if persona["provider"] == "groq":
                 if use_tools:
+                    max_rounds_model = persona.get("max_rounds", 2)
                     raw, tools_used = await self.call_groq_with_tools(
                         model_used, persona["system"], user_prompt,
                         tools, tool_dispatcher, max_tok,
                         force_first=force_tools,
+                        max_rounds=max_rounds_model,
                     )
                 else:
                     raw = await self._call_groq(model_used, persona["system"], user_prompt, max_tok)
@@ -2026,13 +2105,28 @@ class AnalystJuryService:
             )
 
         except Exception as e:
+            # Log the HTTP response body for easier diagnosis of 4xx/429 errors
+            _body = ""
+            if isinstance(e, httpx.HTTPStatusError):
+                try:
+                    _body = f" | response_body={e.response.text[:300]}"
+                except Exception as body_err:
+                    logger.debug(f"[JURY] Could not read response body for error logging: {body_err!r}")
+                    _body = " | response_body=<unavailable>"
             logger.error(
-                f"[JURY/{persona['id']}] ✗ FAILED — model={model_used}, error={e} | "
-                f"FALLBACK: returning Hold/25 default verdict"
+                f"[JURY/{persona['id']}] ✗ FAILED — model={model_used}, error={e}{_body} | "
+                f"FALLBACK: returning Hold/25 with persona-specific note"
+            )
+            # Use each persona's own fallback_note so the three cards stay visually
+            # distinct even when a model is down — user can tell WHICH analyst failed
+            # and what type of analysis is missing, rather than all three reading
+            # identically as "Model unavailable — no verdict at this time."
+            _fallback_note = persona.get(
+                "fallback_note", "Model unavailable — no verdict at this time."
             )
             raw = (
                 '{"rating": "Hold", '
-                '"note": "Model unavailable — no verdict at this time.", '
+                f'"note": {__import__("json").dumps(_fallback_note)}, '
                 '"confidence": 25}'
             )
             model_used = "error"

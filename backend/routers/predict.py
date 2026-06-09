@@ -1,4 +1,4 @@
-# backend/routers/predict.py
+# backend/routers/predict.py  # noqa: E501
 import asyncio
 import hashlib
 import logging
@@ -6,7 +6,8 @@ import re
 from datetime import datetime, timedelta, timezone, date
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from slowapi.util import get_remote_address
 from pydantic import BaseModel
 
 from config import Config
@@ -19,6 +20,7 @@ from services import DataCleaner, ANALYST_PERSONAS
 from dependencies import (
     influx_svc, forecast_store, serp_svc, yf_svc,
     analyst_jury_svc, sentiment_svc, finnhub_svc, stocktwits_svc, yahoo_rss_svc,
+    limiter, require_user, _user_rate_key,
 )
 from jury_graph import run_jury_graph
 from redis_cache import cache_get, cache_set
@@ -148,9 +150,9 @@ def _safe_background(coro_or_future, *, name: str = "background"):
 
 async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict) -> str:
     """
-    Header analyst note via Groq llama-3.3-70b (14,400 RPD free, no quota issues).
-    Replaces Gemini which has a 20 RPD free-tier limit — too scarce for per-request use.
-    Falls back to the ensemble model's own note if Groq is unavailable.
+    Header analyst note via Groq llama-3.1-8b-instant (14,400 RPD free — highest budget).
+    Uses 8B instead of 70B to preserve llama-3.3-70b-versatile's 1K RPD exclusively for
+    the LLAMA-70B jury analyst.  Falls back to the ensemble model's own note if unavailable.
     """
     recent    = closes[-20:]
     price_str = ", ".join(f"{p:.2f}" for p in recent)
@@ -167,14 +169,14 @@ async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict)
     )
     logger.info(
         f"[AI-NOTE] Requesting header note — "
-        f"model=llama-3.3-70b-versatile, symbol={symbol}, RSI={rsi:.1f}, "
+        f"model=llama-3.1-8b-instant, symbol={symbol}, RSI={rsi:.1f}, "
         f"forecast_high=${forecast['high']:.2f}, forecast_low=${forecast['low']:.2f}, "
         f"conf={forecast.get('conf', 'low')} | "
         f"data_sent: last 20 closes of {len(closes)} total"
     )
     try:
         raw = await analyst_jury_svc._call_groq(
-            "llama-3.3-70b-versatile", system, prompt
+            "llama-3.1-8b-instant", system, prompt
         )
         note = raw.strip()
         logger.info(
@@ -214,7 +216,7 @@ async def _run_analyst_jury(
     Run all 3 analyst personas concurrently via AnalystJuryService.
       - LLAMA-4-SCOUT → Groq meta-llama/llama-4-scout-17b-16e-instruct (macro & risk lens, Meta)
       - LLAMA-70B     → Groq llama-3.3-70b-versatile  (growth lens, Meta)
-      - GPT-OSS-20B   → Groq openai/gpt-oss-20b        (quant lens, OpenAI)
+      - LLAMA-8B      → Groq llama-3.1-8b-instant        (quant lens, 14.4K RPD)
 
     All provider routing and response parsing are handled inside
     AnalystJuryService — no per-provider branching needed here.
@@ -375,9 +377,17 @@ async def _run_analyst_jury(
         logger.debug(f"[JURY-GRAPH] ctx cache_set failed (non-fatal): {exc}")
 
     try:
+        # Prepend UTC minute-timestamp to the live context so Groq never returns a
+        # server-side cached completion when the same ticker is queried repeatedly
+        # within a short window (prices identical → prompts would otherwise match).
+        # The cached `ctx` above stays clean (no timestamp) for /jury/reanalyze.
+        ts_prefix = (
+            f"[Analysis timestamp: "
+            f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC]\n"
+        )
         # 30s budget accommodates tool-call round-trips (Groq function calling).
         return await asyncio.wait_for(
-            run_jury_graph(analyst_jury_svc, ANALYST_PERSONAS, ctx, symbol=symbol),
+            run_jury_graph(analyst_jury_svc, ANALYST_PERSONAS, ts_prefix + ctx, symbol=symbol),
             timeout=30.0,
         )
     except Exception as exc:
@@ -404,7 +414,8 @@ async def _run_analyst_jury(
 # ---------------------------------------------------------------------------
 
 @router.post("/jury/reanalyze")
-async def reanalyze_jury(payload: JuryReanalyzeRequest):
+@limiter.limit(lambda: Config.RATE_LIMIT_JURY, key_func=_user_rate_key)
+async def reanalyze_jury(request: Request, payload: JuryReanalyzeRequest, _user: str = Depends(require_user)):
     """
     Re-run the analyst jury for a symbol with Groq function-calling tools
     FORCED on (each analyst must invoke ≥1 live tool: VIX, put/call, insider,
@@ -726,7 +737,8 @@ async def health():
 
 
 @router.get("/sparklines")
-async def sparklines(tickers: str):
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def sparklines(request: Request, tickers: str):
     """Return last-5-close prices for a comma-separated list of tickers."""
     symbols = [t.strip().upper() for t in tickers.split(",") if t.strip()][:18]
     result: Dict[str, List[float]] = {}
@@ -786,6 +798,8 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     import numpy as np
 
     symbol = payload.data.upper()
+    if not re.fullmatch(r"[A-Za-z0-9.\-:]{1,15}", symbol):
+        raise HTTPException(status_code=422, detail="Invalid symbol.")
     now    = datetime.now(timezone.utc)
 
     logger.info("[REQUEST] ════════════════════════════════════════════")
@@ -1441,7 +1455,12 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
 
 
 @router.post("/predict", response_model=PredictionResponse)
-async def predict(payload: PredictRequest):
+@limiter.limit(lambda: Config.RATE_LIMIT_PREDICT_AUTH, key_func=_user_rate_key)
+async def predict(request: Request, payload: PredictRequest):
+    symbol = payload.data.strip().upper()
+    if not re.fullmatch(r"[A-Za-z0-9.\-:]{1,15}", symbol):
+        raise HTTPException(status_code=422, detail="Invalid symbol.")
+    payload.data = symbol  # normalised for _predict_inner
     try:
         # 60s overall budget: the tool-using jury alone may take up to 30s
         # (Groq function-calling round-trips) on top of data + forecast steps.

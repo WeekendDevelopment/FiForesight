@@ -14,12 +14,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'symbol is required' }, { status: 400 });
     }
 
+    const auth = request.headers.get('authorization') || '';
+
     // Re-run the analyst jury with live tools forced on (Groq function calling).
     // Longer client timeout: forced tool round-trips take longer than a normal call.
     const response = await axios.post(
       `${BACKEND_URL}/jury/reanalyze`,
       { symbol },
-      { timeout: 45000 },
+      {
+        timeout: 45000,
+        headers: { ...(auth ? { Authorization: auth } : {}) },
+      },
     );
 
     return NextResponse.json(response.data);
