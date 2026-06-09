@@ -41,7 +41,7 @@ FiForesight/
 │   ├── jury_graph.py           # LangGraph StateGraph for parallel analyst fan-out
 │   ├── simulation_service.py   # Portfolio simulation engine (suggest + performance)
 │   ├── mcp_server.py           # FastMCP server — predict/sparklines/health as MCP tools
-│   ├── tests/                  # pytest harness — 22 tests, no network calls
+│   ├── tests/                  # pytest harness — 99 tests, no network calls
 │   └── newrelic.ini            # New Relic APM config
 ├── frontend/
 │   ├── app/
@@ -187,7 +187,7 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 | Jury consensus badge | #189 |
 | DCF intrinsic value | #190 |
 | Position sizing (1% rule) | #191 |
-| pytest harness (22 tests) | #192 |
+| pytest harness (99 tests) | #192 |
 | Supabase email auth | #193 |
 | Options chain panel | #194 |
 | Router split (main.py → routers/) | #195 |

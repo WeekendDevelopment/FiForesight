@@ -50,7 +50,11 @@ async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONR
 app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
 # --- CORS --------------------------------------------------------------------
-_origins = [o.strip() for o in Config.ALLOWED_ORIGINS.split(",") if o.strip()]
+_origins = [o.strip() for o in Config.ALLOWED_ORIGINS.split(",") if o.strip() and o.strip() != "*"]
+if not _origins:
+    logger.error("[CORS] ALLOWED_ORIGINS resolved to an empty list — no cross-origin requests will be permitted.")
+elif len(_origins) != len([o.strip() for o in Config.ALLOWED_ORIGINS.split(",") if o.strip()]):
+    logger.error("[CORS] ALLOWED_ORIGINS contained a wildcard '*' entry — it was removed. Set explicit origins only.")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,

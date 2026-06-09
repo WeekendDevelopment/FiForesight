@@ -69,7 +69,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Router split — `main.py` → `routers/predict.py`, `simulation.py`, `trade.py`, `market.py` (#195)
 - App-tester QA fixes — jury consensus, DCF edge cases, SerpAPI, StockTwits, order book (#211)
 - Groq quota-exhaustion resilience — failure caching (5 min TTL), LangGraph fallback under New Relic (#208)
-- Security hardening — slowapi rate limits on all endpoints, auth enforcement (`require_user` on `/trade-setup` + `/jury/reanalyze`), CORS (`ALLOWED_ORIGINS`), symbol input validation (regex), `/chat` prompt-injection guards (500-char cap, control-char sanitization, hardened system prompt), JWT signature verification (`SUPABASE_JWT_SECRET`), observability logging on silent exceptions. 99 tests, ruff clean. (pending)
+- Security hardening — slowapi rate limits on all endpoints, auth enforcement (`require_user` on `/trade-setup` + `/jury/reanalyze`), CORS (`ALLOWED_ORIGINS`), symbol input validation (regex), `/chat` prompt-injection guards (500-char cap, control-char sanitization, hardened system prompt), JWT signature verification (`SUPABASE_JWT_SECRET`), observability logging on silent exceptions. 99 tests, ruff clean. (#235)
 
 ### Infra
 - Redis caching layer (`redis_cache.py`)

@@ -18,6 +18,9 @@ class Config:
     ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
     PORT = int(os.getenv("PORT", 8000))
     SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
+    # When True, allows JWT decoding without signature verification (dev/test only).
+    # NEVER set this in production — always set SUPABASE_JWT_SECRET instead.
+    ALLOW_INSECURE_JWT: bool = os.getenv("ALLOW_INSECURE_JWT", "false").lower() in ("1", "true", "yes")
     # StockTwits public API now returns 403 without auth — disabled by default so
     # we don't fire a guaranteed-failing request on every prediction.
     STOCKTWITS_ENABLED = os.getenv("STOCKTWITS_ENABLED", "false").lower() in ("1", "true", "yes")

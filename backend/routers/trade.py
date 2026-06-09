@@ -250,8 +250,10 @@ async def chat_endpoint(request: Request, req: ChatRequest):
         sentiment    = _safe_ctx_value(ctx.get("sentiment_label","N/A"), 20)
         headlines    = _safe_ctx_value(ctx.get("headlines",      "N/A"), 400)
 
-        # Validate symbol against the safe tag regex
-        if not _SYMBOL_RE.match(symbol.replace("N/A", "AAPL")):
+        # Validate symbol — allow the explicit "N/A" sentinel; reject anything else
+        # that doesn't match the safe-tag regex. The old `replace("N/A","AAPL")` trick
+        # could pass malformed strings that merely contained "N/A" as a substring.
+        if symbol != "N/A" and not _SYMBOL_RE.match(symbol):
             symbol = "N/A"
 
         system = (
@@ -274,7 +276,11 @@ async def chat_endpoint(request: Request, req: ChatRequest):
         for msg in req.history[-10:]:
             if msg.get("role") in ("user", "assistant") and msg.get("content"):
                 messages.append({"role": msg["role"], "content": msg["content"]})
-        messages.append({"role": "user", "content": req.message})
+        # Sanitize the user message to strip control characters (same treatment as
+        # context values) before forwarding to Groq — prevents prompt injection
+        # via embedded newlines or control sequences.
+        safe_message = _CTRL_RE.sub(" ", req.message)
+        messages.append({"role": "user", "content": safe_message})
 
         payload = {
             "model": "llama-3.3-70b-versatile",

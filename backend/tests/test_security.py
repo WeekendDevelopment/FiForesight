@@ -125,14 +125,24 @@ def test_chat_rejects_oversized_message() -> None:
 
 
 def test_chat_accepts_500_char_message() -> None:
-    """Exactly 500 chars should be accepted (boundary condition)."""
-    # The streaming response will fail to reach Groq in test, but validation passes.
-    resp = _sec_client.post("/chat", json={
-        "message": "x" * 500,
-        "context": {"symbol": "AAPL"},
-        "history": [],
-    })
-    # Not 422 means validation passed (may fail downstream without a real Groq key)
+    """Exactly 500 chars should be accepted (boundary condition).
+
+    Mock the outbound Groq stream so the test stays fully offline and we only
+    verify Pydantic validation, not network reachability.
+    """
+    with patch("httpx.AsyncClient.stream") as mock_stream:
+        # Return a minimal context manager that yields no chunks
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=AsyncMock(__aiter__=lambda s: iter([])))
+        mock_cm.__aexit__ = AsyncMock(return_value=False)
+        mock_stream.return_value = mock_cm
+
+        resp = _sec_client.post("/chat", json={
+            "message": "x" * 500,
+            "context": {"symbol": "AAPL"},
+            "history": [],
+        })
+    # Not 422 means validation passed
     assert resp.status_code != 422, "500-char message was incorrectly rejected"
 
 

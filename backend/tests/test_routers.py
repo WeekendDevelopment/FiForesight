@@ -25,10 +25,20 @@ _test_app = FastAPI()
 # Register the limiter (same instance as used by router decorators) so
 # slowapi can find it on request.app.state.
 _test_app.state.limiter = limiter
-_test_app.add_exception_handler(
-    RateLimitExceeded,
-    lambda req, exc: JSONResponse({"detail": "rate limited"}, status_code=429),
-)
+
+
+async def _test_rate_limit_handler(req, exc: RateLimitExceeded) -> JSONResponse:
+    """Mirror the production 429 payload and Retry-After header."""
+    retry_after = getattr(exc, "retry_after", None)
+    headers = {"Retry-After": str(int(retry_after)) if retry_after else "60"}
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Too many requests — please slow down."},
+        headers=headers,
+    )
+
+
+_test_app.add_exception_handler(RateLimitExceeded, _test_rate_limit_handler)
 _test_app.include_router(trade.router)
 _test_app.include_router(market.router)
 

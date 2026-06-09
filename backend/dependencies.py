@@ -25,10 +25,18 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 if not Config.SUPABASE_JWT_SECRET:
-    logger.warning(
-        "[AUTH] SUPABASE_JWT_SECRET is not set — JWT signature verification DISABLED. "
-        "Set SUPABASE_JWT_SECRET in production to enforce token integrity."
-    )
+    if Config.ALLOW_INSECURE_JWT:
+        logger.warning(
+            "[AUTH] SUPABASE_JWT_SECRET is not set and ALLOW_INSECURE_JWT=true — "
+            "JWT signature verification is DISABLED. This is only safe in dev/test environments. "
+            "Set SUPABASE_JWT_SECRET in production."
+        )
+    else:
+        logger.info(
+            "[AUTH] SUPABASE_JWT_SECRET is not set. "
+            "Requests without a valid secret-signed JWT will be treated as anonymous. "
+            "To enable dev-mode unsigned JWT decoding, set ALLOW_INSECURE_JWT=true."
+        )
 
 influx_svc       = InfluxService()
 forecast_store   = ForecastStore(influx_svc)
@@ -64,8 +72,12 @@ def _extract_sub_fast(request: Request) -> str:
     try:
         if secret:
             p = jwt.decode(token, secret, algorithms=["HS256"], options={"verify_aud": False})
-        else:
+        elif Config.ALLOW_INSECURE_JWT:
+            # Dev/test only — skip signature verification when explicitly opted in
             p = jwt.decode(token, options={"verify_signature": False})
+        else:
+            # No secret and no insecure flag → fail closed; treat as anonymous
+            return ""
         return p.get("sub", "")
     except Exception:
         return ""
@@ -90,8 +102,9 @@ def get_user_id(authorization: str = Header(default="")) -> str:
     """Extract and validate the Supabase user UUID from a Bearer JWT.
 
     Returns the UUID string if the token is valid, or "" for anonymous/invalid.
-    When SUPABASE_JWT_SECRET is set the signature is verified; otherwise the
-    token is decoded without verification so dev environments still work.
+    When SUPABASE_JWT_SECRET is set the signature is verified.
+    When ALLOW_INSECURE_JWT=true and no secret is set, decodes without verification
+    (dev/test only). With no secret and no ALLOW_INSECURE_JWT, returns "" (fail closed).
     """
     if not authorization.startswith("Bearer "):
         return ""
@@ -107,8 +120,12 @@ def get_user_id(authorization: str = Header(default="")) -> str:
                 algorithms=["HS256"],
                 options={"verify_aud": False},
             )
-        else:
+        elif Config.ALLOW_INSECURE_JWT:
+            # Dev/test only — skip signature verification when explicitly opted in
             payload = jwt.decode(token, options={"verify_signature": False})
+        else:
+            # No secret and no insecure flag → fail closed; treat as anonymous
+            return ""
         sub = payload.get("sub", "")
         return InfluxService._validate_user_id(sub)
     except Exception:

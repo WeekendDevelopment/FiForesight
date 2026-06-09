@@ -1808,12 +1808,14 @@ class AnalystJuryService:
                 if status == 429:
                     retry_after = 6.0
                     try:
-                        import re as _re
-                        m = _re.search(r"try again in (\d+(?:\.\d+)?)s", exc.response.text)
+                        m = re.search(r"try again in (\d+(?:\.\d+)?)s", exc.response.text)
                         if m:
                             retry_after = min(float(m.group(1)) + 0.5, 20.0)
-                    except Exception:
-                        pass
+                    except Exception as parse_exc:
+                        logger.debug(
+                            f"[GROQ-TOOLS] Could not parse Retry-After from 429 body "
+                            f"({parse_exc!r}) — using default {retry_after:.1f}s backoff"
+                        )
                     logger.warning(
                         f"[GROQ-TOOLS] {model} hit 429 rate-limit — "
                         f"sleeping {retry_after:.1f}s then retrying"
@@ -2108,8 +2110,9 @@ class AnalystJuryService:
             if isinstance(e, httpx.HTTPStatusError):
                 try:
                     _body = f" | response_body={e.response.text[:300]}"
-                except Exception:
-                    pass
+                except Exception as body_err:
+                    logger.debug(f"[JURY] Could not read response body for error logging: {body_err!r}")
+                    _body = " | response_body=<unavailable>"
             logger.error(
                 f"[JURY/{persona['id']}] ✗ FAILED — model={model_used}, error={e}{_body} | "
                 f"FALLBACK: returning Hold/25 with persona-specific note"
