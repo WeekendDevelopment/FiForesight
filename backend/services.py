@@ -1484,7 +1484,7 @@ class SentimentService:
 #
 #   LLAMA-4-SCOUT → Groq meta-llama/llama-4-scout-17b-16e-instruct (free tier) — Macro & Risk lens
 #   LLAMA-70B → Groq llama-3.3-70b-versatile    (14,400 RPD free) — Growth lens
-#   MAVERICK    → Groq meta-llama/llama-4-maverick-17b-128e-instruct (free) — Quant lens
+#   GPT-OSS-20B → Groq openai/gpt-oss-20b       (free tier)       — Quant lens
 #
 #   _ai_note uses Groq llama-3.3-70b independently (header note, not jury)
 # ---------------------------------------------------------------------------
@@ -1534,16 +1534,16 @@ ANALYST_PERSONAS = [
         ),
     },
     {
-        "id":          "MAVERICK",
-        "avatar":      "MV",
+        "id":          "GPT-OSS-20B",
+        "avatar":      "GO",
         "title":       "Quant Lens",
-        "model_label": "Groq · Llama 4 Maverick",
+        "model_label": "Groq · GPT-OSS 20B",
         "provider":    "groq",
-        "api_model":   "meta-llama/llama-4-maverick-17b-128e-instruct",
+        "api_model":   "openai/gpt-oss-20b",
         "max_tokens":  2048,
         "color":       "#10b981",
         "system": (
-            "You are MAVERICK, a quantitative signal analyst running on Llama 4 Maverick. "
+            "You are GPT-OSS-20B, a quantitative signal analyst running on OpenAI GPT-OSS 20B. "
             "You operate purely on technical indicators and statistical signals — no macro bias, no news sentiment. "
             "Analyse the provided OHLCV data and indicator outputs. "
             "Interpret RSI regime, MACD histogram crossover state, Bollinger Band width and price position, "
@@ -1756,20 +1756,20 @@ class AnalystJuryService:
             try:
                 data = await self._post_groq_raw(body)
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code != 400 or "tools" not in body:
+                if exc.response.status_code not in (400, 422) or "tools" not in body:
                     raise
                 data = None
                 # Step 1: if we were forcing, try relaxing to tool_choice=auto.
                 if body.get("tool_choice") == "required":
                     logger.warning(
-                        f"[GROQ-TOOLS] {model} rejected tool_choice=required (400) — "
-                        f"retrying with tool_choice=auto"
+                        f"[GROQ-TOOLS] {model} rejected tool_choice=required "
+                        f"({exc.response.status_code}) — retrying with tool_choice=auto"
                     )
                     body["tool_choice"] = "auto"
                     try:
                         data = await self._post_groq_raw(body)
                     except httpx.HTTPStatusError as exc2:
-                        if exc2.response.status_code != 400:
+                        if exc2.response.status_code not in (400, 422):
                             raise
                         data = None
                 # Step 2: still rejected (or model can't do tools at all) — drop them.
