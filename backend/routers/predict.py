@@ -1426,6 +1426,18 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         name="INFLUX-WRITE",
     )
 
+    # Persist the VADER sentiment score over time (powers the Insights trend
+    # chart). Only when at least one headline was scored, so we don't pollute the
+    # series with neutral 0.0 points on news-less requests.
+    if sentiment.get("headline_count", 0) > 0:
+        _safe_background(
+            asyncio.to_thread(
+                influx_svc.write_sentiment_score,
+                symbol, sentiment["compound"], sentiment["label"],
+            ),
+            name="SENTIMENT-WRITE",
+        )
+
     # ── Step 8. Build chart history (last 90 trading days) ───────────────────
     total       = len(historical_prices)
     slice_start = max(0, total - 90)

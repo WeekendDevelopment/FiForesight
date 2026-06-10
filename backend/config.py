@@ -17,6 +17,9 @@ class Config:
     ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
     ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
     PORT = int(os.getenv("PORT", 8000))
+    # Deployment environment tag — stamped onto time-series writes (e.g. sentiment_score)
+    # so preview and prod data can be distinguished in InfluxDB. local | preview | live.
+    APP_ENV = os.getenv("APP_ENV", "local")
     SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
     # Supabase project URL (e.g. https://xxxx.supabase.co). Used to locate the
     # JWKS endpoint for verifying asymmetric (ES256/RS256) access tokens — the

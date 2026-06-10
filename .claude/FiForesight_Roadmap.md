@@ -35,6 +35,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Trade Setup Generator — entry/stop/3 targets + R:R + Groq rationale
 - Tool-using jury agents — Groq function calling; tools: `get_vix`, `get_put_call_ratio`, `get_insider_flow`, `get_macro_snapshot`; jury re-analysis UI (#220)
 - Jury quant lens swapped to `openai/gpt-oss-20b`; verdict parsing hardened; malformed output tracked (#226)
+- Forecast Accuracy & Sentiment Analytics Dashboard — `/insights` tab + `GET /analytics/{accuracy,sentiment}/{symbol}`; persists VADER compound to new `sentiment_score` measurement (Feature 12, PR #244)
 
 ### Data & UX
 - SerpAPI news + trending sparklines
@@ -99,7 +100,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 **Files:** `backend/main.py` (CORS), `backend/dependencies.py`, `backend/routers/{predict,trade,market}.py`, `backend/requirements.txt` (+slowapi)
 **Complexity:** Medium
 
-### Feature 12 · Forecast Accuracy & Sentiment Analytics Dashboard *(do second)*
+### Feature 12 · Forecast Accuracy & Sentiment Analytics Dashboard ✅ *SHIPPED (PR #244)*
 **Branch:** `feat/accuracy-sentiment-dashboard`
 **Problem:** Forecast-accuracy data is already collected in InfluxDB but never shown; sentiment is never persisted.
 - **Backend** — new `GET /analytics/accuracy/{symbol}` reading `ForecastStore.query_model_accuracy`, `query_ensemble_mae`, `query_forecast_records` + `query_price_outcomes`: per-model MAE trend, ensemble MAE by horizon (d1–d5), directional accuracy %, forecast equity curve.

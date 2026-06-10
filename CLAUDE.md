@@ -34,14 +34,15 @@ FiForesight/
 │   │   ├── predict.py          # /health /debug /predict /sparklines /compare
 │   │   ├── simulation.py       # /simulation/suggest /simulation/performance /simulation/state
 │   │   ├── trade.py            # /trade-setup /chat
-│   │   └── market.py           # /dcf /options /ipo/calendar /earnings/calendar /sectors /briefing /orderbook
+│   │   ├── market.py           # /dcf /options /ipo/calendar /earnings/calendar /sectors /briefing /orderbook
+│   │   └── analytics.py        # /analytics/accuracy/{symbol} /analytics/sentiment/{symbol}
 │   ├── config.py               # Env var loading (InfluxDB, Groq, SerpAPI)
 │   ├── models.py               # Pydantic schemas + run_monte_carlo
 │   ├── services.py             # YFinanceService, InfluxService, SerpService, SentimentService, AnalystJuryService
 │   ├── jury_graph.py           # LangGraph StateGraph for parallel analyst fan-out
 │   ├── simulation_service.py   # Portfolio simulation engine (suggest + performance)
 │   ├── mcp_server.py           # FastMCP server — predict/sparklines/health as MCP tools
-│   ├── tests/                  # pytest harness — 99 tests, no network calls
+│   ├── tests/                  # pytest harness — 109 tests, no network calls
 │   └── newrelic.ini            # New Relic APM config
 ├── frontend/
 │   ├── app/
@@ -50,7 +51,10 @@ FiForesight/
 │   │   │   ├── compare/route.ts
 │   │   │   ├── dcf/[symbol]/route.ts
 │   │   │   ├── options/[symbol]/route.ts
+│   │   │   ├── analytics/accuracy/[symbol]/route.ts   # → /analytics/accuracy
+│   │   │   ├── analytics/sentiment/[symbol]/route.ts  # → /analytics/sentiment
 │   │   │   └── simulation/{suggest,performance,state}/route.ts
+│   │   ├── (app)/insights/page.tsx           # Insights tab — accuracy + sentiment dashboard (Recharts)
 │   │   ├── simulation/page.tsx               # Portfolio simulation page
 │   │   ├── layout.tsx                        # Root layout (ClientProviders + New Relic)
 │   │   └── page.tsx                          # Main dashboard
@@ -93,7 +97,7 @@ cd frontend && pnpm run dev     # Next.js on :3000
 python -m uvicorn main:app --app-dir backend --host 0.0.0.0 --port 8000 --reload
 
 # Tests
-python -m pytest backend/tests/ -v   # 99 tests, ~5s
+python -m pytest backend/tests/ -v   # 109 tests, ~7s
 ruff check backend/                   # linter
 
 # Frontend
@@ -115,6 +119,7 @@ INFLUXDB_ORG=WeekendDevelopment
 INFLUXDB_BUCKET=FiForesightBucket
 SERP_API_KEY=            # Optional — news/trending
 PORT=8000
+APP_ENV=local            # Optional — env tag on sentiment_score writes (local|preview|live)
 
 # Security hardening (Feature 11)
 SUPABASE_JWT_SECRET=     # Required in prod — JWT signature verification (warn-only if unset)
@@ -124,7 +129,7 @@ RATE_LIMIT_CHAT=20/minute
 RATE_LIMIT_JURY=10/minute
 RATE_LIMIT_TRADE=15/minute
 RATE_LIMIT_BACKTEST=5/minute
-RATE_LIMIT_READONLY=60/minute       # DCF, options, earnings, IPO, sectors, briefing, orderbook
+RATE_LIMIT_READONLY=60/minute       # DCF, options, earnings, IPO, sectors, briefing, orderbook, analytics
 ```
 
 Frontend `frontend/.env.local`:
@@ -155,10 +160,18 @@ User enters ticker
           Each isolated — failures degrade to Hold/25, not 500
       → Response: history, fundamentals, indicators, forecasts, jury verdicts, news, sentiment, monte carlo
 
+      → Fire-and-forget: write_sentiment_score (sentiment_score measurement) — only if ≥1 headline scored
+
   → Fire-and-forget (non-blocking, after predict resolves):
       GET /api/dcf/{symbol}     → DCFCard (3-scenario WACC)
       GET /api/options/{symbol} → OptionsChainPanel (calls/puts)
       POST /api/trade-setup     → TradeSetupCard (entry/stop/targets + position size)
+
+Insights flow (/insights tab — read-only, Redis-cached 15min, samples:0 empty state):
+  GET /api/analytics/accuracy/{symbol}  → model MAE ranking, ensemble MAE by horizon d1–d5,
+                                          directional accuracy %, forecast-vs-actual (from
+                                          model_accuracy + forecast_record + price_outcome)
+  GET /api/analytics/sentiment/{symbol} → 30-day VADER compound trend (from sentiment_score)
 
 Simulation flow (/simulation page):
   POST /api/simulation/suggest     → ticker suggestions by risk level
@@ -194,6 +207,7 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 | IPO tracker tab | #229 |
 | Free IPO calendar (Nasdaq → EDGAR; FMP removed) | #231 |
 | Security hardening (rate limits, auth enforcement, CORS, input validation) | pending |
+| Forecast accuracy & sentiment dashboard (Insights tab) | #244 |
 
 ---
 
@@ -214,7 +228,8 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 - LLM jury runs via **LangGraph** (`jury_graph.py`) — parallel StateGraph fan-out. Each analyst node isolated so failures → Hold/25, not 500.
 - **Llama 4 Scout** (`meta-llama/llama-4-scout-17b-16e-instruct`) is the Macro & Risk analyst. Kimi K2 was deprecated; GPT-OSS-20B was replaced (reasoning model with 1K RPD burned out).
 - **Llama 3.1 8B Instant** (`llama-3.1-8b-instant`) is the Quant Lens analyst — chosen for its **14,400 RPD** free-tier limit (14.4× more than any other model). Rate limits: 30 RPM | 6K TPM | 14.4K RPD.
-- **VADER sentiment** (`SentimentService` in `services.py`) scores headlines before the jury runs; compound score + label passed in each analyst's context.
+- **VADER sentiment** (`SentimentService` in `services.py`) scores headlines before the jury runs; compound score + label passed in each analyst's context. Each `/predict` also persists the compound score (fire-and-forget) to the **`sentiment_score`** InfluxDB measurement (tags: `symbol`, `env=Config.APP_ENV`; fields: `compound` float, `label` string) — only when ≥1 headline was scored. `query_sentiment_history` reads it for the Insights tab's 30-day trend.
+- **Analytics / Insights** (`routers/analytics.py`) — read-only tier (60/min), 15-min Redis cache, 12s timeout. `/analytics/accuracy/{symbol}` is pure-transform over existing InfluxDB data (`query_model_accuracy` + `query_ensemble_mae` + `query_forecast_records` + `query_price_outcomes`): per-model MAE + best_model, ensemble MAE by horizon d1–d5, directional accuracy (`sign(pred−last)` vs `sign(actual−last)`, skips the `0.0` missing-prediction sentinel), and forecast-vs-actual (de-duped to one point per resolved date). Insufficient history → **`200` with `samples:0` + empty arrays** (NOT 404). `/analytics/sentiment/{symbol}` returns the 30-day trend + `current`. Frontend tab at `frontend/app/(app)/insights/page.tsx` (5 Recharts views, reads `isDark`/`primaryColor` from `AppShellContext`).
 - **FastMCP server** — `fastmcp dev backend/mcp_server.py` exposes predict/sparklines/health as Claude Code tools.
 - **Backend router split** — `main.py` is now ~50 lines; all routes live in `backend/routers/`. Service singletons in `dependencies.py`.
 - **Supabase auth** — `frontend/lib/supabase.ts` + `frontend/contexts/AuthContext.tsx`. Falls back to placeholder strings if env vars not set (build succeeds without them).
