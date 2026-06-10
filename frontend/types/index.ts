@@ -256,3 +256,42 @@ export interface DCFResult {
   method:             string;
   fundamentals_complete?: boolean;
 }
+
+// ── Analytics / Insights ────────────────────────────────────────────────────
+
+export interface EnsembleHorizonMAE {
+  horizon: string;   // "d1" … "d5"
+  mae:     number;
+}
+
+export interface ForecastVsActualPoint {
+  date:     string;
+  forecast: number;
+  actual:   number;
+}
+
+export interface AccuracyAnalytics {
+  symbol: string;
+  /** Per-model day-1 MAE (lower = better). Keys: prophet | sarima | random_forest. */
+  model_mae: Partial<Record<'prophet' | 'sarima' | 'random_forest', number>>;
+  best_model: 'prophet' | 'sarima' | 'random_forest' | null;
+  ensemble_mae_by_horizon: EnsembleHorizonMAE[];
+  /** % of resolved forecasts whose predicted direction matched actual (0–1, or null when no samples). */
+  directional_accuracy: Partial<Record<'prophet' | 'sarima' | 'random_forest' | 'ensemble', number | null>>;
+  forecast_vs_actual: ForecastVsActualPoint[];
+  samples: number;
+  generated_at: string;
+}
+
+export interface SentimentPoint {
+  date:     string;
+  compound: number;
+  label:    string;   // Bullish | Bearish | Neutral
+}
+
+export interface SentimentAnalytics {
+  symbol:       string;
+  history:      SentimentPoint[];
+  current:      SentimentPoint | null;
+  generated_at: string;
+}

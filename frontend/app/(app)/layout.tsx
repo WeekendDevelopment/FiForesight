@@ -8,7 +8,7 @@ import {
 } from '@mui/material';
 import {
   BrainCircuit, Home, Search, BarChart2, Calendar, Rocket, LineChart,
-  ChevronLeft, ChevronRight, Sun, Moon, LogIn, LogOut,
+  Activity, ChevronLeft, ChevronRight, Sun, Moon, LogIn, LogOut,
 } from 'lucide-react';
 import { AppShellProvider, useAppShell } from '../../contexts/AppShellContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -29,6 +29,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Options',     href: '/options',    icon: BarChart2, mobile: true  },
   { label: 'Earnings',    href: '/earnings',   icon: Calendar,  mobile: true  },
   { label: 'IPO Tracker', href: '/ipo',        icon: Rocket,    mobile: true  },
+  { label: 'Insights',    href: '/insights',   icon: Activity,  mobile: false },
   { label: 'Portfolio',   href: '/simulation', icon: LineChart, mobile: false },
 ];
 
