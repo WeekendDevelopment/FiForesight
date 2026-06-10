@@ -36,6 +36,13 @@ class Config:
     # we don't fire a guaranteed-failing request on every prediction.
     STOCKTWITS_ENABLED = os.getenv("STOCKTWITS_ENABLED", "false").lower() in ("1", "true", "yes")
 
+    # When True, /predict runs the 3-analyst LLM jury automatically (legacy
+    # behaviour). Default False: the jury is on-demand only via POST
+    # /jury/reanalyze, which saves Groq free-tier quota (each auto-run could
+    # fire up to ~9 requests) and avoids 429-driven fallback verdicts inside
+    # the prediction response.
+    JURY_AUTO_RUN: bool = os.getenv("JURY_AUTO_RUN", "false").lower() in ("1", "true", "yes")
+
     # CORS — comma-separated list of allowed origins.
     # Defaults to prod + preview + local dev.
     ALLOWED_ORIGINS: str = os.getenv(

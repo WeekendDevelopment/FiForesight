@@ -56,7 +56,7 @@ export default function AnalystJuryPanel({ analysts, symbol }: { analysts: Analy
     setReanalyzeError(null);
   }, [analysts, symbol]);
 
-  const handleReanalyze = async () => {
+  const handleReanalyze = async (useTools: boolean) => {
     if (!symbol || reanalyzing) return;
     const reqId = ++reanalyzeReqId.current;
     setReanalyzing(true);
@@ -65,12 +65,12 @@ export default function AnalystJuryPanel({ analysts, symbol }: { analysts: Analy
       ? { Authorization: `Bearer ${session.access_token}` }
       : {};
     try {
-      const res = await axios.post('/api/jury/reanalyze', { symbol }, { headers: authHeaders });
+      const res = await axios.post('/api/jury/reanalyze', { symbol, useTools }, { headers: authHeaders });
       if (reqId !== reanalyzeReqId.current) return;   // superseded — discard
       const next = res.data?.juryAnalysts as AnalystJuror[] | undefined;
       if (next && next.length > 0) {
         setLiveAnalysts(next);
-        setReanalyzed(true);
+        if (useTools) setReanalyzed(true);
       } else {
         setReanalyzeError('No verdicts returned.');
       }
@@ -121,6 +121,8 @@ export default function AnalystJuryPanel({ analysts, symbol }: { analysts: Analy
 
   const ratingCounts: Record<string, number> = { [consensus]: bucketStats[consensus]?.count ?? liveAnalysts.length };
   const avgConf = Math.round(totalConf / Math.max(liveAnalysts.length, 1));
+  const hasVerdicts = liveAnalysts.length > 0;
+  const signedIn = Boolean(session?.access_token);
   return (
     <Stack spacing={1.5}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 0.5, gap: 1 }}>
@@ -128,13 +130,15 @@ export default function AnalystJuryPanel({ analysts, symbol }: { analysts: Analy
           <Scale size={18} /> Analyst Jury
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          {symbol && (
-            <Tooltip title="Re-run the jury with live tools (VIX, put/call ratio, insider flow, macro). Each analyst must consult at least one before deciding.">
+          {symbol && hasVerdicts && (
+            <Tooltip title={signedIn
+              ? 'Re-run the jury with live tools (VIX, put/call ratio, insider flow, macro). Each analyst must consult at least one before deciding.'
+              : 'Sign in to re-run with live tools (VIX, put/call ratio, insider flow, macro).'}>
               <span>
                 <Button
                   size="small"
-                  onClick={handleReanalyze}
-                  disabled={reanalyzing}
+                  onClick={() => handleReanalyze(true)}
+                  disabled={reanalyzing || !signedIn}
                   startIcon={reanalyzing
                     ? <CircularProgress size={12} sx={{ color: 'inherit' }} />
                     : <Wrench size={12} />}
@@ -150,22 +154,24 @@ export default function AnalystJuryPanel({ analysts, symbol }: { analysts: Analy
               </span>
             </Tooltip>
           )}
-          <Box sx={{
-            px: 1.2, py: 0.3, borderRadius: 1,
-            background: ratingColor(consensus).bg,
-            border: `1px solid ${ratingColor(consensus).text}44`,
-            display: 'flex', alignItems: 'center', gap: 0.6,
-          }}>
-            <Typography sx={{ fontSize: '0.62rem', fontWeight: 900, color: ratingColor(consensus).text, letterSpacing: '0.07em' }}>
-              {consensus.toUpperCase()}
-            </Typography>
-            <Typography sx={{ fontSize: '0.56rem', opacity: 0.55, color: ratingColor(consensus).text }}>
-              {avgConf}%
-            </Typography>
-            <Typography sx={{ fontSize: '0.5rem', opacity: 0.35, color: ratingColor(consensus).text, fontFamily: 'monospace' }}>
-              {ratingCounts[consensus] ?? liveAnalysts.length}/{liveAnalysts.length}
-            </Typography>
-          </Box>
+          {hasVerdicts && (
+            <Box sx={{
+              px: 1.2, py: 0.3, borderRadius: 1,
+              background: ratingColor(consensus).bg,
+              border: `1px solid ${ratingColor(consensus).text}44`,
+              display: 'flex', alignItems: 'center', gap: 0.6,
+            }}>
+              <Typography sx={{ fontSize: '0.62rem', fontWeight: 900, color: ratingColor(consensus).text, letterSpacing: '0.07em' }}>
+                {consensus.toUpperCase()}
+              </Typography>
+              <Typography sx={{ fontSize: '0.56rem', opacity: 0.55, color: ratingColor(consensus).text }}>
+                {avgConf}%
+              </Typography>
+              <Typography sx={{ fontSize: '0.5rem', opacity: 0.35, color: ratingColor(consensus).text, fontFamily: 'monospace' }}>
+                {ratingCounts[consensus] ?? liveAnalysts.length}/{liveAnalysts.length}
+              </Typography>
+            </Box>
+          )}
         </Box>
       </Box>
 
@@ -173,6 +179,41 @@ export default function AnalystJuryPanel({ analysts, symbol }: { analysts: Analy
         <Typography sx={{ fontSize: '0.6rem', color: '#ff0055', opacity: 0.8, px: 0.5 }}>
           {reanalyzeError}
         </Typography>
+      )}
+
+      {!hasVerdicts && (
+        <Card sx={{ border: '1px dashed #00f2ff33' }}>
+          <CardContent sx={{
+            p: '20px !important', display: 'flex', flexDirection: 'column',
+            alignItems: 'center', gap: 1.2, textAlign: 'center',
+          }}>
+            <Typography sx={{ fontSize: '0.78rem', opacity: 0.7 }}>
+              The 3-analyst LLM jury (macro & risk, growth, quant) runs on demand
+              to conserve model quota.
+            </Typography>
+            <Button
+              size="small"
+              onClick={() => handleReanalyze(false)}
+              disabled={reanalyzing || !symbol}
+              startIcon={reanalyzing
+                ? <CircularProgress size={14} sx={{ color: 'inherit' }} />
+                : <Scale size={14} />}
+              sx={{
+                fontSize: '0.65rem', fontWeight: 800, letterSpacing: '0.06em',
+                py: 0.6, px: 2, textTransform: 'uppercase',
+                color: '#00f2ff', border: '1px solid #00f2ff55', borderRadius: 1,
+                '&:hover': { border: '1px solid #00f2ff99', background: '#00f2ff11' },
+              }}
+            >
+              {reanalyzing ? 'Convening jury' : 'Run analyst jury'}
+            </Button>
+            {!signedIn && (
+              <Typography sx={{ fontSize: '0.58rem', opacity: 0.45 }}>
+                Sign in to add live tools (VIX, put/call, insider, macro).
+              </Typography>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       <Grid container spacing={1.5}>

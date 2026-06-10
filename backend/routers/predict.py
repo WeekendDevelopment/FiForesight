@@ -20,7 +20,7 @@ from services import DataCleaner, ANALYST_PERSONAS
 from dependencies import (
     influx_svc, forecast_store, serp_svc, yf_svc,
     analyst_jury_svc, sentiment_svc, finnhub_svc, stocktwits_svc, yahoo_rss_svc,
-    limiter, require_user, _user_rate_key,
+    limiter, get_user_id, _user_rate_key,
 )
 from jury_graph import run_jury_graph
 from redis_cache import cache_get, cache_set
@@ -58,6 +58,10 @@ class PredictRequest(BaseModel):
 
 class JuryReanalyzeRequest(BaseModel):
     symbol: str
+    # True  → force Groq function-calling tools (each analyst must consult ≥1
+    #         live feed). Default preserves the original "Use tools" semantics.
+    # False → plain single-completion jury run (cheapest: 3 Groq calls total).
+    use_tools: bool = True
 
 
 class PredictionResponse(BaseModel):
@@ -211,9 +215,14 @@ async def _run_analyst_jury(
     track_record: str = "",
     sentiment: Optional[dict] = None,
     stocktwits: Optional[dict] = None,
+    ctx_only: bool = False,
 ) -> List[dict]:
     """
     Run all 3 analyst personas concurrently via AnalystJuryService.
+
+    With `ctx_only=True` the market-context string is assembled and cached
+    (for POST /jury/reanalyze) but no Groq calls are made — returns [].
+    This is the default path now that the jury is on-demand.
       - LLAMA-4-SCOUT → Groq meta-llama/llama-4-scout-17b-16e-instruct (macro & risk lens, Meta)
       - LLAMA-70B     → Groq llama-3.3-70b-versatile  (growth lens, Meta)
       - LLAMA-8B      → Groq llama-3.1-8b-instant        (quant lens, 14.4K RPD)
@@ -376,6 +385,10 @@ async def _run_analyst_jury(
     except Exception as exc:
         logger.debug(f"[JURY-GRAPH] ctx cache_set failed (non-fatal): {exc}")
 
+    if ctx_only:
+        logger.info(f"[JURY-GRAPH] ctx_only — context cached for {symbol}, jury deferred to /jury/reanalyze")
+        return []
+
     try:
         # Prepend UTC minute-timestamp to the live context so Groq never returns a
         # server-side cached completion when the same ticker is queried repeatedly
@@ -415,18 +428,36 @@ async def _run_analyst_jury(
 
 @router.post("/jury/reanalyze")
 @limiter.limit(lambda: Config.RATE_LIMIT_JURY, key_func=_user_rate_key)
-async def reanalyze_jury(request: Request, payload: JuryReanalyzeRequest, _user: str = Depends(require_user)):
+async def reanalyze_jury(request: Request, payload: JuryReanalyzeRequest, user: str = Depends(get_user_id)):
     """
-    Re-run the analyst jury for a symbol with Groq function-calling tools
-    FORCED on (each analyst must invoke ≥1 live tool: VIX, put/call, insider,
-    or macro). Reuses the market-context string assembled by the most recent
-    /predict for this symbol — call /predict first.
+    Run the analyst jury on demand for a symbol.
+
+    Auth tiers (the jury was a public feature before it moved on-demand, so the
+    cheap path stays public; the expensive live-tools path is a signed-in perk):
+      - `use_tools=false` (the default "Run analyst jury" button) → anonymous
+        OK. Each analyst makes a single plain completion (3 Groq calls total).
+      - `use_tools=true` ("Use tools" re-run) → requires a signed-in user.
+        Groq function-calling tools are FORCED on (each analyst must invoke ≥1
+        live tool: VIX, put/call, insider, or macro). Gated because it can fire
+        up to ~9 Groq calls and would otherwise let anonymous traffic drain the
+        free-tier quota.
+
+    Reuses the market-context string assembled by the most recent /predict for
+    this symbol — call /predict first. Anonymous callers are IP-rate-limited
+    (RATE_LIMIT_JURY), same as /predict.
 
     Returns {"juryAnalysts": [...]} with populated `tools_used` per analyst.
     """
     symbol = (payload.symbol or "").strip().upper()
     if not symbol or not re.fullmatch(r"[A-Za-z0-9.\-:]{1,15}", symbol):
         raise HTTPException(status_code=400, detail="Invalid symbol.")
+
+    if payload.use_tools and not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to run the live-tools analysis.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     cached = await cache_get(f"jury_ctx:{symbol}")
     ctx = cached.get("ctx") if isinstance(cached, dict) else None
@@ -436,12 +467,16 @@ async def reanalyze_jury(request: Request, payload: JuryReanalyzeRequest, _user:
             detail="No analysis context for this symbol yet — run a prediction first.",
         )
 
-    logger.info(f"[JURY-REANALYZE] {symbol} — re-running jury with tools forced on")
+    use_tools = bool(payload.use_tools)
+    logger.info(
+        f"[JURY-REANALYZE] {symbol} — running jury on demand "
+        f"(tools {'forced on' if use_tools else 'off'})"
+    )
     try:
         jury = await asyncio.wait_for(
             run_jury_graph(
                 analyst_jury_svc, ANALYST_PERSONAS, ctx,
-                symbol=symbol, enable_tools=True, force_tools=True,
+                symbol=symbol, enable_tools=use_tools, force_tools=use_tools,
             ),
             timeout=40.0,
         )
@@ -1286,8 +1321,26 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     jury_cache_key       = f"jury:{symbol.upper()}:{_jury_fp}"
     jury_stale_cache_key = f"jury_stale:{symbol.upper()}"   # symbol-level, 8h TTL
 
-    cached_jury = await cache_get(jury_cache_key)
-    if cached_jury is not None:
+    if not Config.JURY_AUTO_RUN:
+        # On-demand jury: assemble + cache the market context (so POST
+        # /jury/reanalyze can run later without recomputing indicators) but
+        # make zero Groq jury calls. The frontend shows a "Run jury" button.
+        logger.info(f"[STEP-5] Jury auto-run disabled — caching context only for {symbol}")
+        note, jury = await asyncio.gather(
+            _ai_note(symbol, closes, rsi, forecast),
+            _run_analyst_jury(
+                symbol, closes, rsi, forecast,
+                forecast.get("stats", {}),
+                info, macd_data, bb_data, sma50, sma200,
+                historical_prices, sr_levels,
+                news_headlines=[n["title"] for n in news if n.get("title")],
+                track_record=track_record,
+                sentiment=sentiment,
+                stocktwits=stocktwits_data,
+                ctx_only=True,
+            ),
+        )
+    elif (cached_jury := await cache_get(jury_cache_key)) is not None:
         logger.info(f"[STEP-5] Jury cache HIT for {symbol} — skipping Groq jury calls")
         note = await _ai_note(symbol, closes, rsi, forecast)
         jury = cached_jury

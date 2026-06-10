@@ -67,10 +67,22 @@ def test_trade_setup_requires_auth() -> None:
     assert resp.status_code == 401, f"Expected 401, got {resp.status_code}: {resp.text}"
 
 
-def test_jury_reanalyze_requires_auth() -> None:
-    """POST /jury/reanalyze without a Bearer token must return 401."""
+def test_jury_reanalyze_tools_require_auth() -> None:
+    """POST /jury/reanalyze with use_tools (default) and no Bearer token → 401.
+
+    The live-tools run can fire ~9 Groq calls, so it stays a signed-in perk.
+    """
     resp = _sec_client.post("/jury/reanalyze", json={"symbol": "AAPL"})
     assert resp.status_code == 401, f"Expected 401, got {resp.status_code}: {resp.text}"
+
+
+def test_jury_reanalyze_no_tools_allows_anon() -> None:
+    """POST /jury/reanalyze with use_tools=false is public (the jury was a public
+    feature before it moved on-demand). Without cached context it returns 409 —
+    crucially NOT 401, proving the auth gate doesn't block the anonymous path."""
+    resp = _sec_client.post("/jury/reanalyze", json={"symbol": "AAPL", "use_tools": False})
+    assert resp.status_code != 401, f"Anon no-tools run must not 401, got {resp.status_code}: {resp.text}"
+    assert resp.status_code == 409, f"Expected 409 (no cached context), got {resp.status_code}: {resp.text}"
 
 
 # ---------------------------------------------------------------------------
