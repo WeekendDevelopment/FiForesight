@@ -9,7 +9,7 @@ import {
 } from '@mui/material';
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
-  ResponsiveContainer, Tooltip, ReferenceLine, Cell, Legend,
+  ResponsiveContainer, Tooltip, ReferenceLine, Cell, Legend, LabelList,
 } from 'recharts';
 import { Activity, Search, Target, TrendingUp, Gauge } from 'lucide-react';
 import { useAppShell } from '../../../contexts/AppShellContext';
@@ -99,7 +99,12 @@ function InsightsContent() {
   // ── Derived chart data ───────────────────────────────────────────────────────
   const modelMaeData = accuracy
     ? Object.entries(accuracy.model_mae)
-        .map(([model, mae]) => ({ model: MODEL_LABELS[model] ?? model, key: model, mae }))
+        .map(([model, mae]) => ({
+          model: MODEL_LABELS[model] ?? model,
+          key: model,
+          mae,
+          skill: accuracy.model_skill?.[model as keyof typeof accuracy.model_skill] ?? null,
+        }))
         .sort((a, b) => a.mae - b.mae)
     : [];
 
@@ -206,14 +211,28 @@ function InsightsContent() {
                   {modelMaeData.length > 0 ? (
                     <>
                       <ResponsiveContainer width="100%" height={240}>
-                        <BarChart layout="vertical" data={modelMaeData} margin={{ top: 16, right: 24, bottom: 0, left: 8 }}>
+                        <BarChart layout="vertical" data={modelMaeData} margin={{ top: 16, right: 32, bottom: 0, left: 8 }}>
                           <CartesianGrid strokeDasharray="3 3" stroke={gridColor} horizontal={false} />
                           <XAxis type="number" stroke={axisColor} tick={{ fontSize: 12 }} />
                           <YAxis type="category" dataKey="model" stroke={axisColor} tick={{ fontSize: 12 }} width={90} />
                           <Tooltip
                             contentStyle={{ background: isDark ? '#0f172a' : '#fff', border: `1px solid ${gridColor}`, borderRadius: 8 }}
-                            formatter={(v: number) => [`$${v.toFixed(2)}`, 'MAE']}
+                            formatter={(v: number, _n: string, props: { payload?: { skill: number | null } }) => {
+                              const skill = props.payload?.skill;
+                              const skillStr = skill != null
+                                ? `  (skill: ${skill >= 0 ? '+' : ''}${Math.round(skill * 100)}%)`
+                                : '';
+                              return [`$${v.toFixed(2)}${skillStr}`, 'MAE'];
+                            }}
                           />
+                          {accuracy?.naive_mae != null && (
+                            <ReferenceLine
+                              x={accuracy.naive_mae}
+                              stroke={isDark ? '#f59e0b' : '#d97706'}
+                              strokeDasharray="4 4"
+                              label={{ value: `Naive $${accuracy.naive_mae}`, fill: isDark ? '#f59e0b' : '#d97706', fontSize: 10, position: 'insideTopRight' }}
+                            />
+                          )}
                           <Bar dataKey="mae" radius={[0, 6, 6, 0]}>
                             {modelMaeData.map(d => (
                               <Cell key={d.key} fill={accuracy && d.key === accuracy.best_model ? (isDark ? '#00ffa3' : '#16a34a') : primaryColor} />
@@ -226,6 +245,24 @@ function InsightsContent() {
                           Most accurate: <strong style={{ color: isDark ? '#00ffa3' : '#16a34a' }}>{MODEL_LABELS[accuracy.best_model]}</strong>
                           {' · '}{accuracy.samples} resolved sample{accuracy.samples === 1 ? '' : 's'}
                         </Typography>
+                      )}
+                      {/* Skill score chips — how much each model beats naive persistence */}
+                      {accuracy?.model_skill && Object.keys(accuracy.model_skill).length > 0 && (
+                        <Stack direction="row" spacing={0.5} sx={{ mt: 1, flexWrap: 'wrap', gap: 0.5 }}>
+                          {modelMaeData.map(d => {
+                            if (d.skill == null) return null;
+                            const pct = Math.round(d.skill * 100);
+                            const col = pct > 0 ? (isDark ? '#00ffa3' : '#16a34a') : (isDark ? '#ff6b6b' : '#dc2626');
+                            return (
+                              <Chip
+                                key={d.key}
+                                size="small"
+                                label={`${d.model}: ${pct >= 0 ? '+' : ''}${pct}% vs naive`}
+                                sx={{ fontSize: 11, height: 22, color: col, bgcolor: `${col}1a`, fontWeight: 600 }}
+                              />
+                            );
+                          })}
+                        </Stack>
                       )}
                     </>
                   ) : <EmptyChart label="No per-model accuracy yet" isDark={isDark} />}

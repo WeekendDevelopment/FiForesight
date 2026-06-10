@@ -280,6 +280,10 @@ export interface AccuracyAnalytics {
   directional_accuracy: Partial<Record<'prophet' | 'sarima' | 'random_forest' | 'ensemble', number | null>>;
   forecast_vs_actual: ForecastVsActualPoint[];
   samples: number;
+  /** MAE of the naive persistence forecast (predict last_price → tomorrow). */
+  naive_mae?: number | null;
+  /** Per-model skill score: 1 − model_mae/naive_mae. >0 beats persistence, <0 is worse than a coin-flip baseline. */
+  model_skill?: Partial<Record<'prophet' | 'sarima' | 'random_forest', number>>;
   generated_at: string;
 }
 
