@@ -13,7 +13,7 @@ from slowapi.errors import RateLimitExceeded
 from config import Config, SanitizeHttpxFilter
 from dependencies import limiter
 from redis_cache import init_redis, close_redis
-from routers import predict, simulation, trade, market, history, backtest
+from routers import predict, simulation, trade, market, history, backtest, analytics
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -80,6 +80,7 @@ app.include_router(trade.router)
 app.include_router(market.router)
 app.include_router(history.router)
 app.include_router(backtest.router)
+app.include_router(analytics.router)
 
 
 if __name__ == "__main__":
