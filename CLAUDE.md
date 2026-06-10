@@ -207,7 +207,7 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 | IPO tracker tab | #229 |
 | Free IPO calendar (Nasdaq → EDGAR; FMP removed) | #231 |
 | Security hardening (rate limits, auth enforcement, CORS, input validation) | pending |
-| Forecast accuracy & sentiment dashboard (Insights tab) | pending |
+| Forecast accuracy & sentiment dashboard (Insights tab) | #244 |
 
 ---
 
