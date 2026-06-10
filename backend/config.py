@@ -18,8 +18,19 @@ class Config:
     ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
     PORT = int(os.getenv("PORT", 8000))
     SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
+    # Supabase project URL (e.g. https://xxxx.supabase.co). Used to locate the
+    # JWKS endpoint for verifying asymmetric (ES256/RS256) access tokens — the
+    # default signing scheme for Supabase projects with JWT signing keys. The
+    # legacy HS256 SUPABASE_JWT_SECRET cannot verify these.
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+    # JWKS endpoint. Defaults to the standard Supabase path under SUPABASE_URL;
+    # can be overridden directly.
+    SUPABASE_JWKS_URL = os.getenv("SUPABASE_JWKS_URL", "") or (
+        f"{SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json" if SUPABASE_URL else ""
+    )
     # When True, allows JWT decoding without signature verification (dev/test only).
-    # NEVER set this in production — always set SUPABASE_JWT_SECRET instead.
+    # NEVER set this in production — always set SUPABASE_JWT_SECRET (HS256) or
+    # SUPABASE_URL/SUPABASE_JWKS_URL (ES256/RS256) instead.
     ALLOW_INSECURE_JWT: bool = os.getenv("ALLOW_INSECURE_JWT", "false").lower() in ("1", "true", "yes")
     # StockTwits public API now returns 403 without auth — disabled by default so
     # we don't fire a guaranteed-failing request on every prediction.
