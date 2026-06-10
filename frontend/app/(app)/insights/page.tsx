@@ -9,7 +9,7 @@ import {
 } from '@mui/material';
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
-  ResponsiveContainer, Tooltip, ReferenceLine, Cell, Legend, LabelList,
+  ResponsiveContainer, Tooltip, ReferenceLine, Cell, Legend,
 } from 'recharts';
 import { Activity, Search, Target, TrendingUp, Gauge } from 'lucide-react';
 import { useAppShell } from '../../../contexts/AppShellContext';
