@@ -111,6 +111,76 @@ class InfluxService:
         except Exception as e:
             logger.error(f"[INFLUXDB] ✗ write_price error for {symbol}: {e}")
 
+    # --- Persist a VADER sentiment score (time-series) -----------------------
+    def write_sentiment_score(self, symbol: str, compound: float, label: str):
+        """Append one sentiment data point for `symbol` to the sentiment_score
+        measurement (tags: symbol, env; fields: compound, label).
+
+        Called fire-and-forget from /predict so the 30-day sentiment trend on the
+        Insights tab accumulates over time. Any failure is logged, never raised.
+        """
+        try:
+            _validate_tag(symbol, "symbol")
+        except ValueError as e:
+            logger.error(f"[INFLUXDB] write_sentiment_score rejected — {e}")
+            return
+        env = Config.APP_ENV if isinstance(Config.APP_ENV, str) and Config.APP_ENV else "local"
+        try:
+            p = (
+                Point("sentiment_score")
+                .tag("symbol", symbol)
+                .tag("env", env)
+                .field("compound", float(compound))
+                .field("label", str(label))
+                .time(datetime.now(timezone.utc), WritePrecision.NS)
+            )
+            self.write_api.write(
+                bucket=Config.INFLUXDB_BUCKET, org=Config.INFLUXDB_ORG, record=p
+            )
+            logger.info(
+                f"[INFLUXDB] ✓ write_sentiment_score — {symbol} compound={compound:+.4f} ({label})"
+            )
+        except Exception as e:
+            logger.error(f"[INFLUXDB] ✗ write_sentiment_score error for {symbol}: {e}")
+
+    # --- Query stored sentiment history (for the Insights trend chart) -------
+    def query_sentiment_history(self, symbol: str, days: int = 30) -> list:
+        """Return [{date, compound, label}, ...] ascending by time for the last
+        N days. Empty list when no data or on any error (caller shows empty state)."""
+        try:
+            _validate_tag(symbol, "symbol")
+        except ValueError as e:
+            logger.error(f"[INFLUXDB] query_sentiment_history rejected — {e}")
+            return []
+        days = max(1, int(days))
+        query = f"""
+        from(bucket: "{Config.INFLUXDB_BUCKET}")
+          |> range(start: -{days}d)
+          |> filter(fn: (r) => r["_measurement"] == "sentiment_score" and r["symbol"] == "{symbol}")
+          |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+          |> sort(columns: ["_time"], desc: false)
+        """
+        try:
+            tables = self.query_api.query(query)
+            out: list = []
+            for t in tables:
+                for r in t.records:
+                    tv = r.values.get("_time")
+                    if tv is None:
+                        continue
+                    out.append({
+                        "date":     tv.date().isoformat(),
+                        "compound": round(float(r.values.get("compound", 0.0) or 0.0), 4),
+                        "label":    str(r.values.get("label", "Neutral")),
+                    })
+            logger.info(
+                f"[INFLUXDB] query_sentiment_history — {symbol}: {len(out)} points in last {days}d"
+            )
+            return out
+        except Exception as e:
+            logger.error(f"[INFLUXDB] ✗ query_sentiment_history error for {symbol}: {e}")
+            return []
+
     # --- Write a full OHLCV batch (from yfinance) ----------------------------
     def write_ohlcv_batch(self, symbol: str, df: pd.DataFrame):
         """
