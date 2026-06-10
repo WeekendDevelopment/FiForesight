@@ -162,15 +162,18 @@ function AnalysisContent() {
   // If the user signs in *after* a prediction is already on screen, the Trade
   // Setup gate flips from the AuthGate to <TradeSetupCard>, but handlePredict
   // already ran (and skipped the authed fetch) while logged out — leaving the
-  // card blank. Fetch it now. The !tradeSetupLoading guard prevents a double
-  // fetch during a fresh signed-in prediction (handlePredict sets it loading);
-  // on failure tradeSetup stays null but deps don't change, so it won't loop.
+  // card blank. Gate on session.access_token (the value fetchTradeSetup
+  // actually sends) and key the effect on it, so the fetch fires as soon as the
+  // token is available. Deps deliberately omit tradeSetup/tradeSetupLoading: on
+  // a persistent fetch failure tradeSetup stays null, and re-adding them would
+  // retry-loop on every 401. The !tradeSetupLoading guard still blocks a
+  // double-fetch during a fresh signed-in prediction (handlePredict sets it).
   useEffect(() => {
-    if (user && prediction && !tradeSetup && !tradeSetupLoading) {
+    if (session?.access_token && prediction && !tradeSetup && !tradeSetupLoading) {
       fetchTradeSetup(prediction);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, prediction]);
+  }, [session?.access_token, prediction]);
 
   const rsiInfo = useMemo(() => {
     if (!prediction) return null;
