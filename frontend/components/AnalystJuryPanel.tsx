@@ -131,7 +131,9 @@ export default function AnalystJuryPanel({ analysts, symbol }: { analysts: Analy
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           {symbol && hasVerdicts && (
-            <Tooltip title="Re-run the jury with live tools (VIX, put/call ratio, insider flow, macro). Each analyst must consult at least one before deciding.">
+            <Tooltip title={signedIn
+              ? 'Re-run the jury with live tools (VIX, put/call ratio, insider flow, macro). Each analyst must consult at least one before deciding.'
+              : 'Sign in to re-run with live tools (VIX, put/call ratio, insider flow, macro).'}>
               <span>
                 <Button
                   size="small"
@@ -192,7 +194,7 @@ export default function AnalystJuryPanel({ analysts, symbol }: { analysts: Analy
             <Button
               size="small"
               onClick={() => handleReanalyze(false)}
-              disabled={reanalyzing || !symbol || !signedIn}
+              disabled={reanalyzing || !symbol}
               startIcon={reanalyzing
                 ? <CircularProgress size={14} sx={{ color: 'inherit' }} />
                 : <Scale size={14} />}
@@ -207,7 +209,7 @@ export default function AnalystJuryPanel({ analysts, symbol }: { analysts: Analy
             </Button>
             {!signedIn && (
               <Typography sx={{ fontSize: '0.58rem', opacity: 0.45 }}>
-                Sign in to run the analyst jury.
+                Sign in to add live tools (VIX, put/call, insider, macro).
               </Typography>
             )}
           </CardContent>

@@ -20,7 +20,7 @@ from services import DataCleaner, ANALYST_PERSONAS
 from dependencies import (
     influx_svc, forecast_store, serp_svc, yf_svc,
     analyst_jury_svc, sentiment_svc, finnhub_svc, stocktwits_svc, yahoo_rss_svc,
-    limiter, require_user, _user_rate_key,
+    limiter, get_user_id, _user_rate_key,
 )
 from jury_graph import run_jury_graph
 from redis_cache import cache_get, cache_set
@@ -428,21 +428,36 @@ async def _run_analyst_jury(
 
 @router.post("/jury/reanalyze")
 @limiter.limit(lambda: Config.RATE_LIMIT_JURY, key_func=_user_rate_key)
-async def reanalyze_jury(request: Request, payload: JuryReanalyzeRequest, _user: str = Depends(require_user)):
+async def reanalyze_jury(request: Request, payload: JuryReanalyzeRequest, user: str = Depends(get_user_id)):
     """
-    Run the analyst jury on demand for a symbol. With `use_tools=true`
-    (default) Groq function-calling tools are FORCED on (each analyst must
-    invoke ≥1 live tool: VIX, put/call, insider, or macro); with
-    `use_tools=false` each analyst makes a single plain completion — the
-    cheapest run (3 Groq calls total). Reuses the market-context string
-    assembled by the most recent /predict for this symbol — call /predict
-    first.
+    Run the analyst jury on demand for a symbol.
+
+    Auth tiers (the jury was a public feature before it moved on-demand, so the
+    cheap path stays public; the expensive live-tools path is a signed-in perk):
+      - `use_tools=false` (the default "Run analyst jury" button) → anonymous
+        OK. Each analyst makes a single plain completion (3 Groq calls total).
+      - `use_tools=true` ("Use tools" re-run) → requires a signed-in user.
+        Groq function-calling tools are FORCED on (each analyst must invoke ≥1
+        live tool: VIX, put/call, insider, or macro). Gated because it can fire
+        up to ~9 Groq calls and would otherwise let anonymous traffic drain the
+        free-tier quota.
+
+    Reuses the market-context string assembled by the most recent /predict for
+    this symbol — call /predict first. Anonymous callers are IP-rate-limited
+    (RATE_LIMIT_JURY), same as /predict.
 
     Returns {"juryAnalysts": [...]} with populated `tools_used` per analyst.
     """
     symbol = (payload.symbol or "").strip().upper()
     if not symbol or not re.fullmatch(r"[A-Za-z0-9.\-:]{1,15}", symbol):
         raise HTTPException(status_code=400, detail="Invalid symbol.")
+
+    if payload.use_tools and not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to run the live-tools analysis.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     cached = await cache_get(f"jury_ctx:{symbol}")
     ctx = cached.get("ctx") if isinstance(cached, dict) else None
