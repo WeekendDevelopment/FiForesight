@@ -303,7 +303,7 @@ function InsightsContent() {
                         <YAxis stroke={axisColor} tick={{ fontSize: 11 }} domain={['auto', 'auto']} />
                         <Tooltip
                           contentStyle={{ background: isDark ? '#0f172a' : '#fff', border: `1px solid ${gridColor}`, borderRadius: 8 }}
-                          formatter={(v: number, n: string) => [`$${v.toFixed(2)}`, n === 'forecast' ? 'Forecast' : 'Actual']}
+                          formatter={(v: number, n: string) => [`$${v.toFixed(2)}`, n]}
                         />
                         <Legend wrapperStyle={{ fontSize: 12 }} />
                         <Line type="monotone" dataKey="forecast" name="Forecast" stroke={primaryColor} strokeWidth={2} dot={false} />
