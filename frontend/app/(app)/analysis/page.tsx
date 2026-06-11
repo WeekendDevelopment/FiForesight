@@ -34,7 +34,9 @@ import StockChatPanel    from '../../../components/StockChatPanel';
 import { useIndicatorSignals } from '../../../hooks/useIndicatorSignals';
 import DCFCard               from '../../../components/DCFCard';
 import WhyDidMoveCard        from '../../../components/WhyDidMoveCard';
-import MorningBriefingPanel  from '../../../components/MorningBriefingPanel';
+import ReversalRiskCard       from '../../../components/ReversalRiskCard';
+import DirectionForecastCard  from '../../../components/DirectionForecastCard';
+import MorningBriefingPanel   from '../../../components/MorningBriefingPanel';
 import type { PredictionData, IndicatorKey, TradeSetupResponse, DCFResult } from '../../../types';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -78,8 +80,12 @@ function AnalysisContent() {
   const [chatOpen,         setChatOpen]         = useState(false);
   const [authOpen,         setAuthOpen]         = useState(false);
 
-  const { user } = useAuth();
+  const { user, session } = useAuth();
   const { watchlist, currentIsSaved, toggle: toggleWatchlist, toggling: watchlistToggling } = useWatchlist(prediction?.symbol ?? ticker);
+
+  const authHeaders = session?.access_token
+    ? { Authorization: `Bearer ${session.access_token}` }
+    : {};
 
   const fetchTradeSetup = (data: PredictionData) => {
     setTradeSetup(null);
@@ -95,7 +101,7 @@ function AnalysisContent() {
       trend:           data.prediction.trend,
       sentiment_label: data.sentiment?.label ?? 'Neutral',
       var_95:          data.monteCarlo?.var_95 ?? null,
-    })
+    }, { headers: authHeaders })
       .then(r  => setTradeSetup(r.data))
       .catch(() => { /* non-fatal */ })
       .finally(() => setTradeSetupLoading(false));
@@ -124,7 +130,7 @@ function AnalysisContent() {
     setDcfData(null);
     setChatOpen(false);
     try {
-      const response = await axios.post('/api/predict', { data: fullSymbol });
+      const response = await axios.post('/api/predict', { data: fullSymbol }, { headers: authHeaders });
       setPrediction(response.data);
       // Persist the ticker in the URL so the view is shareable, reload-safe, and
       // back/forward navigable. scroll:false keeps the current scroll position.
@@ -154,6 +160,22 @@ function AnalysisContent() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbolFromUrl]);
+
+  // If the user signs in *after* a prediction is already on screen, the Trade
+  // Setup gate flips from the AuthGate to <TradeSetupCard>, but handlePredict
+  // already ran (and skipped the authed fetch) while logged out — leaving the
+  // card blank. Gate on session.access_token (the value fetchTradeSetup
+  // actually sends) and key the effect on it, so the fetch fires as soon as the
+  // token is available. Deps deliberately omit tradeSetup/tradeSetupLoading: on
+  // a persistent fetch failure tradeSetup stays null, and re-adding them would
+  // retry-loop on every 401. The !tradeSetupLoading guard still blocks a
+  // double-fetch during a fresh signed-in prediction (handlePredict sets it).
+  useEffect(() => {
+    if (session?.access_token && prediction && !tradeSetup && !tradeSetupLoading) {
+      fetchTradeSetup(prediction);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.access_token, prediction]);
 
   const rsiInfo = useMemo(() => {
     if (!prediction) return null;
@@ -304,10 +326,9 @@ function AnalysisContent() {
                 {/* ── Walk-forward backtest (on-demand) ────────────── */}
                 <BacktestPanel symbol={prediction.symbol} isDark={isDark} primaryColor={primaryColor} />
 
-                {/* ── Analyst Jury ──────────────────────────────────── */}
-                {prediction.juryAnalysts && prediction.juryAnalysts.length > 0 && (
-                  <AnalystJuryPanel analysts={prediction.juryAnalysts} symbol={prediction.symbol} />
-                )}
+                {/* ── Analyst Jury (on-demand — panel shows a Run button
+                     when the prediction ships without verdicts) ───────── */}
+                <AnalystJuryPanel analysts={prediction.juryAnalysts ?? []} symbol={prediction.symbol} />
 
                 {/* ── Trade Setup ──────────────────────────────────── */}
                 {user ? (
@@ -358,6 +379,24 @@ function AnalysisContent() {
                       </Box>
                     </CardContent>
                   </Card>
+                )}
+
+                {/* ── Reversal Risk ────────────────────────────────────── */}
+                {prediction.reversalRisk && (
+                  <ReversalRiskCard
+                    risk={prediction.reversalRisk}
+                    isDark={isDark}
+                    primaryColor={primaryColor}
+                  />
+                )}
+
+                {/* ── Next-day Direction ───────────────────────────────── */}
+                {prediction.directionForecast && (
+                  <DirectionForecastCard
+                    forecast={prediction.directionForecast}
+                    isDark={isDark}
+                    primaryColor={primaryColor}
+                  />
                 )}
 
                 {/* ── Monte Carlo GBM ──────────────────────────────────── */}

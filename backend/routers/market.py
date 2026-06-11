@@ -8,11 +8,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 import yfinance as yf
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from slowapi.util import get_remote_address
 from scipy.stats import norm
 
 from config import Config
-from dependencies import yf_svc
+from dependencies import yf_svc, limiter
+
+_SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-:]{1,15}$")
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -75,9 +78,14 @@ def _run_dcf(
 
 
 @router.get("/dcf/{symbol}")
-async def dcf_valuation(symbol: str):
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def dcf_valuation(request: Request, symbol: str):
     import yfinance as yf
     from redis_cache import cache_get, cache_set
+
+    symbol = symbol.strip().upper()
+    if not _SYMBOL_RE.match(symbol):
+        raise HTTPException(status_code=422, detail="Invalid symbol.")
 
     def _missing(v: Any) -> bool:
         return v in (None, "N/A", "")
@@ -224,15 +232,18 @@ async def dcf_valuation(symbol: str):
 # ---------------------------------------------------------------------------
 
 @router.get("/options/{symbol}")
-async def options_chain(symbol: str, expiry: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Returns an options chain (calls + puts) for the given symbol.
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def options_chain(request: Request, symbol: str, expiry: Optional[str] = None) -> Dict[str, Any]:
+    """Returns an options chain (calls + puts) for the given symbol.
 
     Filters to strikes within ±25% of current price to keep payload small.
     Each contract carries Black-Scholes `delta` and `theta`. Aggregate `stats`
     (put/call ratio, ATM IV, IV skew) are included. An optional `?expiry=`
     query param selects a specific expiry; defaults to the nearest one.
     """
+    symbol = symbol.strip().upper()
+    if not _SYMBOL_RE.match(symbol):
+        raise HTTPException(status_code=422, detail="Invalid symbol.")
 
     def _fetch() -> Optional[Dict[str, Any]]:
         ticker = yf.Ticker(symbol.upper())
@@ -364,7 +375,8 @@ EARNINGS_WATCHLIST = list(EARNINGS_NAMES.keys())
 
 
 @router.get("/earnings/calendar")
-async def earnings_calendar():
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def earnings_calendar(request: Request):
     """Returns upcoming earnings dates for S&P 500 top constituents. Cached 6h."""
     from redis_cache import cache_get, cache_set
     CACHE_KEY = "earnings:calendar"
@@ -412,7 +424,8 @@ async def earnings_calendar():
                     "market_cap": market_cap,
                     "date": date_val,
                 })
-            except Exception:
+            except Exception as _exc:
+                logger.debug("[EARNINGS] skipping ticker %s: %s", ticker, _exc)
                 continue
 
         # Sort each day's entries by market cap desc, keep top 8.
@@ -514,7 +527,8 @@ def _normalize_nasdaq_row(
 
 
 @router.get("/ipo/calendar")
-async def ipo_calendar(refresh: bool = False) -> Dict[str, Any]:
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def ipo_calendar(request: Request, refresh: bool = False) -> Dict[str, Any]:
     """Upcoming (next 90d) + recent (last 30d) public offerings.
 
     Source chain (degrades on failure):
@@ -695,7 +709,8 @@ SECTOR_ETFS = [
 
 
 @router.get("/sectors")
-async def sector_heatmap():
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def sector_heatmap(request: Request):
     """Returns 1-day % change for 11 SPDR sector ETFs. Cached 15 min."""
     from redis_cache import cache_get, cache_set
     CACHE_KEY = "sectors:heatmap"
@@ -715,7 +730,8 @@ async def sector_heatmap():
                 last_close = float(hist["Close"].iloc[-1])
                 change_pct = round((last_close - prev_close) / prev_close * 100, 2) if prev_close else None
                 results.append({"ticker": ticker, "label": label, "change_pct": change_pct, "price": round(last_close, 2)})
-            except Exception:
+            except Exception as _exc:
+                logger.debug("[SECTORS] fetch failed for %s: %s", ticker, _exc)
                 results.append({"ticker": ticker, "label": label, "change_pct": None, "price": None})
         return results
 
@@ -746,7 +762,8 @@ MARKET_OVERVIEW_TICKERS = [
 
 
 @router.get("/briefing")
-async def morning_briefing():
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def morning_briefing(request: Request):
     """Market overview: % change for key indices + ETFs. Cached 15 min."""
     from redis_cache import cache_get, cache_set
     CACHE_KEY = "briefing:market"
@@ -766,7 +783,8 @@ async def morning_briefing():
                 last_close = float(hist["Close"].iloc[-1])
                 change_pct = round((last_close - prev_close) / prev_close * 100, 2) if prev_close else None
                 results.append({"ticker": ticker, "label": label, "change_pct": change_pct, "price": round(last_close, 2)})
-            except Exception:
+            except Exception as _exc:
+                logger.debug("[BRIEFING] fetch failed for %s: %s", ticker, _exc)
                 results.append({"ticker": ticker, "label": label, "change_pct": None, "price": None})
         return results
 
@@ -1003,7 +1021,8 @@ async def _fetch_coinbase_book(sym: str) -> Dict[str, Any]:
 
 
 @router.get("/orderbook/{symbol}")
-async def order_book(symbol: str) -> Dict[str, Any]:
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def order_book(request: Request, symbol: str) -> Dict[str, Any]:
     """Order book snapshot with spread + bid/ask imbalance metrics.
 
     Crypto pairs (``BTC-USD``) return genuine free Level-2 depth from

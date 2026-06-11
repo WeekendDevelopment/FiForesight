@@ -1,4 +1,4 @@
-# backend/routers/predict.py
+# backend/routers/predict.py  # noqa: E501
 import asyncio
 import hashlib
 import logging
@@ -6,7 +6,8 @@ import re
 from datetime import datetime, timedelta, timezone, date
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from slowapi.util import get_remote_address
 from pydantic import BaseModel
 
 from config import Config
@@ -14,14 +15,18 @@ from models import (
     calculate_rsi, calculate_rsi_series, run_ensemble_forecast,
     calculate_macd, calculate_bollinger_bands, calculate_sma_series,
     calculate_ema_series, calculate_support_resistance,
+    _skill_to_weights,
 )
 from services import DataCleaner, ANALYST_PERSONAS
 from dependencies import (
     influx_svc, forecast_store, serp_svc, yf_svc,
     analyst_jury_svc, sentiment_svc, finnhub_svc, stocktwits_svc, yahoo_rss_svc,
+    limiter, get_user_id, _user_rate_key,
 )
 from jury_graph import run_jury_graph
 from redis_cache import cache_get, cache_set
+from reversal import compute_reversal_risk
+from direction import compute_direction_forecast
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -56,6 +61,10 @@ class PredictRequest(BaseModel):
 
 class JuryReanalyzeRequest(BaseModel):
     symbol: str
+    # True  → force Groq function-calling tools (each analyst must consult ≥1
+    #         live feed). Default preserves the original "Use tools" semantics.
+    # False → plain single-completion jury run (cheapest: 3 Groq calls total).
+    use_tools: bool = True
 
 
 class PredictionResponse(BaseModel):
@@ -80,6 +89,8 @@ class PredictionResponse(BaseModel):
     monteCarlo:      Optional[dict] = None
     earningsDates:   List[str]      = []
     moveExplanation: Optional[str]  = None
+    reversalRisk:       Optional[dict] = None
+    directionForecast:  Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -148,9 +159,9 @@ def _safe_background(coro_or_future, *, name: str = "background"):
 
 async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict) -> str:
     """
-    Header analyst note via Groq llama-3.3-70b (14,400 RPD free, no quota issues).
-    Replaces Gemini which has a 20 RPD free-tier limit — too scarce for per-request use.
-    Falls back to the ensemble model's own note if Groq is unavailable.
+    Header analyst note via Groq llama-3.1-8b-instant (14,400 RPD free — highest budget).
+    Uses 8B instead of 70B to preserve llama-3.3-70b-versatile's 1K RPD exclusively for
+    the LLAMA-70B jury analyst.  Falls back to the ensemble model's own note if unavailable.
     """
     recent    = closes[-20:]
     price_str = ", ".join(f"{p:.2f}" for p in recent)
@@ -167,14 +178,14 @@ async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict)
     )
     logger.info(
         f"[AI-NOTE] Requesting header note — "
-        f"model=llama-3.3-70b-versatile, symbol={symbol}, RSI={rsi:.1f}, "
+        f"model=llama-3.1-8b-instant, symbol={symbol}, RSI={rsi:.1f}, "
         f"forecast_high=${forecast['high']:.2f}, forecast_low=${forecast['low']:.2f}, "
         f"conf={forecast.get('conf', 'low')} | "
         f"data_sent: last 20 closes of {len(closes)} total"
     )
     try:
         raw = await analyst_jury_svc._call_groq(
-            "llama-3.3-70b-versatile", system, prompt
+            "llama-3.1-8b-instant", system, prompt
         )
         note = raw.strip()
         logger.info(
@@ -209,12 +220,17 @@ async def _run_analyst_jury(
     track_record: str = "",
     sentiment: Optional[dict] = None,
     stocktwits: Optional[dict] = None,
+    ctx_only: bool = False,
 ) -> List[dict]:
     """
     Run all 3 analyst personas concurrently via AnalystJuryService.
+
+    With `ctx_only=True` the market-context string is assembled and cached
+    (for POST /jury/reanalyze) but no Groq calls are made — returns [].
+    This is the default path now that the jury is on-demand.
       - LLAMA-4-SCOUT → Groq meta-llama/llama-4-scout-17b-16e-instruct (macro & risk lens, Meta)
       - LLAMA-70B     → Groq llama-3.3-70b-versatile  (growth lens, Meta)
-      - GPT-OSS-20B   → Groq openai/gpt-oss-20b        (quant lens, OpenAI)
+      - LLAMA-8B      → Groq llama-3.1-8b-instant        (quant lens, 14.4K RPD)
 
     All provider routing and response parsing are handled inside
     AnalystJuryService — no per-provider branching needed here.
@@ -374,10 +390,22 @@ async def _run_analyst_jury(
     except Exception as exc:
         logger.debug(f"[JURY-GRAPH] ctx cache_set failed (non-fatal): {exc}")
 
+    if ctx_only:
+        logger.info(f"[JURY-GRAPH] ctx_only — context cached for {symbol}, jury deferred to /jury/reanalyze")
+        return []
+
     try:
+        # Prepend UTC minute-timestamp to the live context so Groq never returns a
+        # server-side cached completion when the same ticker is queried repeatedly
+        # within a short window (prices identical → prompts would otherwise match).
+        # The cached `ctx` above stays clean (no timestamp) for /jury/reanalyze.
+        ts_prefix = (
+            f"[Analysis timestamp: "
+            f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC]\n"
+        )
         # 30s budget accommodates tool-call round-trips (Groq function calling).
         return await asyncio.wait_for(
-            run_jury_graph(analyst_jury_svc, ANALYST_PERSONAS, ctx, symbol=symbol),
+            run_jury_graph(analyst_jury_svc, ANALYST_PERSONAS, ts_prefix + ctx, symbol=symbol),
             timeout=30.0,
         )
     except Exception as exc:
@@ -404,18 +432,37 @@ async def _run_analyst_jury(
 # ---------------------------------------------------------------------------
 
 @router.post("/jury/reanalyze")
-async def reanalyze_jury(payload: JuryReanalyzeRequest):
+@limiter.limit(lambda: Config.RATE_LIMIT_JURY, key_func=_user_rate_key)
+async def reanalyze_jury(request: Request, payload: JuryReanalyzeRequest, user: str = Depends(get_user_id)):
     """
-    Re-run the analyst jury for a symbol with Groq function-calling tools
-    FORCED on (each analyst must invoke ≥1 live tool: VIX, put/call, insider,
-    or macro). Reuses the market-context string assembled by the most recent
-    /predict for this symbol — call /predict first.
+    Run the analyst jury on demand for a symbol.
+
+    Auth tiers (the jury was a public feature before it moved on-demand, so the
+    cheap path stays public; the expensive live-tools path is a signed-in perk):
+      - `use_tools=false` (the default "Run analyst jury" button) → anonymous
+        OK. Each analyst makes a single plain completion (3 Groq calls total).
+      - `use_tools=true` ("Use tools" re-run) → requires a signed-in user.
+        Groq function-calling tools are FORCED on (each analyst must invoke ≥1
+        live tool: VIX, put/call, insider, or macro). Gated because it can fire
+        up to ~9 Groq calls and would otherwise let anonymous traffic drain the
+        free-tier quota.
+
+    Reuses the market-context string assembled by the most recent /predict for
+    this symbol — call /predict first. Anonymous callers are IP-rate-limited
+    (RATE_LIMIT_JURY), same as /predict.
 
     Returns {"juryAnalysts": [...]} with populated `tools_used` per analyst.
     """
     symbol = (payload.symbol or "").strip().upper()
     if not symbol or not re.fullmatch(r"[A-Za-z0-9.\-:]{1,15}", symbol):
         raise HTTPException(status_code=400, detail="Invalid symbol.")
+
+    if payload.use_tools and not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to run the live-tools analysis.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     cached = await cache_get(f"jury_ctx:{symbol}")
     ctx = cached.get("ctx") if isinstance(cached, dict) else None
@@ -425,12 +472,16 @@ async def reanalyze_jury(payload: JuryReanalyzeRequest):
             detail="No analysis context for this symbol yet — run a prediction first.",
         )
 
-    logger.info(f"[JURY-REANALYZE] {symbol} — re-running jury with tools forced on")
+    use_tools = bool(payload.use_tools)
+    logger.info(
+        f"[JURY-REANALYZE] {symbol} — running jury on demand "
+        f"(tools {'forced on' if use_tools else 'off'})"
+    )
     try:
         jury = await asyncio.wait_for(
             run_jury_graph(
                 analyst_jury_svc, ANALYST_PERSONAS, ctx,
-                symbol=symbol, enable_tools=True, force_tools=True,
+                symbol=symbol, enable_tools=use_tools, force_tools=use_tools,
             ),
             timeout=40.0,
         )
@@ -726,7 +777,8 @@ async def health():
 
 
 @router.get("/sparklines")
-async def sparklines(tickers: str):
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def sparklines(request: Request, tickers: str):
     """Return last-5-close prices for a comma-separated list of tickers."""
     symbols = [t.strip().upper() for t in tickers.split(",") if t.strip()][:18]
     result: Dict[str, List[float]] = {}
@@ -786,6 +838,8 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     import numpy as np
 
     symbol = payload.data.upper()
+    if not re.fullmatch(r"[A-Za-z0-9.\-:]{1,15}", symbol):
+        raise HTTPException(status_code=422, detail="Invalid symbol.")
     now    = datetime.now(timezone.utc)
 
     logger.info("[REQUEST] ════════════════════════════════════════════")
@@ -958,9 +1012,21 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     )
 
     # ── RL: load historical model accuracy for weight calibration ────────────
+    # All three queries run concurrently — no inter-dependency.
     logger.debug(f"[RL] Querying historical model accuracy for {symbol} ...")
-    model_acc = await asyncio.to_thread(forecast_store.query_model_accuracy, symbol)
-    ensemble_mae = await asyncio.to_thread(forecast_store.query_ensemble_mae, symbol)
+
+    async def _rl_query(fn, default):
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(fn, symbol), timeout=12.0)
+        except Exception as exc:
+            logger.warning("[RL] metric query failed (%s): %s — using default", fn.__name__, exc)
+            return default
+
+    model_acc, ensemble_mae, naive_mae_val = await asyncio.gather(
+        _rl_query(forecast_store.query_model_accuracy, {}),
+        _rl_query(forecast_store.query_ensemble_mae,   {}),
+        _rl_query(forecast_store.query_naive_mae,      None),
+    )
 
     historical_weights = None
     rl_sample_count    = 0
@@ -977,19 +1043,20 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         )
         rl_sample_count = min_samples
         if rl_sample_count > 0:
-            eps      = 1e-6
-            inv_maes = [
-                1.0 / (p_acc.get("mae", 999.0) + eps),
-                1.0 / (s_acc.get("mae", 999.0) + eps),
-                1.0 / (r_acc.get("mae", 999.0) + eps),
+            maes = [
+                p_acc.get("mae", 999.0),
+                s_acc.get("mae", 999.0),
+                r_acc.get("mae", 999.0),
             ]
-            total_inv          = sum(inv_maes)
-            historical_weights = [v / total_inv for v in inv_maes] if total_inv > 0 else None
+            historical_weights = _skill_to_weights(maes, naive_mae_val)
+            using_skill = naive_mae_val is not None and naive_mae_val > 0
             logger.debug(
-                f"[RL] Historical weights (inv-MAE) — "
-                f"prophet={historical_weights[0]:.3f}, "
-                f"sarima={historical_weights[1]:.3f}, "
-                f"rf={historical_weights[2]:.3f} | samples={rl_sample_count}"
+                "[RL] %s weights — prophet=%.3f sarima=%.3f rf=%.3f | "
+                "naive_mae=%s | samples=%d",
+                "Skill-based" if using_skill else "Inv-MAE (no naive baseline yet)",
+                historical_weights[0], historical_weights[1], historical_weights[2],
+                "N/A" if naive_mae_val is None else f"{naive_mae_val:.4f}",
+                rl_sample_count,
             )
         # Build track record string for analyst jury context
         parts = []
@@ -1053,6 +1120,46 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     ema20     = calculate_ema_series(closes, 20)
     ema50     = calculate_ema_series(closes, 50)
     logger.info(f"[STEP-4b] ✓ All indicator series computed ({len(closes)} points each)")
+
+    # ── Step 4b+. RSI series + reversal-risk classifier ──────────────────────
+    # Compute RSI series here (also reused for chart at Step 8) so the reversal
+    # classifier has it available without a second pass through closes.
+    rsi_full = calculate_rsi_series(closes)
+    try:
+        reversal_risk = await asyncio.to_thread(
+            compute_reversal_risk,
+            closes, rsi_full, bb_data["upper"], bb_data["lower"],
+            macd_data["hist"], volumes,
+        )
+        if reversal_risk:
+            logger.info(
+                "[STEP-4b+] ✓ Reversal risk: %d%% (%s) — trained on %d bars",
+                reversal_risk["risk_pct"], reversal_risk["signal"], reversal_risk["trained_on"],
+            )
+        else:
+            logger.info("[STEP-4b+] Reversal risk skipped (insufficient data)")
+    except Exception as exc:
+        logger.warning("[STEP-4b+] Reversal risk failed for %s: %s", symbol, exc, exc_info=True)
+        reversal_risk = None
+
+    # ── Step 4b++. Next-day direction classifier ──────────────────────────────
+    try:
+        direction_forecast = await asyncio.to_thread(
+            compute_direction_forecast,
+            closes, rsi_full, bb_data["upper"], bb_data["lower"],
+            macd_data["hist"], volumes,
+        )
+        if direction_forecast:
+            logger.info(
+                "[STEP-4b++] ✓ Direction: %s %.0f%% confidence (+%d%% edge) — trained on %d bars",
+                direction_forecast["direction"].upper(), direction_forecast["confidence_pct"],
+                direction_forecast["edge_pct"], direction_forecast["trained_on"],
+            )
+        else:
+            logger.info("[STEP-4b++] Direction forecast skipped (insufficient data)")
+    except Exception as exc:
+        logger.warning("[STEP-4b++] Direction forecast failed for %s: %s", symbol, exc, exc_info=True)
+        direction_forecast = None
 
     # ── Step 4c. Fire news + earnings fetch concurrently ─────────────────────
     news_cache_key = f"news:{symbol.upper()}"
@@ -1272,8 +1379,26 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     jury_cache_key       = f"jury:{symbol.upper()}:{_jury_fp}"
     jury_stale_cache_key = f"jury_stale:{symbol.upper()}"   # symbol-level, 8h TTL
 
-    cached_jury = await cache_get(jury_cache_key)
-    if cached_jury is not None:
+    if not Config.JURY_AUTO_RUN:
+        # On-demand jury: assemble + cache the market context (so POST
+        # /jury/reanalyze can run later without recomputing indicators) but
+        # make zero Groq jury calls. The frontend shows a "Run jury" button.
+        logger.info(f"[STEP-5] Jury auto-run disabled — caching context only for {symbol}")
+        note, jury = await asyncio.gather(
+            _ai_note(symbol, closes, rsi, forecast),
+            _run_analyst_jury(
+                symbol, closes, rsi, forecast,
+                forecast.get("stats", {}),
+                info, macd_data, bb_data, sma50, sma200,
+                historical_prices, sr_levels,
+                news_headlines=[n["title"] for n in news if n.get("title")],
+                track_record=track_record,
+                sentiment=sentiment,
+                stocktwits=stocktwits_data,
+                ctx_only=True,
+            ),
+        )
+    elif (cached_jury := await cache_get(jury_cache_key)) is not None:
         logger.info(f"[STEP-5] Jury cache HIT for {symbol} — skipping Groq jury calls")
         note = await _ai_note(symbol, closes, rsi, forecast)
         jury = cached_jury
@@ -1359,6 +1484,18 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         name="INFLUX-WRITE",
     )
 
+    # Persist the VADER sentiment score over time (powers the Insights trend
+    # chart). Only when at least one headline was scored, so we don't pollute the
+    # series with neutral 0.0 points on news-less requests.
+    if sentiment.get("headline_count", 0) > 0:
+        _safe_background(
+            asyncio.to_thread(
+                influx_svc.write_sentiment_score,
+                symbol, sentiment["compound"], sentiment["label"],
+            ),
+            name="SENTIMENT-WRITE",
+        )
+
     # ── Step 8. Build chart history (last 90 trading days) ───────────────────
     total       = len(historical_prices)
     slice_start = max(0, total - 90)
@@ -1389,8 +1526,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             "macd_hist":   macd_data["hist"][idx],
         })
 
-    # RSI series — last 90 points aligned to chart window
-    rsi_full   = calculate_rsi_series(closes)
+    # RSI series — last 90 points aligned to chart window (rsi_full computed at Step 4b+)
     rsi_series = rsi_full[slice_start:]
     logger.info(
         f"[STEP-8] ✓ Chart history built — {len(history)} bars | "
@@ -1437,11 +1573,18 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         monteCarlo      = forecast.get("monte_carlo"),
         earningsDates   = earnings_dates,
         moveExplanation = move_explanation,
+        reversalRisk       = reversal_risk,
+        directionForecast  = direction_forecast,
     )
 
 
 @router.post("/predict", response_model=PredictionResponse)
-async def predict(payload: PredictRequest):
+@limiter.limit(lambda: Config.RATE_LIMIT_PREDICT_AUTH, key_func=_user_rate_key)
+async def predict(request: Request, payload: PredictRequest):
+    symbol = payload.data.strip().upper()
+    if not re.fullmatch(r"[A-Za-z0-9.\-:]{1,15}", symbol):
+        raise HTTPException(status_code=422, detail="Invalid symbol.")
+    payload.data = symbol  # normalised for _predict_inner
     try:
         # 60s overall budget: the tool-using jury alone may take up to 30s
         # (Groq function-calling round-trips) on top of data + forecast steps.

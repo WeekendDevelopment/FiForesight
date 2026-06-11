@@ -19,5 +19,8 @@ langchain-core
 fastmcp
 # Native Redis client with hiredis C extension for faster response parsing
 redis[hiredis]
-# JWT verification for Supabase auth tokens
-PyJWT
+# JWT verification for Supabase auth tokens. [crypto] pulls in `cryptography`,
+# required to verify asymmetric ES256/RS256 tokens via the project JWKS.
+PyJWT[crypto]
+# Per-IP / per-user rate limiting
+slowapi

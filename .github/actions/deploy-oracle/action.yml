@@ -83,6 +83,8 @@ runs:
             -e GROQ_API_KEY=${{ env.GROQ_API_KEY }} \
             -e ALPACA_API_KEY=${{ env.ALPACA_API_KEY }} \
             -e ALPACA_SECRET_KEY=${{ env.ALPACA_SECRET_KEY }} \
+            -e SUPABASE_JWT_SECRET=${{ env.SUPABASE_JWT_SECRET }} \
+            -e SUPABASE_URL=${{ env.SUPABASE_URL }} \
             -e APP_ENV=${{ env.APP_ENV }} \
             -e NEW_RELIC_LICENSE_KEY=${{ env.NEW_RELIC_LICENSE_KEY }} \
             -e NEW_RELIC_APP_NAME=${{ env.NEW_RELIC_APP_NAME }} \

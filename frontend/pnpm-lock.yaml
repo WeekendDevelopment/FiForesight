@@ -42,8 +42,8 @@ importers:
         specifier: 16.2.6
         version: 16.2.6(@babel/core@7.29.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
       plotly.js:
-        specifier: ^3.5.1
-        version: 3.5.1(mapbox-gl@1.13.3)
+        specifier: ^3.6.0
+        version: 3.6.0(mapbox-gl@1.13.3)
       react:
         specifier: ^19.2.6
         version: 19.2.6
@@ -55,7 +55,7 @@ importers:
         version: 1.29.1(react@19.2.6)
       react-plotly.js:
         specifier: ^2.6.0
-        version: 2.6.0(plotly.js@3.5.1(mapbox-gl@1.13.3))(react@19.2.6)
+        version: 2.6.0(plotly.js@3.6.0(mapbox-gl@1.13.3))(react@19.2.6)
       recharts:
         specifier: ^3.8.1
         version: 3.8.1(@types/react@19.2.14)(react-dom@19.2.6(react@19.2.6))(react-is@19.2.4)(react@19.2.6)(redux@5.0.1)
@@ -1983,8 +1983,8 @@ packages:
   geojson-vt@3.2.1:
     resolution: {integrity: sha512-EvGQQi/zPrDA6zr6BnJD/YhwAkBP8nnJ9emh3EnHQKVMfg/MRVtPbMYdgVy/IaEmn4UfagD2a6fafPDL5hbtwg==}
 
-  geojson-vt@4.0.2:
-    resolution: {integrity: sha512-AV9ROqlNqoZEIJGfm1ncNjEXfkz2hdFlZf0qkVfmkwdKa8vj7H16YUOT81rJw1rdFhyEDlN2Tds91p/glzbl5A==}
+  geojson-vt@4.0.3:
+    resolution: {integrity: sha512-jR1MwkLaZGa8Zftct9ZFruyWFrdl9ZyD2OliXNy9Qq5bBPeg5wHVpBQF9p5GjnicSDQqvBVpysxTPKmWdsfWMA==}
 
   get-canvas-context@1.0.2:
     resolution: {integrity: sha512-LnpfLf/TNzr9zVOGiIY6aKCz8EKuXmlYNV7CM2pUjBa/B+c2I15tS7KLySep75+FuerJdmArvJLcsAXWEy2H0A==}
@@ -2415,8 +2415,8 @@ packages:
   kdbush@3.0.0:
     resolution: {integrity: sha512-hRkd6/XW4HTsA9vjVpY9tuXJYLSlelnkTmVFu4M9/7MIYQtFcHpbugAU7UbOfjOiVSVYl2fqgBuJ32JUmRo5Ew==}
 
-  kdbush@4.0.2:
-    resolution: {integrity: sha512-WbCVYJ27Sz8zi9Q7Q0xHC+05iwkm3Znipc2XTlrnJbsHMYktW4hPhXUE8Ys1engBrvffoSCqbil1JQAa7clRpA==}
+  kdbush@4.1.0:
+    resolution: {integrity: sha512-e9vurzrXJQrFX6ckpHP3bvj5l+9CnYzkxDNnNQ1h2QTqdWsUAJgXiKdGNcOa1EY85dU8KbQ+z/FdQdB7P+9yfQ==}
 
   keyv@4.5.4:
     resolution: {integrity: sha512-oxVHkHR/EJf2CNXnWxRLW6mg7JyCCUcG0DtEGmL2ctUo1PNTin1PUil+r/+4r5MpVgC/fn1kjsx7mjSujKqIpw==}
@@ -2770,8 +2770,8 @@ packages:
     resolution: {integrity: sha512-QP88BAKvMam/3NxH6vj2o21R6MjxZUAd6nlwAS/pnGvN9IVLocLHxGYIzFhg6fUQ+5th6P4dv4eW9jX3DSIj7A==}
     engines: {node: '>=12'}
 
-  plotly.js@3.5.1:
-    resolution: {integrity: sha512-rUzQ7Q46whi1aWT2JlvKE2dnryNORPrxyy66OGSMXgejK3XgD4ysD9SapMOI1RzzUJyX0KbfVDFcB9/DqOyH9Q==}
+  plotly.js@3.6.0:
+    resolution: {integrity: sha512-Fu5IaetcuxaeQPULk4wfIik0MnvIsEb5ynOsPAMfhAnjkPOEDFG7eSb/3ZZq1DW5MwYvZFXaTFHpal4U1Q5Yig==}
     engines: {node: '>=18.0.0'}
 
   point-in-polygon@1.1.0:
@@ -5467,7 +5467,7 @@ snapshots:
 
   geojson-vt@3.2.1: {}
 
-  geojson-vt@4.0.2: {}
+  geojson-vt@4.0.3: {}
 
   get-canvas-context@1.0.2: {}
 
@@ -5928,7 +5928,7 @@ snapshots:
 
   kdbush@3.0.0: {}
 
-  kdbush@4.0.2: {}
+  kdbush@4.1.0: {}
 
   keyv@4.5.4:
     dependencies:
@@ -6072,10 +6072,10 @@ snapshots:
       '@types/pbf': 3.0.5
       '@types/supercluster': 7.1.3
       earcut: 3.0.2
-      geojson-vt: 4.0.2
+      geojson-vt: 4.0.3
       gl-matrix: 3.4.4
       global-prefix: 4.0.0
-      kdbush: 4.0.2
+      kdbush: 4.1.0
       murmurhash-js: 1.0.0
       pbf: 3.3.0
       potpack: 2.1.0
@@ -6297,7 +6297,7 @@ snapshots:
 
   picomatch@4.0.4: {}
 
-  plotly.js@3.5.1(mapbox-gl@1.13.3):
+  plotly.js@3.6.0(mapbox-gl@1.13.3):
     dependencies:
       '@plotly/d3': 3.8.2
       '@plotly/d3-sankey': 0.7.2
@@ -6427,9 +6427,9 @@ snapshots:
       jerrypick: 1.1.2
       react: 19.2.6
 
-  react-plotly.js@2.6.0(plotly.js@3.5.1(mapbox-gl@1.13.3))(react@19.2.6):
+  react-plotly.js@2.6.0(plotly.js@3.6.0(mapbox-gl@1.13.3))(react@19.2.6):
     dependencies:
-      plotly.js: 3.5.1(mapbox-gl@1.13.3)
+      plotly.js: 3.6.0(mapbox-gl@1.13.3)
       prop-types: 15.8.1
       react: 19.2.6
 
@@ -6840,7 +6840,7 @@ snapshots:
 
   supercluster@8.0.1:
     dependencies:
-      kdbush: 4.0.2
+      kdbush: 4.1.0
 
   supports-color@7.2.0:
     dependencies:

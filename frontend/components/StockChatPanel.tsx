@@ -6,6 +6,7 @@ import {
   Stack, TextField, Typography,
 } from '@mui/material';
 import { MessageCircle, Send, X } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 import type { ChatMessage, PredictionData } from '../types';
 
 const BEGINNER_CHIPS = [
@@ -38,6 +39,7 @@ interface Props {
 }
 
 export default function StockChatPanel({ prediction, isDark, primaryColor, open, onClose }: Props) {
+  const { session } = useAuth();
   const [messages,  setMessages]  = useState<ChatMessage[]>([]);
   const [input,     setInput]     = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -78,10 +80,14 @@ export default function StockChatPanel({ prediction, isDark, primaryColor, open,
     setInput('');
     setStreaming(true);
 
+    const authHeaders: Record<string, string> = session?.access_token
+      ? { Authorization: `Bearer ${session.access_token}` }
+      : {};
+
     try {
       const response = await fetch('/api/chat', {
         method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
         body:    JSON.stringify({ message: text, context: buildContext(prediction), history }),
         signal:  controller.signal,
       });
