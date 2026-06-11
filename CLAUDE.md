@@ -14,7 +14,7 @@ AI-driven quantitative financial forecasting SaaS. Ticker lookup → ensemble ML
 | ML/Forecasting | Prophet, SARIMAX (statsmodels), RandomForestRegressor (scikit-learn) |
 | Market Data | yfinance, SerpAPI (news/trending) |
 | Sentiment | VADER (vaderSentiment) — headline scoring, compound score + label |
-| AI / LLM Jury | Groq API — Llama 4 Scout, Llama 3.3 70B, GPT-OSS 20B (3-analyst jury via LangGraph) |
+| AI / LLM Jury | Groq API — Llama 4 Scout, Llama 3.3 70B, Llama 3.1 8B (3-analyst jury via LangGraph) |
 | Time-Series DB | InfluxDB |
 | Auth | Supabase (email/password, free tier) |
 | Observability | New Relic APM (backend + frontend) |
@@ -34,14 +34,15 @@ FiForesight/
 │   │   ├── predict.py          # /health /debug /predict /sparklines /compare
 │   │   ├── simulation.py       # /simulation/suggest /simulation/performance /simulation/state
 │   │   ├── trade.py            # /trade-setup /chat
-│   │   └── market.py           # /dcf /options /ipo/calendar /earnings/calendar /sectors /briefing /orderbook
+│   │   ├── market.py           # /dcf /options /ipo/calendar /earnings/calendar /sectors /briefing /orderbook
+│   │   └── analytics.py        # /analytics/accuracy/{symbol} /analytics/sentiment/{symbol}
 │   ├── config.py               # Env var loading (InfluxDB, Groq, SerpAPI)
 │   ├── models.py               # Pydantic schemas + run_monte_carlo
 │   ├── services.py             # YFinanceService, InfluxService, SerpService, SentimentService, AnalystJuryService
 │   ├── jury_graph.py           # LangGraph StateGraph for parallel analyst fan-out
 │   ├── simulation_service.py   # Portfolio simulation engine (suggest + performance)
 │   ├── mcp_server.py           # FastMCP server — predict/sparklines/health as MCP tools
-│   ├── tests/                  # pytest harness — 22 tests, no network calls
+│   ├── tests/                  # pytest harness — 109 tests, no network calls
 │   └── newrelic.ini            # New Relic APM config
 ├── frontend/
 │   ├── app/
@@ -50,7 +51,10 @@ FiForesight/
 │   │   │   ├── compare/route.ts
 │   │   │   ├── dcf/[symbol]/route.ts
 │   │   │   ├── options/[symbol]/route.ts
+│   │   │   ├── analytics/accuracy/[symbol]/route.ts   # → /analytics/accuracy
+│   │   │   ├── analytics/sentiment/[symbol]/route.ts  # → /analytics/sentiment
 │   │   │   └── simulation/{suggest,performance,state}/route.ts
+│   │   ├── (app)/insights/page.tsx           # Insights tab — accuracy + sentiment dashboard (Recharts)
 │   │   ├── simulation/page.tsx               # Portfolio simulation page
 │   │   ├── layout.tsx                        # Root layout (ClientProviders + New Relic)
 │   │   └── page.tsx                          # Main dashboard
@@ -93,7 +97,7 @@ cd frontend && pnpm run dev     # Next.js on :3000
 python -m uvicorn main:app --app-dir backend --host 0.0.0.0 --port 8000 --reload
 
 # Tests
-python -m pytest backend/tests/ -v   # 22 tests, ~1s
+python -m pytest backend/tests/ -v   # 109 tests, ~7s
 ruff check backend/                   # linter
 
 # Frontend
@@ -115,6 +119,17 @@ INFLUXDB_ORG=WeekendDevelopment
 INFLUXDB_BUCKET=FiForesightBucket
 SERP_API_KEY=            # Optional — news/trending
 PORT=8000
+APP_ENV=local            # Optional — env tag on sentiment_score writes (local|preview|live)
+
+# Security hardening (Feature 11)
+SUPABASE_JWT_SECRET=     # Required in prod — JWT signature verification (warn-only if unset)
+ALLOWED_ORIGINS=https://fiforesight.duckdns.org,https://fiforesight-preview.duckdns.org,http://localhost:3000
+RATE_LIMIT_PREDICT_AUTH=10/minute   # per authenticated user
+RATE_LIMIT_CHAT=20/minute
+RATE_LIMIT_JURY=10/minute
+RATE_LIMIT_TRADE=15/minute
+RATE_LIMIT_BACKTEST=5/minute
+RATE_LIMIT_READONLY=60/minute       # DCF, options, earnings, IPO, sectors, briefing, orderbook, analytics
 ```
 
 Frontend `frontend/.env.local`:
@@ -141,14 +156,22 @@ User enters ticker
       → SerpAPI: news headlines + trending symbols
       → VADER SentimentService: compound [-1,1] + label (Bullish/Bearish/Neutral)
       → LangGraph StateGraph parallel fan-out (Groq):
-          Llama 4 Scout (Macro & Risk) · Llama 3.3 70B (Growth) · GPT-OSS 20B (Quant)
+          Llama 4 Scout (Macro & Risk) · Llama 3.3 70B (Growth) · Llama 3.1 8B Instant (Quant)
           Each isolated — failures degrade to Hold/25, not 500
       → Response: history, fundamentals, indicators, forecasts, jury verdicts, news, sentiment, monte carlo
+
+      → Fire-and-forget: write_sentiment_score (sentiment_score measurement) — only if ≥1 headline scored
 
   → Fire-and-forget (non-blocking, after predict resolves):
       GET /api/dcf/{symbol}     → DCFCard (3-scenario WACC)
       GET /api/options/{symbol} → OptionsChainPanel (calls/puts)
       POST /api/trade-setup     → TradeSetupCard (entry/stop/targets + position size)
+
+Insights flow (/insights tab — read-only, Redis-cached 15min, samples:0 empty state):
+  GET /api/analytics/accuracy/{symbol}  → model MAE ranking, ensemble MAE by horizon d1–d5,
+                                          directional accuracy %, forecast-vs-actual (from
+                                          model_accuracy + forecast_record + price_outcome)
+  GET /api/analytics/sentiment/{symbol} → 30-day VADER compound trend (from sentiment_score)
 
 Simulation flow (/simulation page):
   POST /api/simulation/suggest     → ticker suggestions by risk level
@@ -177,12 +200,14 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 | Jury consensus badge | #189 |
 | DCF intrinsic value | #190 |
 | Position sizing (1% rule) | #191 |
-| pytest harness (22 tests) | #192 |
+| pytest harness (99 tests) | #192 |
 | Supabase email auth | #193 |
 | Options chain panel | #194 |
 | Router split (main.py → routers/) | #195 |
 | IPO tracker tab | #229 |
 | Free IPO calendar (Nasdaq → EDGAR; FMP removed) | #231 |
+| Security hardening (rate limits, auth enforcement, CORS, input validation) | pending |
+| Forecast accuracy & sentiment dashboard (Insights tab) | #244 |
 
 ---
 
@@ -201,8 +226,10 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 
 - InfluxDB is primary store; yfinance is fallback only.
 - LLM jury runs via **LangGraph** (`jury_graph.py`) — parallel StateGraph fan-out. Each analyst node isolated so failures → Hold/25, not 500.
-- **Llama 4 Scout** (`meta-llama/llama-4-scout-17b-16e-instruct`) is the Macro & Risk analyst. Kimi K2 was deprecated and removed.
-- **VADER sentiment** (`SentimentService` in `services.py`) scores headlines before the jury runs; compound score + label passed in each analyst's context.
+- **Llama 4 Scout** (`meta-llama/llama-4-scout-17b-16e-instruct`) is the Macro & Risk analyst. Kimi K2 was deprecated; GPT-OSS-20B was replaced (reasoning model with 1K RPD burned out).
+- **Llama 3.1 8B Instant** (`llama-3.1-8b-instant`) is the Quant Lens analyst — chosen for its **14,400 RPD** free-tier limit (14.4× more than any other model). Rate limits: 30 RPM | 6K TPM | 14.4K RPD.
+- **VADER sentiment** (`SentimentService` in `services.py`) scores headlines before the jury runs; compound score + label passed in each analyst's context. Each `/predict` also persists the compound score (fire-and-forget) to the **`sentiment_score`** InfluxDB measurement (tags: `symbol`, `env=Config.APP_ENV`; fields: `compound` float, `label` string) — only when ≥1 headline was scored. `query_sentiment_history` reads it for the Insights tab's 30-day trend.
+- **Analytics / Insights** (`routers/analytics.py`) — read-only tier (60/min), 15-min Redis cache, 12s timeout. `/analytics/accuracy/{symbol}` is pure-transform over existing InfluxDB data (`query_model_accuracy` + `query_ensemble_mae` + `query_forecast_records` + `query_price_outcomes`): per-model MAE + best_model, ensemble MAE by horizon d1–d5, directional accuracy (`sign(pred−last)` vs `sign(actual−last)`, skips the `0.0` missing-prediction sentinel), and forecast-vs-actual (de-duped to one point per resolved date). Insufficient history → **`200` with `samples:0` + empty arrays** (NOT 404). `/analytics/sentiment/{symbol}` returns the 30-day trend + `current`. Frontend tab at `frontend/app/(app)/insights/page.tsx` (5 Recharts views, reads `isDark`/`primaryColor` from `AppShellContext`).
 - **FastMCP server** — `fastmcp dev backend/mcp_server.py` exposes predict/sparklines/health as Claude Code tools.
 - **Backend router split** — `main.py` is now ~50 lines; all routes live in `backend/routers/`. Service singletons in `dependencies.py`.
 - **Supabase auth** — `frontend/lib/supabase.ts` + `frontend/contexts/AuthContext.tsx`. Falls back to placeholder strings if env vars not set (build succeeds without them).
@@ -212,3 +239,4 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 - Deploys: PRs → preview (`fiforesight-preview.duckdns.org`), main → prod (`fiforesight.duckdns.org` + Koyeb).
 - `/compare` frontend route exists; backend endpoint is implemented in `routers/predict.py`.
 - **IPO calendar** (`GET /ipo/calendar` in `market.py`) — **no API key**. Free **Nasdaq** calendar (`api.nasdaq.com/api/ipo/calendar`, needs a browser User-Agent; the default) → **SEC EDGAR** S-1 search (keyless last resort, recent filings only, no upcoming). Response carries `source: "nasdaq"|"edgar"`. `?refresh=true` bypasses the 4h Redis cache. Nasdaq dedup is upcoming-first (a scheduled deal also appears in priced/withdrawn tables). FMP was dropped — it retired its *free* IPO calendar on 2025-08-31.
+- **Security model** — `dependencies.py` holds the `limiter` singleton and all auth helpers. `require_user` dependency raises HTTP 401 when no valid Bearer token is present; applied to `/trade-setup` and `/jury/reanalyze`. `/predict` uses a single rate limit keyed by user ID (authed) or IP (anon) via `_user_rate_key`. `/chat` message is capped at 500 chars with control-char sanitization on all context values. CORS is restricted to `ALLOWED_ORIGINS`. Symbol inputs are validated with `[A-Za-z0-9.\-:]{1,15}` on `/predict`, `/dcf/{symbol}`, `/options/{symbol}`, and history. JWT verification picks the verifier by the token's `alg`: **ES256/RS256** (Supabase's default signing-key tokens) are verified against the project **JWKS** (`SUPABASE_URL`, or `SUPABASE_JWKS_URL`); legacy **HS256** tokens use `SUPABASE_JWT_SECRET`. JWKS-only (ES256) is a valid secure production config — the shared secret is not required when a JWKS URL is set. The backend fails closed when **neither** a JWKS URL nor a secret is configured (or decodes unsigned only when `ALLOW_INSECURE_JWT=true`, dev-only; logged at startup). All frontend auth API routes forward the `Authorization` header.

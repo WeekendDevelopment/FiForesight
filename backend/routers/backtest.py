@@ -17,8 +17,10 @@ import re
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from slowapi.util import get_remote_address
 
+from config import Config
 from models import (
     MODELS_AVAILABLE,
     _prophet_forecast,
@@ -26,7 +28,7 @@ from models import (
     _rf_forecast,
 )
 from services import DataCleaner
-from dependencies import yf_svc
+from dependencies import yf_svc, limiter
 from redis_cache import cache_get, cache_set
 
 router = APIRouter()
@@ -160,7 +162,8 @@ def _run_backtest(symbol: str, closes: List[float], dates: List[str]) -> Optiona
 
 
 @router.get("/backtest/{symbol}")
-async def backtest(symbol: str) -> dict:
+@limiter.limit(lambda: Config.RATE_LIMIT_BACKTEST, key_func=get_remote_address)
+async def backtest(request: Request, symbol: str) -> dict:
     """
     Walk-forward validation of the ensemble forecast over ~2y of daily history.
 

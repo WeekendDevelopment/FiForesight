@@ -110,7 +110,33 @@ export interface PredictionData {
   monteCarlo?:      MonteCarloResult | null;
   earningsDates?:   string[];
   moveExplanation?: string | null;
+  reversalRisk?:      ReversalRisk | null;
+  directionForecast?: DirectionForecast | null;
   lastUpdated: string;
+}
+
+export interface DirectionForecast {
+  /** "up" | "down" — predicted next-day direction. */
+  direction:      'up' | 'down';
+  /** 50-100 — predicted-class probability × 100. */
+  confidence_pct: number;
+  /** confidence_pct − 50; how much above coin-flip baseline. */
+  edge_pct:       number;
+  /** Top model-level signals (feature importances) with current-bar values. */
+  top_features:   string[];
+  /** Number of historical bars the classifier was trained on. */
+  trained_on:     number;
+}
+
+export interface ReversalRisk {
+  /** 0-100 probability of a ≥2% drop within 5 trading days. */
+  risk_pct:     number;
+  /** "low" (<35%) | "medium" (35-64%) | "high" (≥65%) */
+  signal:       'low' | 'medium' | 'high';
+  /** Top model-level signals (feature importances), shown with current-bar values. */
+  top_features: string[];
+  /** Number of historical bars the classifier was trained on. */
+  trained_on:   number;
 }
 
 export type ChartEntry = Record<string, string | number | undefined>;
@@ -255,4 +281,47 @@ export interface DCFResult {
   growth_rate_base:   number;
   method:             string;
   fundamentals_complete?: boolean;
+}
+
+// ── Analytics / Insights ────────────────────────────────────────────────────
+
+export interface EnsembleHorizonMAE {
+  horizon: string;   // "d1" … "d5"
+  mae:     number;
+}
+
+export interface ForecastVsActualPoint {
+  date:     string;
+  forecast: number;
+  actual:   number;
+}
+
+export interface AccuracyAnalytics {
+  symbol: string;
+  /** Per-model day-1 MAE (lower = better). Keys: prophet | sarima | random_forest. */
+  model_mae: Partial<Record<'prophet' | 'sarima' | 'random_forest', number>>;
+  best_model: 'prophet' | 'sarima' | 'random_forest' | null;
+  ensemble_mae_by_horizon: EnsembleHorizonMAE[];
+  /** % of resolved forecasts whose predicted direction matched actual (0–1, or null when no samples). */
+  directional_accuracy: Partial<Record<'prophet' | 'sarima' | 'random_forest' | 'ensemble', number | null>>;
+  forecast_vs_actual: ForecastVsActualPoint[];
+  samples: number;
+  /** MAE of the naive persistence forecast (predict last_price → tomorrow). */
+  naive_mae?: number | null;
+  /** Per-model skill score: 1 − model_mae/naive_mae. >0 beats persistence, <0 is worse than a coin-flip baseline. */
+  model_skill?: Partial<Record<'prophet' | 'sarima' | 'random_forest', number>>;
+  generated_at: string;
+}
+
+export interface SentimentPoint {
+  date:     string;
+  compound: number;
+  label:    string;   // Bullish | Bearish | Neutral
+}
+
+export interface SentimentAnalytics {
+  symbol:       string;
+  history:      SentimentPoint[];
+  current:      SentimentPoint | null;
+  generated_at: string;
 }

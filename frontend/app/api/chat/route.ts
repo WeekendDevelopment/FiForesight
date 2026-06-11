@@ -4,9 +4,14 @@ const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000';
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
+  const auth = req.headers.get('authorization') || '';
+
   const upstream = await fetch(`${BACKEND_URL}/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(auth ? { Authorization: auth } : {}),
+    },
     body: JSON.stringify(body),
   });
 
