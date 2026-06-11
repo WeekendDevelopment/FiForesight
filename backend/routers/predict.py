@@ -1012,10 +1012,18 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     # ── RL: load historical model accuracy for weight calibration ────────────
     # All three queries run concurrently — no inter-dependency.
     logger.debug(f"[RL] Querying historical model accuracy for {symbol} ...")
+
+    async def _rl_query(fn, default):
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(fn, symbol), timeout=12.0)
+        except Exception as exc:
+            logger.warning("[RL] metric query failed (%s): %s — using default", fn.__name__, exc)
+            return default
+
     model_acc, ensemble_mae, naive_mae_val = await asyncio.gather(
-        asyncio.to_thread(forecast_store.query_model_accuracy, symbol),
-        asyncio.to_thread(forecast_store.query_ensemble_mae,   symbol),
-        asyncio.to_thread(forecast_store.query_naive_mae,      symbol),
+        _rl_query(forecast_store.query_model_accuracy, {}),
+        _rl_query(forecast_store.query_ensemble_mae,   {}),
+        _rl_query(forecast_store.query_naive_mae,      None),
     )
 
     historical_weights = None
