@@ -726,6 +726,30 @@ class ForecastStore:
             logger.error(f"[RL] ✗ query_price_outcomes error for {symbol}: {e}")
             return {}
 
+    def query_naive_mae(self, symbol: str, days: int = 90) -> Optional[float]:
+        """
+        Naive-persistence MAE: mean(|actual_close - last_price|) over matched d1
+        forecast records.  Returns None when there are no matched records.
+        """
+        records  = self.query_forecast_records(symbol, days=days)
+        outcomes = self.query_price_outcomes(symbol, days=days + 10)
+        outcomes_sorted = sorted(outcomes.items())
+        errors: list = []
+        for rec in records:
+            pred_time  = rec.get("_time")
+            last_price = rec.get("last_price")
+            if pred_time is None or last_price is None or last_price <= 0:
+                continue
+            try:
+                pred_date = pred_time.date()
+            except AttributeError:
+                continue
+            for d, close in outcomes_sorted:
+                if d > pred_date and close > 0:
+                    errors.append(abs(close - float(last_price)))
+                    break
+        return round(sum(errors) / len(errors), 4) if errors else None
+
     def query_model_accuracy(self, symbol: str, lookback_days: int = 90) -> Dict[str, dict]:
         """
         Returns most-recent per-model accuracy record.

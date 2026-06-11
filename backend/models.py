@@ -713,6 +713,36 @@ def run_monte_carlo(
 
 
 # ---------------------------------------------------------------------------
+# Ensemble weight helper
+# ---------------------------------------------------------------------------
+
+def _skill_to_weights(
+    maes: List[float],
+    naive_mae: Optional[float],
+) -> List[float]:
+    """
+    Convert [prophet_mae, sarima_mae, rf_mae] + naive_mae into normalised
+    ensemble weights.
+
+    If naive_mae is available: weight ∝ max(0, 1 − model_mae/naive_mae).
+    Models at or below naive persistence get weight 0.  If ALL are at or
+    below naive (degenerate case) fall back to equal weights.
+
+    If naive_mae is None or 0: fall back to 1/mae (original RL behaviour).
+    """
+    eps = 1e-6
+    if naive_mae and naive_mae > 0:
+        skills = [max(0.0, 1.0 - m / naive_mae) for m in maes]
+        total  = sum(skills)
+        if total > 0:
+            return [s / total for s in skills]
+        return [1 / 3, 1 / 3, 1 / 3]   # all ≤ naive — equal fallback
+    inv   = [1.0 / (m + eps) for m in maes]
+    total = sum(inv)
+    return [v / total for v in inv] if total > 0 else [1 / 3, 1 / 3, 1 / 3]
+
+
+# ---------------------------------------------------------------------------
 # Main ensemble entry point
 # ---------------------------------------------------------------------------
 
