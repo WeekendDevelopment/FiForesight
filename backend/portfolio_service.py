@@ -15,6 +15,7 @@ reported in `skipped`, never failing the whole summary.
 """
 import asyncio
 import logging
+import math
 from statistics import fmean
 from typing import Any, Dict, List, Optional
 
@@ -63,7 +64,7 @@ def _trend_signal(closes: List[float]) -> tuple[str, float]:
       • ~1-month price momentum (scaled)
     Returns (label, score). Neutral/0.0 when there isn't enough history.
     """
-    closes = [float(c) for c in closes if c == c]  # drop NaN
+    closes = [v for c in closes if not math.isnan(v := float(c))]  # drop NaN
     if len(closes) < 20:
         return "Neutral", 0.0
     last = closes[-1]
