@@ -35,7 +35,7 @@ class Config:
     # reads the user's `holdings` rows through Supabase PostgREST. The user's own
     # JWT is forwarded as the Bearer token, so Row-Level Security scopes every
     # query to that user — no service-role key is needed (free-tier safe).
-    SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+    SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
     # When True, allows JWT decoding without signature verification (dev/test only).
     # NEVER set this in production — always set SUPABASE_JWT_SECRET (HS256) or
     # SUPABASE_URL/SUPABASE_JWKS_URL (ES256/RS256) instead.
