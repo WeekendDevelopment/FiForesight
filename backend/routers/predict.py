@@ -15,6 +15,7 @@ from models import (
     calculate_rsi, calculate_rsi_series, run_ensemble_forecast,
     calculate_macd, calculate_bollinger_bands, calculate_sma_series,
     calculate_ema_series, calculate_support_resistance,
+    _skill_to_weights,
 )
 from services import DataCleaner, ANALYST_PERSONAS
 from dependencies import (
@@ -1009,9 +1010,21 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     )
 
     # ── RL: load historical model accuracy for weight calibration ────────────
+    # All three queries run concurrently — no inter-dependency.
     logger.debug(f"[RL] Querying historical model accuracy for {symbol} ...")
-    model_acc = await asyncio.to_thread(forecast_store.query_model_accuracy, symbol)
-    ensemble_mae = await asyncio.to_thread(forecast_store.query_ensemble_mae, symbol)
+
+    async def _rl_query(fn, default):
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(fn, symbol), timeout=12.0)
+        except Exception as exc:
+            logger.warning("[RL] metric query failed (%s): %s — using default", fn.__name__, exc)
+            return default
+
+    model_acc, ensemble_mae, naive_mae_val = await asyncio.gather(
+        _rl_query(forecast_store.query_model_accuracy, {}),
+        _rl_query(forecast_store.query_ensemble_mae,   {}),
+        _rl_query(forecast_store.query_naive_mae,      None),
+    )
 
     historical_weights = None
     rl_sample_count    = 0
@@ -1028,19 +1041,20 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         )
         rl_sample_count = min_samples
         if rl_sample_count > 0:
-            eps      = 1e-6
-            inv_maes = [
-                1.0 / (p_acc.get("mae", 999.0) + eps),
-                1.0 / (s_acc.get("mae", 999.0) + eps),
-                1.0 / (r_acc.get("mae", 999.0) + eps),
+            maes = [
+                p_acc.get("mae", 999.0),
+                s_acc.get("mae", 999.0),
+                r_acc.get("mae", 999.0),
             ]
-            total_inv          = sum(inv_maes)
-            historical_weights = [v / total_inv for v in inv_maes] if total_inv > 0 else None
+            historical_weights = _skill_to_weights(maes, naive_mae_val)
+            using_skill = naive_mae_val is not None and naive_mae_val > 0
             logger.debug(
-                f"[RL] Historical weights (inv-MAE) — "
-                f"prophet={historical_weights[0]:.3f}, "
-                f"sarima={historical_weights[1]:.3f}, "
-                f"rf={historical_weights[2]:.3f} | samples={rl_sample_count}"
+                "[RL] %s weights — prophet=%.3f sarima=%.3f rf=%.3f | "
+                "naive_mae=%s | samples=%d",
+                "Skill-based" if using_skill else "Inv-MAE (no naive baseline yet)",
+                historical_weights[0], historical_weights[1], historical_weights[2],
+                "N/A" if naive_mae_val is None else f"{naive_mae_val:.4f}",
+                rl_sample_count,
             )
         # Build track record string for analyst jury context
         parts = []
