@@ -47,7 +47,8 @@ export async function addHolding(
     body:    JSON.stringify({ symbol: symbol.toUpperCase(), shares, cost_basis: costBasis }),
   });
   const body = await parseOrThrow(res) as { holding?: Holding };
-  return body.holding as Holding;
+  if (!body.holding) throw new Error('Malformed response: missing holding.');
+  return body.holding;
 }
 
 export async function removeHolding(token: string, id: string): Promise<void> {
@@ -64,5 +65,7 @@ export async function fetchPortfolioSummary(
 ): Promise<PortfolioSummary> {
   const qs = refresh ? '?refresh=true' : '';
   const res = await fetch(`/api/portfolio/summary${qs}`, { headers: authHeaders(token) });
-  return await parseOrThrow(res) as PortfolioSummary;
+  const body = await parseOrThrow(res) as Partial<PortfolioSummary>;
+  if (!Array.isArray(body.holdings)) throw new Error('Malformed portfolio summary response.');
+  return body as PortfolioSummary;
 }

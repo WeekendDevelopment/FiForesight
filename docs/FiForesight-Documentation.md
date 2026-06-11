@@ -21,7 +21,9 @@
 9. [Database Schema (InfluxDB)](#9-database-schema-influxdb)
 10. [Frontend Structure](#10-frontend-structure)
 11. [Setup & Running Guide (Windows-focused)](#11-setup--running-guide-windows-focused)
-12. [Glossary](#12-glossary)
+12. [Security](#12-security)
+13. [Portfolio Manager (Feature 10)](#13-portfolio-manager-feature-10)
+14. [Glossary](#14-glossary)
 
 ---
 
