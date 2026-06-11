@@ -110,7 +110,19 @@ export interface PredictionData {
   monteCarlo?:      MonteCarloResult | null;
   earningsDates?:   string[];
   moveExplanation?: string | null;
+  reversalRisk?:    ReversalRisk | null;
   lastUpdated: string;
+}
+
+export interface ReversalRisk {
+  /** 0-100 probability of a ≥2% drop within 5 trading days. */
+  risk_pct:   number;
+  /** "low" (<35%) | "medium" (35-64%) | "high" (≥65%) */
+  signal:     'low' | 'medium' | 'high';
+  /** Human-readable descriptions of the top contributing factors. */
+  factors:    string[];
+  /** Number of historical bars the classifier was trained on. */
+  trained_on: number;
 }
 
 export type ChartEntry = Record<string, string | number | undefined>;

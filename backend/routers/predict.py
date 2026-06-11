@@ -24,6 +24,7 @@ from dependencies import (
 )
 from jury_graph import run_jury_graph
 from redis_cache import cache_get, cache_set
+from reversal import compute_reversal_risk
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -86,6 +87,7 @@ class PredictionResponse(BaseModel):
     monteCarlo:      Optional[dict] = None
     earningsDates:   List[str]      = []
     moveExplanation: Optional[str]  = None
+    reversalRisk:    Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1103,6 +1105,23 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     ema50     = calculate_ema_series(closes, 50)
     logger.info(f"[STEP-4b] ✓ All indicator series computed ({len(closes)} points each)")
 
+    # ── Step 4b+. RSI series + reversal-risk classifier ──────────────────────
+    # Compute RSI series here (also reused for chart at Step 8) so the reversal
+    # classifier has it available without a second pass through closes.
+    rsi_full = calculate_rsi_series(closes)
+    reversal_risk = await asyncio.to_thread(
+        compute_reversal_risk,
+        closes, rsi_full, bb_data["upper"], bb_data["lower"],
+        macd_data["hist"], volumes,
+    )
+    if reversal_risk:
+        logger.info(
+            "[STEP-4b+] ✓ Reversal risk: %d%% (%s) — trained on %d bars",
+            reversal_risk["risk_pct"], reversal_risk["signal"], reversal_risk["trained_on"],
+        )
+    else:
+        logger.info("[STEP-4b+] Reversal risk skipped (insufficient data)")
+
     # ── Step 4c. Fire news + earnings fetch concurrently ─────────────────────
     news_cache_key = f"news:{symbol.upper()}"
     cached_news_payload = await cache_get(news_cache_key)
@@ -1468,8 +1487,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             "macd_hist":   macd_data["hist"][idx],
         })
 
-    # RSI series — last 90 points aligned to chart window
-    rsi_full   = calculate_rsi_series(closes)
+    # RSI series — last 90 points aligned to chart window (rsi_full computed at Step 4b+)
     rsi_series = rsi_full[slice_start:]
     logger.info(
         f"[STEP-8] ✓ Chart history built — {len(history)} bars | "
@@ -1516,6 +1534,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         monteCarlo      = forecast.get("monte_carlo"),
         earningsDates   = earnings_dates,
         moveExplanation = move_explanation,
+        reversalRisk    = reversal_risk,
     )
 
 
