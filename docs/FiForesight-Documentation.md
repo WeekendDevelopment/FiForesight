@@ -1634,7 +1634,93 @@ Invalid symbols return HTTP 422.
 
 ---
 
-## 13. Glossary
+## 13. Portfolio Manager (Feature 10)
+
+The **"My Portfolio"** tab (`/portfolio`) tracks a user's **real holdings** with live P&L. It is deliberately **separate from the "Simulator" tab** (`/simulation`) — that tab is a backtest *race* against the S&P 500 and does not represent owned positions. The two never share endpoints (`/portfolio/*` vs `/simulation/*`) or tab labels.
+
+> **Out of scope (v1):** stock splits, dividends, and multi-currency are **not** handled. Cost basis is stored and displayed exactly as the user entered it (per-share, the holding's currency). A later migration can add corporate-action adjustment.
+
+### 13.1 Supabase schema + migration
+
+Holdings live in the Supabase `holdings` table with Row-Level Security mirroring the watchlist pattern. Migration: `supabase/migrations/0001_holdings.sql`.
+
+```sql
+create table if not exists public.holdings (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references auth.users(id) on delete cascade default auth.uid(),
+  symbol     text not null,
+  shares     numeric not null check (shares > 0),
+  cost_basis numeric not null check (cost_basis >= 0),
+  opened_at  timestamptz not null default now(),
+  constraint holdings_user_symbol_unique unique (user_id, symbol)
+);
+create index if not exists holdings_user_id_idx on public.holdings (user_id);
+
+alter table public.holdings enable row level security;
+create policy "own rows" on public.holdings
+  for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+```
+
+The `unique (user_id, symbol)` constraint lets `POST /portfolio/holdings` upsert (merge-duplicates) instead of creating duplicate positions for the same ticker.
+
+### 13.2 Auth + data access
+
+Every `/portfolio/*` endpoint is gated by the `require_user` dependency (HTTP **401** without a valid Bearer token). The backend does **not** use a Supabase service-role key. Instead `backend/supabase_rest.py` calls Supabase PostgREST with:
+- `apikey: <SUPABASE_ANON_KEY>`
+- `Authorization: Bearer <the caller's own JWT>`
+
+so Row-Level Security scopes every read/write to `auth.uid() = user_id`. Ownership is enforced in the database — a user can never read or delete another user's row. This is free-tier safe (no privileged key on the server).
+
+### 13.3 API contracts
+
+| Method | Path | Auth | Body / Params | Response |
+|---|---|---|---|---|
+| `GET` | `/portfolio/holdings` | Required | — | `{ "holdings": [{ id, symbol, shares, cost_basis, opened_at }] }` |
+| `POST` | `/portfolio/holdings` | Required | `{ symbol, shares, cost_basis }` | `{ "holding": { … } }` |
+| `DELETE` | `/portfolio/holdings/{id}` | Required | path `id` (uuid) | `{ "deleted": true, "id" }` or **404** if not owned/found |
+| `GET` | `/portfolio/summary` | Required | `?refresh=true` (optional) | summary object (below) |
+
+**Validation** (`POST`): `symbol` matches `[A-Za-z0-9.\-:]{1,15}`, `shares > 0`, `cost_basis >= 0` → otherwise HTTP 422. `DELETE` validates `{id}` is a UUID → 422 otherwise.
+
+**`GET /portfolio/summary` response:**
+
+```jsonc
+{
+  "holdings": [{
+    "id", "symbol", "name", "sector",
+    "shares", "costBasis", "price",
+    "marketValue", "costValue", "pnl", "pnlPct",
+    "weightPct", "direction", "directionScore"
+  }],
+  "totalMarketValue": 0.0, "totalCost": 0.0,
+  "totalPnl": 0.0, "totalPnlPct": 0.0,
+  "sectorAllocation": [{ "sector", "weightPct", "value" }],
+  "diversificationScore": 0,            // 0–100, HHI-based
+  "forecast": { "label": "Bullish|Bearish|Neutral", "score": 0.0 },
+  "skipped": ["BADX"]                   // symbols whose live data failed (excluded from totals)
+}
+```
+
+### 13.4 Computation (`portfolio_service.py`)
+
+- **Live price + sector** come from `YFinanceService.fetch_info` (one call per holding; falls back to `get_live_price` if the info price is missing). Calls run concurrently via `asyncio.gather` behind a semaphore (6) with per-holding `asyncio.wait_for` timeouts.
+- **Per-holding P&L:** `marketValue = shares × price`, `costValue = shares × cost_basis`, `pnl = marketValue − costValue`, `pnlPct = pnl / costValue × 100`.
+- **Weights:** `weightPct = marketValue / totalMarketValue × 100`.
+- **Sector allocation:** weights aggregated by sector, largest first.
+- **Diversification score:** `round((1 − HHI) × 100)` where `HHI = Σ (wᵢ)²` over weight *fractions*. A single position → **0**; N equal positions → `(1 − 1/N) × 100` (approaches 100). E.g. two equal holdings → HHI 0.5 → score **50**.
+- **Portfolio forecast:** market-value-weighted mean of a **lightweight per-holding trend signal** (blend of price-vs-SMA20, SMA20-vs-SMA50, and ~1-month momentum, each in [−1, 1]). It is intentionally **not** the full Prophet/SARIMAX/RandomForest ensemble or the LLM jury — running those per holding would be far too slow/expensive for an interactive summary. Score thresholds: `> 0.15` Bullish, `< −0.15` Bearish, else Neutral.
+- **Failure isolation:** a holding whose price/history can't be fetched is **skipped** (added to `skipped`) — it never fails the whole summary (no 500).
+- **Caching:** the summary is Redis-cached **15 min** per user; the cache is invalidated on any add/delete, and `?refresh=true` bypasses it.
+
+### 13.5 Frontend
+
+`frontend/app/(app)/portfolio/page.tsx` — signed-out users see an `AuthGate`; signed-in users see summary cards (total value, total P&L, diversification, forecast), an inline add-row + holdings table (symbol, shares, cost, live price, value, P&L $/%, weight, sector, delete), a Recharts sector-allocation pie, and an empty state. Each row links to `/analysis?symbol=…`. Data flows through `frontend/lib/holdings.ts` → `/api/portfolio/*` proxies (which forward the `Authorization` header) → the backend.
+
+---
+
+## 14. Glossary
 
 **Ask the expert first** — plain-English definitions for the terms used throughout this document.
 

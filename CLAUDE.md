@@ -35,14 +35,17 @@ FiForesight/
 │   │   ├── simulation.py       # /simulation/suggest /simulation/performance /simulation/state
 │   │   ├── trade.py            # /trade-setup /chat
 │   │   ├── market.py           # /dcf /options /ipo/calendar /earnings/calendar /sectors /briefing /orderbook
-│   │   └── analytics.py        # /analytics/accuracy/{symbol} /analytics/sentiment/{symbol}
-│   ├── config.py               # Env var loading (InfluxDB, Groq, SerpAPI)
+│   │   ├── analytics.py        # /analytics/accuracy/{symbol} /analytics/sentiment/{symbol}
+│   │   └── portfolio.py        # /portfolio/holdings (GET/POST/DELETE) /portfolio/summary (auth-gated)
+│   ├── config.py               # Env var loading (InfluxDB, Groq, SerpAPI, Supabase)
 │   ├── models.py               # Pydantic schemas + run_monte_carlo
 │   ├── services.py             # YFinanceService, InfluxService, SerpService, SentimentService, AnalystJuryService
+│   ├── supabase_rest.py        # RLS-scoped holdings CRUD via the caller's forwarded JWT (Feature 10)
 │   ├── jury_graph.py           # LangGraph StateGraph for parallel analyst fan-out
-│   ├── simulation_service.py   # Portfolio simulation engine (suggest + performance)
+│   ├── simulation_service.py   # Simulator "race" engine (suggest + performance) — NOT real holdings
+│   ├── portfolio_service.py    # Portfolio Manager summary (live P&L, sector alloc, HHI, forecast)
 │   ├── mcp_server.py           # FastMCP server — predict/sparklines/health as MCP tools
-│   ├── tests/                  # pytest harness — 109 tests, no network calls
+│   ├── tests/                  # pytest harness — 144 tests, no network calls
 │   └── newrelic.ini            # New Relic APM config
 ├── frontend/
 │   ├── app/
@@ -53,9 +56,11 @@ FiForesight/
 │   │   │   ├── options/[symbol]/route.ts
 │   │   │   ├── analytics/accuracy/[symbol]/route.ts   # → /analytics/accuracy
 │   │   │   ├── analytics/sentiment/[symbol]/route.ts  # → /analytics/sentiment
-│   │   │   └── simulation/{suggest,performance,state}/route.ts
+│   │   │   ├── simulation/{suggest,performance,state}/route.ts
+│   │   │   └── portfolio/{holdings,holdings/[id],summary}/route.ts  # → /portfolio/*
 │   │   ├── (app)/insights/page.tsx           # Insights tab — accuracy + sentiment dashboard (Recharts)
-│   │   ├── simulation/page.tsx               # Portfolio simulation page
+│   │   ├── (app)/portfolio/page.tsx          # "My Portfolio" tab — real holdings + live P&L (Feature 10)
+│   │   ├── simulation/page.tsx               # "Simulator" tab — backtest race vs S&P (NOT real holdings)
 │   │   ├── layout.tsx                        # Root layout (ClientProviders + New Relic)
 │   │   └── page.tsx                          # Main dashboard
 │   ├── components/
@@ -74,6 +79,7 @@ FiForesight/
 │   │   └── TrendingSparklines.tsx
 │   ├── contexts/AuthContext.tsx              # AuthProvider + useAuth (Supabase session)
 │   ├── lib/supabase.ts                       # createClient with env-var fallbacks
+│   ├── lib/holdings.ts                        # Portfolio holdings client → /api/portfolio proxies
 │   └── ...config files
 ├── .claude/
 │   └── FiForesight_Roadmap.md     # Source of truth for planned work
@@ -97,7 +103,7 @@ cd frontend && pnpm run dev     # Next.js on :3000
 python -m uvicorn main:app --app-dir backend --host 0.0.0.0 --port 8000 --reload
 
 # Tests
-python -m pytest backend/tests/ -v   # 109 tests, ~7s
+python -m pytest backend/tests/ -v   # 144 tests, ~7s
 ruff check backend/                   # linter
 
 # Frontend
@@ -123,6 +129,8 @@ APP_ENV=local            # Optional — env tag on sentiment_score writes (local
 
 # Security hardening (Feature 11)
 SUPABASE_JWT_SECRET=     # Required in prod — JWT signature verification (warn-only if unset)
+SUPABASE_URL=            # Supabase project URL — JWKS verification + Portfolio holdings REST
+SUPABASE_ANON_KEY=       # Supabase anon key — `apikey` header for holdings PostgREST (Feature 10)
 ALLOWED_ORIGINS=https://fiforesight.duckdns.org,https://fiforesight-preview.duckdns.org,http://localhost:3000
 RATE_LIMIT_PREDICT_AUTH=10/minute   # per authenticated user
 RATE_LIMIT_CHAT=20/minute
@@ -130,6 +138,8 @@ RATE_LIMIT_JURY=10/minute
 RATE_LIMIT_TRADE=15/minute
 RATE_LIMIT_BACKTEST=5/minute
 RATE_LIMIT_READONLY=60/minute       # DCF, options, earnings, IPO, sectors, briefing, orderbook, analytics
+RATE_LIMIT_PORTFOLIO=30/minute          # Portfolio holdings CRUD (per user)
+RATE_LIMIT_PORTFOLIO_SUMMARY=15/minute  # Portfolio summary (yfinance fan-out, per user)
 ```
 
 Frontend `frontend/.env.local`:
@@ -173,10 +183,18 @@ Insights flow (/insights tab — read-only, Redis-cached 15min, samples:0 empty 
                                           model_accuracy + forecast_record + price_outcome)
   GET /api/analytics/sentiment/{symbol} → 30-day VADER compound trend (from sentiment_score)
 
-Simulation flow (/simulation page):
+Simulator flow (/simulation page — "Simulator" tab, backtest RACE vs S&P, NOT real holdings):
   POST /api/simulation/suggest     → ticker suggestions by risk level
   POST /api/simulation/performance → historical P&L time-series
   GET/POST /api/simulation/state   → InfluxDB persistence
+
+Portfolio Manager flow (/portfolio page — "My Portfolio" tab, REAL holdings + live P&L; auth-gated):
+  GET    /api/portfolio/holdings       → list user's holdings (Supabase, RLS by JWT)
+  POST   /api/portfolio/holdings       → add/update a holding (upsert by symbol)
+  DELETE /api/portfolio/holdings/{id}  → remove (ownership enforced by RLS)
+  GET    /api/portfolio/summary        → live P&L per holding + totals, sector allocation,
+                                         diversification score (HHI), portfolio forecast
+                                         (yfinance fan-out, Redis-cached 15min, skips bad symbols)
 ```
 
 ---
@@ -208,6 +226,7 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 | Free IPO calendar (Nasdaq → EDGAR; FMP removed) | #231 |
 | Security hardening (rate limits, auth enforcement, CORS, input validation) | pending |
 | Forecast accuracy & sentiment dashboard (Insights tab) | #244 |
+| Portfolio Manager — real holdings + live P&L ("My Portfolio" tab) | pending |
 
 ---
 
@@ -233,6 +252,7 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 - **FastMCP server** — `fastmcp dev backend/mcp_server.py` exposes predict/sparklines/health as Claude Code tools.
 - **Backend router split** — `main.py` is now ~50 lines; all routes live in `backend/routers/`. Service singletons in `dependencies.py`.
 - **Supabase auth** — `frontend/lib/supabase.ts` + `frontend/contexts/AuthContext.tsx`. Falls back to placeholder strings if env vars not set (build succeeds without them).
+- **Portfolio Manager (Feature 10)** — the **"My Portfolio"** tab (`frontend/app/(app)/portfolio/page.tsx`, `/portfolio`) tracks a user's **real holdings + live P&L**. This is DISTINCT from the **"Simulator"** tab (`/simulation`, formerly mislabeled "Portfolio"), which is a backtest **race vs the S&P** — endpoints (`/portfolio/*` vs `/simulation/*`) and tab labels are kept clearly separate. Holdings live in the Supabase **`holdings`** table (`id, user_id, symbol, shares, cost_basis, opened_at`; `unique(user_id, symbol)`) with a single RLS "own rows" policy `auth.uid() = user_id` — migration at `supabase/migrations/0001_holdings.sql` (mirrors the watchlist pattern). All `/portfolio/*` endpoints (`routers/portfolio.py`) are **auth-gated via `require_user`** (401 anon). The backend reads/writes holdings through Supabase **PostgREST** (`supabase_rest.py`) forwarding the caller's **own JWT** as Bearer + `SUPABASE_ANON_KEY` as `apikey`, so RLS scopes every query — **no service-role key** (free-tier safe). `GET /portfolio/summary` (`portfolio_service.py`) fans out to yfinance per holding (`asyncio.gather`, per-call `wait_for`, semaphore 6), computing per-holding market value/P&L/weight + sector, totals, **sector allocation**, a **diversification score** (`(1 − Σwᵢ²)×100`, HHI-based 0–100), and a **portfolio forecast** = market-value-weighted mean of a lightweight per-holding trend signal (SMA20 vs price, SMA20 vs SMA50, ~1-mo momentum) — NOT the full Prophet/SARIMAX/RF ensemble or jury (too expensive per holding). A holding whose data can't be fetched is **skipped (reported in `skipped`), never 500s**. Summary is Redis-cached 15min per user, invalidated on mutation. **Out of scope v1**: stock splits, dividends, multi-currency — cost basis is shown as the user entered it.
 - **react-plotly.js exception** — `MonteCarloProbabilitySurface.tsx` is the only component using react-plotly.js (3D surface). All 2D charts remain Recharts.
 - `strict: false` in tsconfig.
 - pnpm workspace root has no source — all code in `frontend/` or `backend/`.
