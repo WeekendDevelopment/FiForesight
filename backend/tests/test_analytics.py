@@ -142,6 +142,34 @@ def test_accuracy_empty_returns_200_samples_zero() -> None:
     assert d["best_model"] is None
     assert d["ensemble_mae_by_horizon"] == []
     assert d["forecast_vs_actual"] == []
+    assert d["naive_mae"] is None
+    assert d["model_skill"] == {}
+
+
+def test_accuracy_skill_score_positive() -> None:
+    """Model MAE < naive → positive skill score (beats persistence)."""
+    # last_price=100, actual=110 → naive_error=10; rf MAE=4 → skill=1-4/10=0.6
+    model_acc = {"rf": {"mae": 4.0, "samples": 5}}
+    records = [_forecast_record(3, 100.0, 105.0, 0.0, 104.0, 103.0)]
+    outcomes = {_ts(2).date(): 110.0}
+    with _patch_store(model_acc=model_acc, records=records, outcomes=outcomes):
+        resp = client.get("/analytics/accuracy/NVDA")
+    d = resp.json()
+    assert d["naive_mae"] == 10.0
+    assert d["model_skill"]["random_forest"] == 0.6
+
+
+def test_accuracy_skill_score_negative() -> None:
+    """Model MAE > naive → negative skill score (worse than persistence)."""
+    # last_price=100, actual=101 → naive_error=1; rf MAE=4 → skill=1-4/1=-3.0
+    model_acc = {"rf": {"mae": 4.0, "samples": 5}}
+    records = [_forecast_record(3, 100.0, 102.0, 0.0, 104.0, 103.0)]
+    outcomes = {_ts(2).date(): 101.0}
+    with _patch_store(model_acc=model_acc, records=records, outcomes=outcomes):
+        resp = client.get("/analytics/accuracy/NVDA")
+    d = resp.json()
+    assert d["naive_mae"] == 1.0
+    assert d["model_skill"]["random_forest"] == -3.0
 
 
 def test_accuracy_invalid_symbol_422() -> None:

@@ -72,6 +72,7 @@ def _compute_accuracy(
     dir_counts = {k: [0, 0] for k in ("prophet", "sarima", "random_forest", "ensemble")}
     field_map = {"prophet": "p_d1", "sarima": "s_d1", "random_forest": "r_d1", "ensemble": "e_d1"}
     matched = 0
+    naive_errors: list[float] = []
 
     for rec in records:
         pred_time = rec.get("_time")
@@ -94,6 +95,7 @@ def _compute_accuracy(
         if actual is None:
             continue
         matched += 1
+        naive_errors.append(abs(actual - last_price))
 
         e_d1 = rec.get("e_d1")
         if e_d1 is not None and e_d1 > _MISSING:
@@ -119,6 +121,15 @@ def _compute_accuracy(
     }
     forecast_vs_actual = [fva_by_date[d] for d in sorted(fva_by_date)]
 
+    # ── Naive-persistence baseline & per-model skill ──────────────────────────
+    # Naive baseline: always predict last_price (yesterday's close).
+    # skill = 1 − model_mae/naive_mae; >0 beats persistence, <0 is worse.
+    naive_mae: float | None = round(sum(naive_errors) / len(naive_errors), 2) if naive_errors else None
+    model_skill: dict = {}
+    if naive_mae and naive_mae > 0:
+        for model, mae in model_mae.items():
+            model_skill[model] = round(1.0 - mae / naive_mae, 3)
+
     return {
         "model_mae":               model_mae,
         "best_model":              best_model,
@@ -126,6 +137,8 @@ def _compute_accuracy(
         "directional_accuracy":    directional_accuracy,
         "forecast_vs_actual":      forecast_vs_actual,
         "samples":                 matched,
+        "naive_mae":               naive_mae,
+        "model_skill":             model_skill,
     }
 
 
@@ -160,6 +173,7 @@ async def accuracy_analytics(request: Request, symbol: str):
         result = {
             "model_mae": {}, "best_model": None, "ensemble_mae_by_horizon": [],
             "directional_accuracy": {}, "forecast_vs_actual": [], "samples": 0,
+            "naive_mae": None, "model_skill": {},
         }
 
     payload = {
