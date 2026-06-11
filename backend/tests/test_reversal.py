@@ -3,12 +3,7 @@ Reversal-risk classifier tests.
 All tests run offline — no network, no InfluxDB, no Groq.
 """
 import math
-from backend.reversal import (
-    _build_dataset,
-    compute_reversal_risk,
-    _HORIZON,
-    _MIN_SAMPLES,
-)
+from backend.reversal import _build_dataset, compute_reversal_risk
 
 
 # ---------------------------------------------------------------------------
