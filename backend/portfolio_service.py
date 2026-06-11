@@ -122,6 +122,7 @@ async def _analyze_holding(holding: Dict[str, Any], yf_svc: Any) -> Optional[Dic
         pnl_pct = (pnl / cost_value * 100.0) if cost_value > 0 else 0.0
 
         return {
+            "id":             holding.get("id"),
             "symbol":         symbol,
             "name":           name,
             "sector":         sector if sector and sector != "N/A" else "Unknown",

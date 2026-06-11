@@ -8,7 +8,7 @@ import {
 } from '@mui/material';
 import {
   BrainCircuit, Home, Search, BarChart2, Calendar, Rocket, LineChart,
-  Activity, ChevronLeft, ChevronRight, Sun, Moon, LogIn, LogOut,
+  Activity, Wallet, ChevronLeft, ChevronRight, Sun, Moon, LogIn, LogOut,
 } from 'lucide-react';
 import { AppShellProvider, useAppShell } from '../../contexts/AppShellContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -19,18 +19,22 @@ interface NavItem {
   label: string;
   href:  string;
   icon:  React.ComponentType<{ size?: number | string; color?: string }>;
-  /** Shown in the mobile bottom nav (Portfolio is desktop-only / secondary). */
+  /** Shown in the mobile bottom nav (Insights/Simulator/My Portfolio are desktop-only / secondary). */
   mobile: boolean;
 }
 
+// "Simulator" is the backtest race engine (/simulation). "My Portfolio" is the
+// real-holdings P&L tracker (/portfolio) — kept clearly distinct so the two
+// never get confused.
 const NAV_ITEMS: NavItem[] = [
-  { label: 'Home',        href: '/',           icon: Home,      mobile: true  },
-  { label: 'Analysis',    href: '/analysis',   icon: Search,    mobile: true  },
-  { label: 'Options',     href: '/options',    icon: BarChart2, mobile: true  },
-  { label: 'Earnings',    href: '/earnings',   icon: Calendar,  mobile: true  },
-  { label: 'IPO Tracker', href: '/ipo',        icon: Rocket,    mobile: true  },
-  { label: 'Insights',    href: '/insights',   icon: Activity,  mobile: false },
-  { label: 'Portfolio',   href: '/simulation', icon: LineChart, mobile: false },
+  { label: 'Home',         href: '/',           icon: Home,      mobile: true  },
+  { label: 'Analysis',     href: '/analysis',   icon: Search,    mobile: true  },
+  { label: 'Options',      href: '/options',    icon: BarChart2, mobile: true  },
+  { label: 'Earnings',     href: '/earnings',   icon: Calendar,  mobile: true  },
+  { label: 'IPO Tracker',  href: '/ipo',        icon: Rocket,    mobile: true  },
+  { label: 'Insights',     href: '/insights',   icon: Activity,  mobile: false },
+  { label: 'Simulator',    href: '/simulation', icon: LineChart, mobile: false },
+  { label: 'My Portfolio', href: '/portfolio',  icon: Wallet,    mobile: false },
 ];
 
 const EXPANDED_WIDTH  = 220;

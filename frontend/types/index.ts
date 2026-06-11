@@ -311,3 +311,59 @@ export interface SentimentAnalytics {
   current:      SentimentPoint | null;
   generated_at: string;
 }
+
+// ── Portfolio Manager (Feature 10) ──────────────────────────────────────────
+// The "My Portfolio" tab tracks a user's REAL holdings + live P&L. Distinct
+// from the /simulation "Simulator" backtest-race tab.
+
+/** A raw holding row as persisted in the Supabase `holdings` table. */
+export interface Holding {
+  id:         string;
+  symbol:     string;
+  shares:     number;
+  cost_basis: number;
+  opened_at?: string;
+}
+
+/** A holding enriched with live price + P&L (from GET /portfolio/summary). */
+export interface PortfolioHolding {
+  id:             string;
+  symbol:         string;
+  name:           string;
+  sector:         string;
+  shares:         number;
+  costBasis:      number;
+  price:          number;
+  marketValue:    number;
+  costValue:      number;
+  pnl:            number;
+  pnlPct:         number;
+  weightPct:      number;
+  direction:      'Bullish' | 'Bearish' | 'Neutral';
+  directionScore: number;
+}
+
+export interface SectorAllocation {
+  sector:    string;
+  weightPct: number;
+  value:     number;
+}
+
+export interface PortfolioForecast {
+  label: 'Bullish' | 'Bearish' | 'Neutral';
+  score: number;
+}
+
+export interface PortfolioSummary {
+  holdings:             PortfolioHolding[];
+  totalMarketValue:     number;
+  totalCost:            number;
+  totalPnl:             number;
+  totalPnlPct:          number;
+  sectorAllocation:     SectorAllocation[];
+  /** Herfindahl-based 0–100; higher = more diversified. */
+  diversificationScore: number;
+  forecast:             PortfolioForecast;
+  /** Symbols skipped because live data couldn't be resolved (degraded gracefully). */
+  skipped:              string[];
+}
