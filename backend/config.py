@@ -25,7 +25,7 @@ class Config:
     # JWKS endpoint for verifying asymmetric (ES256/RS256) access tokens — the
     # default signing scheme for Supabase projects with JWT signing keys. The
     # legacy HS256 SUPABASE_JWT_SECRET cannot verify these.
-    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "") or os.getenv("NEXT_PUBLIC_SUPABASE_URL", "")
     # JWKS endpoint. Defaults to the standard Supabase path under SUPABASE_URL;
     # can be overridden directly.
     SUPABASE_JWKS_URL = os.getenv("SUPABASE_JWKS_URL", "") or (

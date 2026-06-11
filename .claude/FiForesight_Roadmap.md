@@ -36,7 +36,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Tool-using jury agents — Groq function calling; tools: `get_vix`, `get_put_call_ratio`, `get_insider_flow`, `get_macro_snapshot`; jury re-analysis UI (#220)
 - Jury quant lens swapped to `openai/gpt-oss-20b`; verdict parsing hardened; malformed output tracked (#226)
 - Forecast Accuracy & Sentiment Analytics Dashboard — `/insights` tab + `GET /analytics/{accuracy,sentiment}/{symbol}`; persists VADER compound to new `sentiment_score` measurement (Feature 12, PR #244)
-- Portfolio Manager — real holdings + live P&L ("My Portfolio" tab) + `GET/POST/DELETE /portfolio/holdings` + `GET /portfolio/summary` (Supabase `holdings` + RLS); existing race sim renamed "Simulator" (Feature 10, PR #PENDING)
+- Portfolio Manager — real holdings + live P&L ("My Portfolio" tab) + `GET/POST/DELETE /portfolio/holdings` + `GET /portfolio/summary` (Supabase `holdings` + RLS); existing race sim renamed "Simulator" (Feature 10, PR #249)
 
 ### Data & UX
 - SerpAPI news + trending sparklines
@@ -112,7 +112,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 **Files:** new `backend/routers/analytics.py`, `backend/services.py` (sentiment write), `frontend/app/(app)/insights/page.tsx`, proxies
 **Complexity:** Low–Medium *(data already exists)*
 
-### Feature 10 · Portfolio Manager ✅ *SHIPPED (PR #PENDING)*
+### Feature 10 · Portfolio Manager ✅ *SHIPPED (PR #249)*
 **Branch:** `feat/portfolio-manager`
 **Problem:** Current "portfolio" only backtests hypotheticals; no real holdings or live P&L.
 - **Naming** — the existing `/simulation` race tab (was mislabeled "Portfolio") renamed **"Simulator"**; the new real-holdings tab is **"My Portfolio"** (`/portfolio`). Endpoints + labels kept clearly distinct.
