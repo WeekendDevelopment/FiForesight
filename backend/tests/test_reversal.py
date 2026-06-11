@@ -10,12 +10,18 @@ from backend.reversal import _build_dataset, compute_reversal_risk
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_series(n: int, start: float = 100.0, step: float = 0.0):
+def _make_series(n: int, start: float = 100.0, step: float = 0.0) -> list[float]:
     """Flat or linearly trending close-price series."""
     return [start + i * step for i in range(n)]
 
 
-def _constant_indicators(n: int, rsi=50.0, bb_upper=110.0, bb_lower=90.0, macd=0.001):
+def _constant_indicators(
+    n: int,
+    rsi: float = 50.0,
+    bb_upper: float = 110.0,
+    bb_lower: float = 90.0,
+    macd: float = 0.001,
+) -> tuple[list[float], list[float], list[float], list[float], list[float]]:
     """Return constant indicator lists of length n."""
     return (
         [rsi]      * n,
@@ -91,10 +97,10 @@ def test_returns_dict_with_sufficient_data() -> None:
     rsi_s, bbu, bbl, mh, vols = _constant_indicators(n)
     result = compute_reversal_risk(closes, rsi_s, bbu, bbl, mh, vols)
     assert result is not None
-    assert "risk_pct"   in result
-    assert "signal"     in result
-    assert "factors"    in result
-    assert "trained_on" in result
+    assert "risk_pct"     in result
+    assert "signal"       in result
+    assert "top_features" in result
+    assert "trained_on"   in result
 
 
 def test_risk_pct_in_range() -> None:
@@ -127,14 +133,14 @@ def test_signal_matches_risk_pct() -> None:
         assert sig == "low"
 
 
-def test_factors_non_empty() -> None:
-    """factors list must be non-empty and contain strings."""
+def test_top_features_non_empty() -> None:
+    """top_features list must be non-empty and contain strings."""
     n = 300
     closes = [100.0 + math.sin(i * 0.3) * 5 for i in range(n)]
     rsi_s, bbu, bbl, mh, vols = _constant_indicators(n)
     result = compute_reversal_risk(closes, rsi_s, bbu, bbl, mh, vols)
     if result is None:
         return
-    assert len(result["factors"]) > 0
-    for f in result["factors"]:
+    assert len(result["top_features"]) > 0
+    for f in result["top_features"]:
         assert isinstance(f, str) and len(f) > 0

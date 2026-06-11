@@ -18,7 +18,7 @@ function signalColor(signal: ReversalRisk['signal'], isDark: boolean): string {
 }
 
 export default function ReversalRiskCard({ risk, isDark, primaryColor }: Props) {
-  const { risk_pct, signal, factors, trained_on } = risk;
+  const { risk_pct, signal, top_features, trained_on } = risk;
   const color = signalColor(signal, isDark);
   const bgTrack = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
 
@@ -66,7 +66,7 @@ export default function ReversalRiskCard({ risk, isDark, primaryColor }: Props) 
               size="small"
               sx={{ fontWeight: 700, color, bgcolor: `${color}1a`, mb: 0.75, height: 22, fontSize: 11 }}
             />
-            {factors.slice(0, 3).map((f, i) => (
+            {top_features.slice(0, 3).map((f, i) => (
               <Typography key={i} variant="caption" sx={{ display: 'block', opacity: 0.65, lineHeight: 1.6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 · {f}
               </Typography>
@@ -75,7 +75,7 @@ export default function ReversalRiskCard({ risk, isDark, primaryColor }: Props) 
         </Box>
 
         <Typography variant="caption" sx={{ display: 'block', mt: 1.25, opacity: 0.4, fontSize: '0.65rem' }}>
-          RandomForest · trained on {trained_on} bars · ≥2% drop within 5d
+          RandomForest · trained on {trained_on} bars · ≥2% drop within 5d · key signals = model-level importances
         </Typography>
       </CardContent>
     </Card>

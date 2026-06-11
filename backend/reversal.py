@@ -80,7 +80,7 @@ def _build_dataset(
         rows.append([float(rsi), bb_pct_b, float(mh), macd_slope, rsi_slope, price_mom, vol_ratio])
 
         future = [float(closes[i + k]) for k in range(1, _HORIZON + 1)]
-        labels.append(1 if _safe_div(min(future) - c, c) < -_DROP_THRESHOLD else 0)
+        labels.append(1 if _safe_div(min(future) - c, c) <= -_DROP_THRESHOLD else 0)
 
     return np.array(rows, dtype=np.float32), np.array(labels, dtype=np.int8)
 
@@ -180,41 +180,41 @@ def compute_reversal_risk(
     risk_pct = round(prob_peak * 100)
     signal   = "high" if risk_pct >= 65 else "medium" if risk_pct >= 35 else "low"
 
-    # ── Human-readable top-3 factors ─────────────────────────────────────────
+    # ── Top-3 model-level signals (feature importances are model-global, not per-sample) ──
     feature_names = ["RSI", "BB %B", "MACD hist", "MACD slope", "RSI slope", "Price 5d", "Vol ratio"]
     top_idx = np.argsort(clf.feature_importances_)[::-1][:3]
 
-    factor_vals = [float(rsi), bb_pct_b, float(mh), macd_slope, rsi_slope, price_mom, vol_ratio]
-    factors = []
+    cur_vals = [float(rsi), bb_pct_b, float(mh), macd_slope, rsi_slope, price_mom, vol_ratio]
+    top_features = []
     for idx in top_idx:
-        val = factor_vals[idx]
+        val = cur_vals[idx]
         name = feature_names[idx]
         if name == "RSI":
             tag = " — overbought" if val > 70 else " — oversold" if val < 30 else ""
-            factors.append(f"RSI {val:.0f}{tag}")
+            top_features.append(f"RSI {val:.0f}{tag}")
         elif name == "BB %B":
             tag = " — near upper band" if val > 0.8 else " — near lower band" if val < 0.2 else ""
-            factors.append(f"BB position {val*100:.0f}%{tag}")
+            top_features.append(f"BB position {val*100:.0f}%{tag}")
         elif name == "MACD hist":
             tag = " — decelerating" if macd_slope < 0 else ""
-            factors.append(f"MACD histogram {val:+.4f}{tag}")
+            top_features.append(f"MACD histogram {val:+.4f}{tag}")
         elif name == "MACD slope":
-            factors.append(f"MACD momentum {'weakening' if val < 0 else 'building'}")
+            top_features.append(f"MACD momentum {'weakening' if val < 0 else 'building'}")
         elif name == "RSI slope":
-            factors.append(f"RSI {'diverging down' if val < -0.5 else 'diverging up' if val > 0.5 else 'flat'}")
+            top_features.append(f"RSI {'diverging down' if val < -0.5 else 'diverging up' if val > 0.5 else 'flat'}")
         elif name == "Price 5d":
-            factors.append(f"5-day return {val*100:+.1f}%")
+            top_features.append(f"5-day return {val*100:+.1f}%")
         elif name == "Vol ratio":
-            factors.append(f"Volume {val:.1f}× 5d avg")
+            top_features.append(f"Volume {val:.1f}× 5d avg")
 
     logger.info(
         "[REVERSAL] risk=%d%% (%s) | n=%d peaks=%d | %s",
-        risk_pct, signal, len(X), n_peaks, " | ".join(factors[:2]),
+        risk_pct, signal, len(X), n_peaks, " | ".join(top_features[:2]),
     )
 
     return {
-        "risk_pct":   risk_pct,
-        "signal":     signal,
-        "factors":    factors,
-        "trained_on": len(X),
+        "risk_pct":    risk_pct,
+        "signal":      signal,
+        "top_features": top_features,
+        "trained_on":  len(X),
     }

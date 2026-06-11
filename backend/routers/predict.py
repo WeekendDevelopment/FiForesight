@@ -1109,18 +1109,22 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     # Compute RSI series here (also reused for chart at Step 8) so the reversal
     # classifier has it available without a second pass through closes.
     rsi_full = calculate_rsi_series(closes)
-    reversal_risk = await asyncio.to_thread(
-        compute_reversal_risk,
-        closes, rsi_full, bb_data["upper"], bb_data["lower"],
-        macd_data["hist"], volumes,
-    )
-    if reversal_risk:
-        logger.info(
-            "[STEP-4b+] ✓ Reversal risk: %d%% (%s) — trained on %d bars",
-            reversal_risk["risk_pct"], reversal_risk["signal"], reversal_risk["trained_on"],
+    try:
+        reversal_risk = await asyncio.to_thread(
+            compute_reversal_risk,
+            closes, rsi_full, bb_data["upper"], bb_data["lower"],
+            macd_data["hist"], volumes,
         )
-    else:
-        logger.info("[STEP-4b+] Reversal risk skipped (insufficient data)")
+        if reversal_risk:
+            logger.info(
+                "[STEP-4b+] ✓ Reversal risk: %d%% (%s) — trained on %d bars",
+                reversal_risk["risk_pct"], reversal_risk["signal"], reversal_risk["trained_on"],
+            )
+        else:
+            logger.info("[STEP-4b+] Reversal risk skipped (insufficient data)")
+    except Exception as exc:
+        logger.warning("[STEP-4b+] Reversal risk failed for %s: %s", symbol, exc, exc_info=True)
+        reversal_risk = None
 
     # ── Step 4c. Fire news + earnings fetch concurrently ─────────────────────
     news_cache_key = f"news:{symbol.upper()}"
