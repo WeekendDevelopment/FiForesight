@@ -34,6 +34,7 @@ import StockChatPanel    from '../../../components/StockChatPanel';
 import { useIndicatorSignals } from '../../../hooks/useIndicatorSignals';
 import DCFCard               from '../../../components/DCFCard';
 import WhyDidMoveCard        from '../../../components/WhyDidMoveCard';
+import ReversalRiskCard     from '../../../components/ReversalRiskCard';
 import MorningBriefingPanel  from '../../../components/MorningBriefingPanel';
 import type { PredictionData, IndicatorKey, TradeSetupResponse, DCFResult } from '../../../types';
 
@@ -377,6 +378,15 @@ function AnalysisContent() {
                       </Box>
                     </CardContent>
                   </Card>
+                )}
+
+                {/* ── Reversal Risk ────────────────────────────────────── */}
+                {prediction.reversalRisk && (
+                  <ReversalRiskCard
+                    risk={prediction.reversalRisk}
+                    isDark={isDark}
+                    primaryColor={primaryColor}
+                  />
                 )}
 
                 {/* ── Monte Carlo GBM ──────────────────────────────────── */}
