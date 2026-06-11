@@ -110,8 +110,22 @@ export interface PredictionData {
   monteCarlo?:      MonteCarloResult | null;
   earningsDates?:   string[];
   moveExplanation?: string | null;
-  reversalRisk?:    ReversalRisk | null;
+  reversalRisk?:      ReversalRisk | null;
+  directionForecast?: DirectionForecast | null;
   lastUpdated: string;
+}
+
+export interface DirectionForecast {
+  /** "up" | "down" — predicted next-day direction. */
+  direction:      'up' | 'down';
+  /** 50-100 — predicted-class probability × 100. */
+  confidence_pct: number;
+  /** confidence_pct − 50; how much above coin-flip baseline. */
+  edge_pct:       number;
+  /** Top model-level signals (feature importances) with current-bar values. */
+  top_features:   string[];
+  /** Number of historical bars the classifier was trained on. */
+  trained_on:     number;
 }
 
 export interface ReversalRisk {

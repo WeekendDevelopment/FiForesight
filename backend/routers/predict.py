@@ -26,6 +26,7 @@ from dependencies import (
 from jury_graph import run_jury_graph
 from redis_cache import cache_get, cache_set
 from reversal import compute_reversal_risk
+from direction import compute_direction_forecast
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -88,7 +89,8 @@ class PredictionResponse(BaseModel):
     monteCarlo:      Optional[dict] = None
     earningsDates:   List[str]      = []
     moveExplanation: Optional[str]  = None
-    reversalRisk:    Optional[dict] = None
+    reversalRisk:       Optional[dict] = None
+    directionForecast:  Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1140,6 +1142,25 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         logger.warning("[STEP-4b+] Reversal risk failed for %s: %s", symbol, exc, exc_info=True)
         reversal_risk = None
 
+    # ── Step 4b++. Next-day direction classifier ──────────────────────────────
+    try:
+        direction_forecast = await asyncio.to_thread(
+            compute_direction_forecast,
+            closes, rsi_full, bb_data["upper"], bb_data["lower"],
+            macd_data["hist"], volumes,
+        )
+        if direction_forecast:
+            logger.info(
+                "[STEP-4b++] ✓ Direction: %s %.0f%% confidence (+%d%% edge) — trained on %d bars",
+                direction_forecast["direction"].upper(), direction_forecast["confidence_pct"],
+                direction_forecast["edge_pct"], direction_forecast["trained_on"],
+            )
+        else:
+            logger.info("[STEP-4b++] Direction forecast skipped (insufficient data)")
+    except Exception as exc:
+        logger.warning("[STEP-4b++] Direction forecast failed for %s: %s", symbol, exc, exc_info=True)
+        direction_forecast = None
+
     # ── Step 4c. Fire news + earnings fetch concurrently ─────────────────────
     news_cache_key = f"news:{symbol.upper()}"
     cached_news_payload = await cache_get(news_cache_key)
@@ -1552,7 +1573,8 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         monteCarlo      = forecast.get("monte_carlo"),
         earningsDates   = earnings_dates,
         moveExplanation = move_explanation,
-        reversalRisk    = reversal_risk,
+        reversalRisk       = reversal_risk,
+        directionForecast  = direction_forecast,
     )
 
 

@@ -34,8 +34,9 @@ import StockChatPanel    from '../../../components/StockChatPanel';
 import { useIndicatorSignals } from '../../../hooks/useIndicatorSignals';
 import DCFCard               from '../../../components/DCFCard';
 import WhyDidMoveCard        from '../../../components/WhyDidMoveCard';
-import ReversalRiskCard     from '../../../components/ReversalRiskCard';
-import MorningBriefingPanel  from '../../../components/MorningBriefingPanel';
+import ReversalRiskCard       from '../../../components/ReversalRiskCard';
+import DirectionForecastCard  from '../../../components/DirectionForecastCard';
+import MorningBriefingPanel   from '../../../components/MorningBriefingPanel';
 import type { PredictionData, IndicatorKey, TradeSetupResponse, DCFResult } from '../../../types';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -384,6 +385,15 @@ function AnalysisContent() {
                 {prediction.reversalRisk && (
                   <ReversalRiskCard
                     risk={prediction.reversalRisk}
+                    isDark={isDark}
+                    primaryColor={primaryColor}
+                  />
+                )}
+
+                {/* ── Next-day Direction ───────────────────────────────── */}
+                {prediction.directionForecast && (
+                  <DirectionForecastCard
+                    forecast={prediction.directionForecast}
                     isDark={isDark}
                     primaryColor={primaryColor}
                   />
