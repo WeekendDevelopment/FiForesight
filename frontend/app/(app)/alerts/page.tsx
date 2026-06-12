@@ -291,6 +291,7 @@ export default function AlertsPage() {
               <Select
                 value={operator}
                 label={type === 'pct_move' ? 'Direction' : 'Condition'}
+                displayEmpty={type === 'pct_move'}
                 onChange={e => setOperator(e.target.value as '' | 'above' | 'below')}
               >
                 {type === 'pct_move' ? (
