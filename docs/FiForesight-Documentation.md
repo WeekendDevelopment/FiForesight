@@ -1762,8 +1762,9 @@ create policy "own rules" on public.alert_rules
 
 create table if not exists public.alert_fires (
   id        uuid primary key default gen_random_uuid(),
-  rule_id   uuid not null references public.alert_rules(id) on delete cascade,
+  rule_id   uuid not null,
   user_id   uuid not null references auth.users(id) on delete cascade default auth.uid(),
+  foreign key (rule_id, user_id) references public.alert_rules(id, user_id) on delete cascade,
   symbol    text not null, type text not null, message text not null,
   value     numeric, fired_at timestamptz not null default now()
 );

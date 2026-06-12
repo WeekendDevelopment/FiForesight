@@ -41,8 +41,6 @@ jobs:
           HTTP_STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
             --connect-timeout 5 \
             --max-time 30 \
-            --retry 2 \
-            --retry-all-errors \
             -X POST \
             -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
             "https://fiforesight.duckdns.org/alerts/${{ steps.ep.outputs.path }}")
