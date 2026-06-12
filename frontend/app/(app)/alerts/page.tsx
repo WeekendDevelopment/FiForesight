@@ -112,7 +112,7 @@ export default function AlertsPage() {
           try { await enablePushNotifications(token); } catch { /* ignore — best-effort */ }
           if (!cancelled) setPushOn(true);
         } else {
-          if (!cancelled) setPushOn(false);
+          setPushOn(false);
         }
       } catch {
         if (!cancelled) setPushOn(false);
