@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { LineChart, Line } from 'recharts';
 import Box from '@mui/material/Box';
 import Skeleton from '@mui/material/Skeleton';
@@ -25,6 +25,10 @@ export default function TrendingSparklines({ tickers, isDark, extraSymbols }: Pr
   const dimColor  = isDark ? 'rgba(220,220,220,0.35)' : 'rgba(20,30,50,0.35)';
   const bg        = isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)';
   const border    = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.07)';
+
+  // Stable string keys — prevents refetch storms when parent passes new array references
+  const tickerKey = useMemo(() => tickers.map(s => s.toUpperCase()).join(','), [tickers]);
+  const extraKey  = useMemo(() => (extraSymbols ?? []).map(s => s.toUpperCase()).join(','), [extraSymbols]);
 
   const fetchData = useCallback(async (force = false) => {
     const now = Date.now();
@@ -56,7 +60,7 @@ export default function TrendingSparklines({ tickers, isDark, extraSymbols }: Pr
     } finally {
       setLoading(false);
     }
-  }, [tickers, extraSymbols]);
+  }, [tickerKey, extraKey]);
 
   // Initial fetch
   useEffect(() => { void fetchData(true); }, [fetchData]);

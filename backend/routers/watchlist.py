@@ -12,10 +12,10 @@ GET is public — anonymous callers receive an empty list without a 401.
 """
 import logging
 import re
+from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, field_validator
-from slowapi.util import get_remote_address
 
 import supabase_rest
 from config import Config
@@ -78,11 +78,11 @@ class WatchlistAdd(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.get("/watchlist")
-@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=_user_rate_key)
 async def list_watchlist(
     request: Request,
     authorization: str = Header(default=""),
-):
+) -> dict[str, Any]:
     """Return saved watchlist. [] for anonymous callers."""
     user_id = get_user_id(authorization)
     if not user_id:
@@ -108,7 +108,7 @@ async def add_to_watchlist(
     body: WatchlistAdd,
     user_id: str = Depends(require_user),
     authorization: str = Header(default=""),
-):
+) -> dict[str, Any]:
     """Add a symbol. Upsert — returns 200 even on duplicate."""
     try:
         row = await supabase_rest.upsert_watchlist(_bearer(authorization), body.symbol)
@@ -125,7 +125,7 @@ async def remove_from_watchlist(
     symbol: str,
     user_id: str = Depends(require_user),
     authorization: str = Header(default=""),
-):
+) -> None:
     """Remove a symbol. 204 on success, 404 if not found."""
     sym = symbol.strip().upper()
     if not _SYMBOL_RE.match(sym):

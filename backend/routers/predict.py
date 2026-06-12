@@ -836,7 +836,7 @@ def _fetch_intraday_bars(symbol: str) -> dict:
 
 @router.get("/sparklines")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def sparklines(request: Request, tickers: str = "", extra: str = ""):
+async def sparklines(request: Request, tickers: str = "", extra: str = "") -> List[Dict[str, Any]]:
     """Return intraday 1d/5m bar data for trending tickers + optional extra symbols.
 
     Query params:
@@ -869,7 +869,7 @@ async def sparklines(request: Request, tickers: str = "", extra: str = ""):
             return cached
         data = await asyncio.wait_for(
             asyncio.to_thread(_fetch_intraday_bars, sym),
-            timeout=10.0,
+            timeout=12.0,
         )
         if data:
             payload = {"symbol": sym, **data}

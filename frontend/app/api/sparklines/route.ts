@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
     if (extra)   qs.set('extra',   extra);
     const res  = await fetch(`${BACKEND_URL}/sparklines?${qs.toString()}`, { signal: controller.signal });
     const data = await res.json();
-    return NextResponse.json(data);
+    return NextResponse.json(data, { status: res.status });
   } catch {
     return NextResponse.json([], { status: 502 });
   } finally {

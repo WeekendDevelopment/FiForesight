@@ -301,8 +301,8 @@ function MobileWatchlistBar() {
           key={item.symbol}
           onClick={() => router.push(`/analysis?symbol=${encodeURIComponent(item.symbol)}`)}
           sx={{
-            flexShrink: 0, px: 1.5, py: 0.5, borderRadius: 10,
-            bgcolor: chipBg, cursor: 'pointer', minHeight: 28,
+            flexShrink: 0, px: 1.5, py: 0.75, borderRadius: 10,
+            bgcolor: chipBg, cursor: 'pointer', minHeight: 44,
             display: 'flex', alignItems: 'center',
             '&:hover': { bgcolor: `${primaryColor}22` },
           }}

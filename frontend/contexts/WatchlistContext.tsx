@@ -59,7 +59,7 @@ export function WatchlistProvider({ children }: { children: ReactNode }) {
     const sym = symbol.toUpperCase();
     // Optimistic update
     if (!isWatched(sym)) {
-      setWatchlist(prev => [{ id: 'optimistic', symbol: sym, added_at: new Date().toISOString() }, ...prev]);
+      setWatchlist(prev => [{ id: `optimistic:${sym}:${Date.now()}`, symbol: sym, added_at: new Date().toISOString() }, ...prev]);
     }
     try {
       await fetch('/api/watchlist', {

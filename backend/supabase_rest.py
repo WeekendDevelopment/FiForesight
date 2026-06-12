@@ -12,6 +12,7 @@ All functions raise SupabaseConfigError when SUPABASE_URL / SUPABASE_ANON_KEY ar
 unset, and SupabaseRestError on a non-2xx PostgREST response. Routers translate
 these into clean HTTP errors — tracebacks never reach the client.
 """
+import asyncio
 import logging
 from typing import Any, Dict, List
 
@@ -185,7 +186,10 @@ async def list_watchlist(user_jwt: str) -> List[Dict[str, Any]]:
     params = {"select": "id,symbol,added_at", "order": "added_at.desc"}
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.get(url, headers=_wl_headers(user_jwt), params=params)
+            resp = await asyncio.wait_for(
+                client.get(url, headers=_wl_headers(user_jwt), params=params),
+                timeout=12,
+            )
     except httpx.HTTPError as exc:
         logger.error("[WATCHLIST] list: network error: %s", exc)
         raise SupabaseRestError(0, f"Network error: {exc}") from exc
@@ -202,11 +206,14 @@ async def upsert_watchlist(user_jwt: str, symbol: str) -> Dict[str, Any]:
     payload = {"symbol": symbol.upper()}
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.post(
-                url,
-                headers=_wl_headers(user_jwt, prefer="resolution=merge-duplicates,return=representation"),
-                params={"on_conflict": "user_id,symbol"},
-                json=payload,
+            resp = await asyncio.wait_for(
+                client.post(
+                    url,
+                    headers=_wl_headers(user_jwt, prefer="resolution=merge-duplicates,return=representation"),
+                    params={"on_conflict": "user_id,symbol"},
+                    json=payload,
+                ),
+                timeout=12,
             )
     except httpx.HTTPError as exc:
         logger.error("[WATCHLIST] upsert(%s): network error: %s", symbol, exc)
@@ -223,10 +230,13 @@ async def delete_watchlist_item(user_jwt: str, symbol: str) -> bool:
     url = _watchlist_url()
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.delete(
-                url,
-                headers=_wl_headers(user_jwt, prefer="return=representation"),
-                params={"symbol": f"eq.{symbol.upper()}"},
+            resp = await asyncio.wait_for(
+                client.delete(
+                    url,
+                    headers=_wl_headers(user_jwt, prefer="return=representation"),
+                    params={"symbol": f"eq.{symbol.upper()}"},
+                ),
+                timeout=12,
             )
     except httpx.HTTPError as exc:
         logger.error("[WATCHLIST] delete(%s): network error: %s", symbol, exc)
