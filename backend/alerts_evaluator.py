@@ -181,7 +181,6 @@ def _fetch_symbol_signals(symbol: str, needed: Set[str], yf_svc: Any, forecast_s
     except Exception as exc:
         logger.debug("[ALERTS] history fetch failed for %s: %s", symbol, exc)
 
-    live = 0.0
     try:
         live = float(yf_svc.get_live_price(symbol) or 0.0)
     except Exception:
@@ -233,10 +232,15 @@ async def _deliver(user_id: str, title: str, body: str, url: str = "/alerts") ->
     for sub in subs:
         status = await notifications.send_web_push(sub, title, body, url)
         if status == "gone":
+            # Subscription expired/unsubscribed — prune it. Cleanup is best-effort;
+            # a failure here must not abort delivery to the user's other devices.
             try:
                 await alerts_store.admin_delete_push_subscription(sub.get("endpoint", ""))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "[ALERTS] failed to prune dead push subscription %s: %s",
+                    sub.get("endpoint", ""), exc,
+                )
 
     if notifications.email_configured():
         email = await alerts_store.admin_get_user_email(user_id)
