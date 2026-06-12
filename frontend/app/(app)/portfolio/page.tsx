@@ -284,7 +284,7 @@ export default function PortfolioPage() {
                   <TableCell align="right">P&L</TableCell>
                   {!isMobile && <TableCell align="right">Weight</TableCell>}
                   {!isMobile && <TableCell>Sector</TableCell>}
-                  <TableCell align="right" />
+                  <TableCell align="right" sx={{ width: 80, minWidth: 80 }} />
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -305,17 +305,17 @@ export default function PortfolioPage() {
                     </TableCell>
                     {!isMobile && <TableCell align="right">{h.weightPct.toFixed(1)}%</TableCell>}
                     {!isMobile && <TableCell><Chip size="small" label={h.sector} variant="outlined" sx={{ fontSize: 10 }} /></TableCell>}
-                    <TableCell align="right" onClick={e => e.stopPropagation()}>
+                    <TableCell align="right" sx={{ width: 80, minWidth: 80 }} onClick={e => e.stopPropagation()}>
                       <Stack direction="row" justifyContent="flex-end" spacing={0.5}>
                         <Tooltip title="Edit holding">
                           <IconButton size="small" onClick={() => openEdit(h)} aria-label={`Edit ${h.symbol}`}>
-                            <Pencil size={14} />
+                            <Pencil size={16} />
                           </IconButton>
                         </Tooltip>
                         <Tooltip title="Remove holding">
                           <span>
                             <IconButton size="small" color="error" disabled={deleting === h.id} onClick={() => handleDelete(h.id)} aria-label={`Remove ${h.symbol}`}>
-                              <Trash2 size={14} />
+                              <Trash2 size={16} />
                             </IconButton>
                           </span>
                         </Tooltip>
