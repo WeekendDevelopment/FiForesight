@@ -1,0 +1,51 @@
+name: Alerts Evaluator Cron
+# Runs every 15 minutes during US market hours (Mon–Fri 13:30–21:00 UTC = 9:30am–5pm ET).
+# Calls POST /alerts/evaluate on the prod backend via X-Cron-Secret.
+# Digest runs once daily at 13:00 UTC (9am ET).
+on:
+  schedule:
+    - cron: "30,45 13 * * 1-5"    # evaluator: 9:30–9:59am ET (market open)
+    - cron: "*/15 14-20 * * 1-5"  # evaluator: 10am–4:59pm ET (core window)
+    - cron: "0 21 * * 1-5"        # evaluator: 5pm ET close tick
+    - cron: "0 13 * * 1-5"        # digest: 9am ET (before market open)
+  workflow_dispatch:
+    inputs:
+      endpoint:
+        description: "Which endpoint to hit"
+        required: false
+        default: "evaluate"
+        type: choice
+        options:
+          - evaluate
+          - digest
+
+permissions: {}
+
+jobs:
+  run-evaluator:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine endpoint
+        id: ep
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "path=${{ github.event.inputs.endpoint }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event.schedule }}" == "0 13 * * 1-5" ]]; then
+            echo "path=digest" >> $GITHUB_OUTPUT
+          else
+            echo "path=evaluate" >> $GITHUB_OUTPUT
+          fi
+
+      - name: POST /alerts/${{ steps.ep.outputs.path }}
+        run: |
+          HTTP_STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
+            --connect-timeout 5 \
+            --max-time 30 \
+            -X POST \
+            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
+            "https://fiforesight.duckdns.org/alerts/${{ steps.ep.outputs.path }}")
+          echo "Response status: $HTTP_STATUS"
+          if [[ "$HTTP_STATUS" != "200" ]]; then
+            echo "::error::Evaluator returned HTTP $HTTP_STATUS"
+            exit 1
+          fi

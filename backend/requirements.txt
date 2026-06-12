@@ -24,3 +24,6 @@ redis[hiredis]
 PyJWT[crypto]
 # Per-IP / per-user rate limiting
 slowapi
+# Web Push (VAPID) delivery for Alerts & Notifications (Feature 9). Pulls in
+# py-vapid + http-ece for payload encryption. Free, no third-party service.
+pywebpush

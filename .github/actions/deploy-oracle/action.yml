@@ -85,6 +85,13 @@ runs:
             -e ALPACA_SECRET_KEY=${{ env.ALPACA_SECRET_KEY }} \
             -e SUPABASE_JWT_SECRET=${{ env.SUPABASE_JWT_SECRET }} \
             -e SUPABASE_URL=${{ env.SUPABASE_URL }} \
+            -e SUPABASE_ANON_KEY=${{ env.SUPABASE_ANON_KEY }} \
+            -e SUPABASE_SERVICE_ROLE_KEY=${{ env.SUPABASE_SERVICE_ROLE_KEY }} \
+            -e CRON_SECRET=${{ env.CRON_SECRET }} \
+            -e VAPID_PUBLIC_KEY=${{ env.VAPID_PUBLIC_KEY }} \
+            -e VAPID_PRIVATE_KEY=${{ env.VAPID_PRIVATE_KEY }} \
+            -e RESEND_API_KEY=${{ env.RESEND_API_KEY }} \
+            -e ALERT_EMAIL_ENABLED=${{ env.ALERT_EMAIL_ENABLED }} \
             -e APP_ENV=${{ env.APP_ENV }} \
             -e NEW_RELIC_LICENSE_KEY=${{ env.NEW_RELIC_LICENSE_KEY }} \
             -e NEW_RELIC_APP_NAME=${{ env.NEW_RELIC_APP_NAME }} \
