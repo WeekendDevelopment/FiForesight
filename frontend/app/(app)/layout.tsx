@@ -320,7 +320,6 @@ function MobileWatchlistBar() {
 function MobileNav() {
   const pathname = usePathname();
   const { isDark, primaryColor } = useAppShell();
-  const { watchlist } = useWatchlistContext();
   const items = NAV_ITEMS.filter(i => i.mobile);
   const borderCol = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
 

@@ -459,13 +459,13 @@ function AnalysisContent() {
                       </Typography>
                     </Stack>
                     <Stack direction="row" flexWrap="wrap" gap={0.75}>
-                      {watchlist.map(sym => (
+                      {watchlist.map(item => (
                         <Chip
-                          key={sym}
-                          label={sym}
+                          key={item.symbol}
+                          label={item.symbol}
                           size="small"
-                          onClick={() => handlePredict(sym)}
-                          onDelete={() => void toggleWatchlist(sym)}
+                          onClick={() => handlePredict(item.symbol)}
+                          onDelete={() => void toggleWatchlist(item.symbol)}
                           sx={{
                             cursor: 'pointer',
                             fontWeight: 700,
