@@ -264,7 +264,7 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 | Security hardening (rate limits, auth enforcement, CORS, input validation) | pending |
 | Forecast accuracy & sentiment dashboard (Insights tab) | #244 |
 | Portfolio Manager — real holdings + live P&L ("My Portfolio" tab) | #249 |
-| Alerts & Notifications — rule builder + scheduled evaluator + Web Push ("Alerts" tab) | pending |
+| Alerts & Notifications — rule builder + scheduled evaluator + Web Push ("Alerts" tab) | #254 |
 
 ---
 

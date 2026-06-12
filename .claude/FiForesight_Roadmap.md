@@ -125,7 +125,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 **Files:** `backend/routers/portfolio.py`, `backend/portfolio_service.py`, `backend/supabase_rest.py`, `supabase/migrations/0001_holdings.sql`, `frontend/app/(app)/portfolio/page.tsx`, `frontend/lib/holdings.ts`, `/api/portfolio/*` proxies, sidebar nav rename
 **Complexity:** Medium–High
 
-### Feature 9 · Alerts & Notifications ✅ *SHIPPED (PR #PRNUM)*
+### Feature 9 · Alerts & Notifications ✅ *SHIPPED (PR #254)*
 **Branch:** `feat/alerts-notifications`
 **Problem:** Engagement is pull-only; no proactive signals.
 - **Schema** — Supabase `alert_rules(id, user_id, symbol, type, operator, threshold, active, last_fired, created_at)` + `alert_fires` (fire log) + `push_subscriptions` (Web Push); types: `price_cross`, `rsi_threshold`, `pct_move`, `earnings_soon`, `forecast_breakout`. RLS `auth.uid() = user_id` (`supabase/migrations/0003_alerts.sql` + `0004_push_subscriptions.sql`).
