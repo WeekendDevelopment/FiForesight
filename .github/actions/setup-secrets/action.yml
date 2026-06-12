@@ -99,3 +99,39 @@ runs:
       with:
         secret-name: SUPABASE_URL
         secret-value: "${{ env.SUPABASE_URL }}"
+
+    - name: Create SUPABASE_SERVICE_ROLE_KEY secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: SUPABASE_SERVICE_ROLE_KEY
+        secret-value: "${{ env.SUPABASE_SERVICE_ROLE_KEY }}"
+
+    - name: Create CRON_SECRET secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: CRON_SECRET
+        secret-value: "${{ env.CRON_SECRET }}"
+
+    - name: Create VAPID_PUBLIC_KEY secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: VAPID_PUBLIC_KEY
+        secret-value: "${{ env.VAPID_PUBLIC_KEY }}"
+
+    - name: Create VAPID_PRIVATE_KEY secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: VAPID_PRIVATE_KEY
+        secret-value: "${{ env.VAPID_PRIVATE_KEY }}"
+
+    - name: Create RESEND_API_KEY secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: RESEND_API_KEY
+        secret-value: "${{ env.RESEND_API_KEY }}"
+
+    - name: Create ALERT_EMAIL_ENABLED secret
+      uses: koyeb/action-git-deploy/secret@v1
+      with:
+        secret-name: ALERT_EMAIL_ENABLED
+        secret-value: "${{ env.ALERT_EMAIL_ENABLED }}"
