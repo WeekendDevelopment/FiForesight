@@ -287,11 +287,12 @@ export default function AlertsPage() {
 
           {needsOperatorChoice && (
             <FormControl size="small" sx={{ width: { xs: '100%', md: 140 } }}>
-              <InputLabel>{type === 'pct_move' ? 'Direction' : 'Condition'}</InputLabel>
+              <InputLabel shrink={type === 'pct_move' || undefined}>{type === 'pct_move' ? 'Direction' : 'Condition'}</InputLabel>
               <Select
                 value={operator}
                 label={type === 'pct_move' ? 'Direction' : 'Condition'}
                 displayEmpty={type === 'pct_move'}
+                notched={type === 'pct_move' || undefined}
                 onChange={e => setOperator(e.target.value as '' | 'above' | 'below')}
               >
                 {type === 'pct_move' ? (
