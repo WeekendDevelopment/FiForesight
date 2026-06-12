@@ -25,12 +25,17 @@ class Config:
     # JWKS endpoint for verifying asymmetric (ES256/RS256) access tokens — the
     # default signing scheme for Supabase projects with JWT signing keys. The
     # legacy HS256 SUPABASE_JWT_SECRET cannot verify these.
-    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+    SUPABASE_URL = os.getenv("SUPABASE_URL", "") or os.getenv("NEXT_PUBLIC_SUPABASE_URL", "")
     # JWKS endpoint. Defaults to the standard Supabase path under SUPABASE_URL;
     # can be overridden directly.
     SUPABASE_JWKS_URL = os.getenv("SUPABASE_JWKS_URL", "") or (
         f"{SUPABASE_URL.rstrip('/')}/auth/v1/.well-known/jwks.json" if SUPABASE_URL else ""
     )
+    # Supabase anon (public) API key. Used as the `apikey` header when the backend
+    # reads the user's `holdings` rows through Supabase PostgREST. The user's own
+    # JWT is forwarded as the Bearer token, so Row-Level Security scopes every
+    # query to that user — no service-role key is needed (free-tier safe).
+    SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "")
     # When True, allows JWT decoding without signature verification (dev/test only).
     # NEVER set this in production — always set SUPABASE_JWT_SECRET (HS256) or
     # SUPABASE_URL/SUPABASE_JWKS_URL (ES256/RS256) instead.
@@ -62,6 +67,10 @@ class Config:
     RATE_LIMIT_TRADE:        str = os.getenv("RATE_LIMIT_TRADE",        "15/minute")
     RATE_LIMIT_BACKTEST:     str = os.getenv("RATE_LIMIT_BACKTEST",     "5/minute")
     RATE_LIMIT_READONLY:     str = os.getenv("RATE_LIMIT_READONLY",     "60/minute")
+    # Portfolio Manager (Feature 10) — holdings CRUD is cheap (Supabase only);
+    # the summary fans out to yfinance per holding, so it gets a tighter limit.
+    RATE_LIMIT_PORTFOLIO:         str = os.getenv("RATE_LIMIT_PORTFOLIO",         "30/minute")
+    RATE_LIMIT_PORTFOLIO_SUMMARY: str = os.getenv("RATE_LIMIT_PORTFOLIO_SUMMARY", "15/minute")
 
 class SanitizeHttpxFilter(logging.Filter):
     SENSITIVE_PARAMS = {"api_key", "token", "secret", "password", "key"}

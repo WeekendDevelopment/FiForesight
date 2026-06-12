@@ -36,6 +36,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Tool-using jury agents — Groq function calling; tools: `get_vix`, `get_put_call_ratio`, `get_insider_flow`, `get_macro_snapshot`; jury re-analysis UI (#220)
 - Jury quant lens swapped to `openai/gpt-oss-20b`; verdict parsing hardened; malformed output tracked (#226)
 - Forecast Accuracy & Sentiment Analytics Dashboard — `/insights` tab + `GET /analytics/{accuracy,sentiment}/{symbol}`; persists VADER compound to new `sentiment_score` measurement (Feature 12, PR #244)
+- Portfolio Manager — real holdings + live P&L ("My Portfolio" tab) + `GET/POST/DELETE /portfolio/holdings` + `GET /portfolio/summary` (Supabase `holdings` + RLS); existing race sim renamed "Simulator" (Feature 10, PR #249)
 
 ### Data & UX
 - SerpAPI news + trending sparklines
@@ -111,15 +112,17 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 **Files:** new `backend/routers/analytics.py`, `backend/services.py` (sentiment write), `frontend/app/(app)/insights/page.tsx`, proxies
 **Complexity:** Low–Medium *(data already exists)*
 
-### Feature 10 · Portfolio Manager *(do third)*
+### Feature 10 · Portfolio Manager ✅ *SHIPPED (PR #249)*
 **Branch:** `feat/portfolio-manager`
 **Problem:** Current "portfolio" only backtests hypotheticals; no real holdings or live P&L.
-- **Schema** — Supabase `holdings(id, user_id, symbol, shares, cost_basis, opened_at)` with RLS.
-- **Backend** — `GET/POST/DELETE /portfolio/holdings` (auth-gated, F11); `GET /portfolio/summary` → live prices, per-holding + total P&L, sector allocation, diversification score, aggregate forecast (reuse ensemble + jury).
-- **Frontend** — `/portfolio` tab: holdings table (add/edit/remove), live P&L, sector pie, portfolio-level forecast; reuse `HoldingPnl` types + simulation plumbing.
-- **Edge cases** — splits/dividends documented as out-of-scope v1.
+- **Naming** — the existing `/simulation` race tab (was mislabeled "Portfolio") renamed **"Simulator"**; the new real-holdings tab is **"My Portfolio"** (`/portfolio`). Endpoints + labels kept clearly distinct.
+- **Schema** — Supabase `holdings(id, user_id, symbol, shares, cost_basis, opened_at)` + `unique(user_id, symbol)` with RLS `auth.uid() = user_id` (`supabase/migrations/0001_holdings.sql`).
+- **Backend** — `GET/POST/DELETE /portfolio/holdings` (auth-gated via `require_user`, reads/writes Supabase PostgREST with the caller's forwarded JWT → RLS, no service-role key); `GET /portfolio/summary` → live prices, per-holding + total P&L, sector allocation, HHI diversification score, lightweight market-value-weighted trend forecast (NOT full ensemble/jury — too costly per holding); skips bad symbols, Redis-cached 15min.
+- **Frontend** — `/portfolio` tab: summary cards, holdings table (add/remove), sector pie, forecast badge, AuthGate when signed out; `lib/holdings.ts` + `/api/portfolio/*` proxies.
+- **Tests** — `backend/tests/test_portfolio.py` (auth 401, P&L math, partial-failure skip, trend signal).
+- **Edge cases** — splits/dividends/multi-currency documented as out-of-scope v1.
 
-**Files:** new `backend/routers/portfolio.py`, Supabase migration, `frontend/app/(app)/portfolio/page.tsx`, proxies, sidebar nav item
+**Files:** `backend/routers/portfolio.py`, `backend/portfolio_service.py`, `backend/supabase_rest.py`, `supabase/migrations/0001_holdings.sql`, `frontend/app/(app)/portfolio/page.tsx`, `frontend/lib/holdings.ts`, `/api/portfolio/*` proxies, sidebar nav rename
 **Complexity:** Medium–High
 
 ### Feature 9 · Alerts & Notifications *(do last)*
