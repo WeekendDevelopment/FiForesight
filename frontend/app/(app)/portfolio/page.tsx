@@ -272,8 +272,8 @@ export default function PortfolioPage() {
       ) : (
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={3}>
           {/* Holdings table */}
-          <Paper sx={{ flex: 1, border: `1px solid ${border}`, borderRadius: 3, overflow: 'hidden', background: 'transparent' }}>
-            <Table size="small">
+          <Paper sx={{ flex: 1, border: `1px solid ${border}`, borderRadius: 3, overflow: 'auto', background: 'transparent' }}>
+            <Table size="small" sx={{ minWidth: 700 }}>
               <TableHead>
                 <TableRow>
                   <TableCell>Symbol</TableCell>
