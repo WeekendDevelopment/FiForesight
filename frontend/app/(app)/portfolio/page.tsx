@@ -18,6 +18,7 @@ import { useRouter } from 'next/navigation';
 import {
   Box, Paper, Stack, Typography, Table, TableBody, TableCell, TableHead, TableRow,
   TextField, Button, IconButton, Skeleton, Chip, Tooltip, useMediaQuery, Alert,
+  Select, MenuItem, FormControl, InputLabel,
 } from '@mui/material';
 import {
   Wallet, Plus, Trash2, TrendingUp, TrendingDown, Minus, ShieldCheck,
@@ -37,8 +38,44 @@ const SECTOR_COLORS = [
   '#f9572a', '#5c8cf9', '#f92a5c', '#2af9d8', '#c0c0c0',
 ];
 
-const usd = (n: number) =>
-  n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 });
+// Currencies supported by the exchanges yfinance covers.
+// GBp = London Stock Exchange pence (yfinance native unit for most LSE tickers).
+const CURRENCIES = [
+  { code: 'USD', label: 'USD – US Dollar' },
+  { code: 'EUR', label: 'EUR – Euro' },
+  { code: 'GBP', label: 'GBP – British Pound' },
+  { code: 'GBp', label: 'GBp – British Pence (LSE)' },
+  { code: 'CAD', label: 'CAD – Canadian Dollar' },
+  { code: 'AUD', label: 'AUD – Australian Dollar' },
+  { code: 'JPY', label: 'JPY – Japanese Yen' },
+  { code: 'INR', label: 'INR – Indian Rupee' },
+  { code: 'HKD', label: 'HKD – Hong Kong Dollar' },
+  { code: 'SGD', label: 'SGD – Singapore Dollar' },
+  { code: 'CHF', label: 'CHF – Swiss Franc' },
+  { code: 'SEK', label: 'SEK – Swedish Krona' },
+  { code: 'NOK', label: 'NOK – Norwegian Krone' },
+  { code: 'DKK', label: 'DKK – Danish Krone' },
+  { code: 'NZD', label: 'NZD – New Zealand Dollar' },
+  { code: 'ZAR', label: 'ZAR – South African Rand' },
+  { code: 'BRL', label: 'BRL – Brazilian Real' },
+  { code: 'MXN', label: 'MXN – Mexican Peso' },
+  { code: 'KRW', label: 'KRW – South Korean Won' },
+  { code: 'TWD', label: 'TWD – Taiwan Dollar' },
+  { code: 'CNY', label: 'CNY – Chinese Yuan' },
+];
+
+function fmtCurrency(amount: number, currency = 'USD'): string {
+  // GBp (pence) → display as GBP after dividing by 100 for readability
+  if (currency === 'GBp') {
+    return (amount / 100).toLocaleString('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 2 });
+  }
+  try {
+    return amount.toLocaleString('en-US', { style: 'currency', currency, maximumFractionDigits: 2 });
+  } catch {
+    return `${currency} ${amount.toFixed(2)}`;
+  }
+}
+
 const pct = (n: number) => `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
 
 export default function PortfolioPage() {
@@ -58,6 +95,7 @@ export default function PortfolioPage() {
   const [symbol,    setSymbol]    = useState('');
   const [shares,    setShares]    = useState('');
   const [costBasis, setCostBasis] = useState('');
+  const [currency,  setCurrency]  = useState('USD');
   const [adding,    setAdding]    = useState(false);
   const [deleting,  setDeleting]  = useState<string | null>(null);
 
@@ -88,7 +126,7 @@ export default function PortfolioPage() {
     setAdding(true);
     setError(null);
     try {
-      await addHolding(token, s, sh, cb);
+      await addHolding(token, s, sh, cb, currency);
       setSymbol(''); setShares(''); setCostBasis('');
       await load(true);
     } catch (e) {
@@ -114,6 +152,14 @@ export default function PortfolioPage() {
     () => (summary?.sectorAllocation ?? []).map(s => ({ name: s.sector, value: s.weightPct })),
     [summary],
   );
+
+  // Detect whether the portfolio mixes currencies — totals are approximate when mixed.
+  const portfolioCurrencies = useMemo(
+    () => [...new Set((summary?.holdings ?? []).map(h => h.currency).filter(Boolean))],
+    [summary],
+  );
+  const mixedCurrencies = portfolioCurrencies.length > 1;
+  const primaryCurrency = portfolioCurrencies[0] ?? 'USD';
 
   // ── Signed-out gate ────────────────────────────────────────────────────────
   if (!user) {
@@ -145,9 +191,10 @@ export default function PortfolioPage() {
       {/* Summary cards */}
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mb: 3 }}>
         <SummaryCard label="Total Value" border={border}
-          value={loading && !summary ? null : usd(summary?.totalMarketValue ?? 0)} />
+          value={loading && !summary ? null : fmtCurrency(summary?.totalMarketValue ?? 0, primaryCurrency)}
+          sub={mixedCurrencies ? 'Multi-currency — totals approximate' : undefined} />
         <SummaryCard label="Total P&L" border={border}
-          value={loading && !summary ? null : usd(summary?.totalPnl ?? 0)}
+          value={loading && !summary ? null : fmtCurrency(summary?.totalPnl ?? 0, primaryCurrency)}
           sub={summary ? pct(summary.totalPnlPct) : undefined}
           color={summary ? pnlColor(summary.totalPnl) : undefined} />
         <SummaryCard label="Diversification" border={border}
@@ -158,14 +205,22 @@ export default function PortfolioPage() {
 
       {/* Add holding */}
       <Paper sx={{ p: 2, mb: 3, border: `1px solid ${border}`, borderRadius: 3, background: 'transparent' }}>
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'flex-end' }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'flex-end' }} flexWrap="wrap">
           <TextField label="Symbol" size="small" value={symbol}
             onChange={e => setSymbol(e.target.value.toUpperCase())}
-            inputProps={{ maxLength: 15 }} sx={{ width: { xs: '100%', sm: 140 } }} />
+            inputProps={{ maxLength: 15 }} sx={{ width: { xs: '100%', sm: 120 } }} />
           <TextField label="Shares" size="small" type="number" value={shares}
-            onChange={e => setShares(e.target.value)} sx={{ width: { xs: '100%', sm: 130 } }} />
-          <TextField label="Cost basis ($)" size="small" type="number" value={costBasis}
+            onChange={e => setShares(e.target.value)} sx={{ width: { xs: '100%', sm: 110 } }} />
+          <TextField label="Cost basis / share" size="small" type="number" value={costBasis}
             onChange={e => setCostBasis(e.target.value)} sx={{ width: { xs: '100%', sm: 150 } }} />
+          <FormControl size="small" sx={{ width: { xs: '100%', sm: 200 } }}>
+            <InputLabel>Currency</InputLabel>
+            <Select value={currency} label="Currency" onChange={e => setCurrency(e.target.value)}>
+              {CURRENCIES.map(c => (
+                <MenuItem key={c.code} value={c.code}>{c.label}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
           <Button variant="contained" startIcon={<Plus size={16} />} onClick={handleAdd}
             disabled={adding} sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
             {adding ? 'Adding…' : 'Add holding'}
@@ -205,11 +260,11 @@ export default function PortfolioPage() {
                       {!isMobile && <Typography variant="caption" color="text.secondary" noWrap sx={{ maxWidth: 130, display: 'block' }}>{h.name}</Typography>}
                     </TableCell>
                     {!isMobile && <TableCell align="right">{h.shares}</TableCell>}
-                    {!isMobile && <TableCell align="right">{usd(h.costBasis)}</TableCell>}
-                    <TableCell align="right">{usd(h.price)}</TableCell>
-                    <TableCell align="right">{usd(h.marketValue)}</TableCell>
+                    {!isMobile && <TableCell align="right">{fmtCurrency(h.costBasis, h.currency)}</TableCell>}
+                    <TableCell align="right">{fmtCurrency(h.price, h.currency)}</TableCell>
+                    <TableCell align="right">{fmtCurrency(h.marketValue, h.currency)}</TableCell>
                     <TableCell align="right" sx={{ color: pnlColor(h.pnl), fontWeight: 600 }}>
-                      {usd(h.pnl)}<br />
+                      {fmtCurrency(h.pnl, h.currency)}<br />
                       <Typography component="span" variant="caption" sx={{ color: pnlColor(h.pnl) }}>{pct(h.pnlPct)}</Typography>
                     </TableCell>
                     {!isMobile && <TableCell align="right">{h.weightPct.toFixed(1)}%</TableCell>}

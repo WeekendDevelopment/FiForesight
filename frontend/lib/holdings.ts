@@ -40,11 +40,12 @@ export async function addHolding(
   symbol: string,
   shares: number,
   costBasis: number,
+  currency = 'USD',
 ): Promise<Holding> {
   const res = await fetch('/api/portfolio/holdings', {
     method:  'POST',
     headers: authHeaders(token),
-    body:    JSON.stringify({ symbol: symbol.toUpperCase(), shares, cost_basis: costBasis }),
+    body:    JSON.stringify({ symbol: symbol.toUpperCase(), shares, cost_basis: costBasis, currency }),
   });
   const body = await parseOrThrow(res) as { holding?: Holding };
   if (!body.holding) throw new Error('Malformed response: missing holding.');

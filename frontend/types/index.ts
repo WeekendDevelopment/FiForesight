@@ -336,6 +336,7 @@ export interface Holding {
   symbol:     string;
   shares:     number;
   cost_basis: number;
+  currency?:  string;
   opened_at?: string;
 }
 
@@ -345,6 +346,7 @@ export interface PortfolioHolding {
   symbol:         string;
   name:           string;
   sector:         string;
+  currency:       string;
   shares:         number;
   costBasis:      number;
   price:          number;

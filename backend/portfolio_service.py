@@ -87,6 +87,7 @@ async def _analyze_holding(holding: Dict[str, Any], yf_svc: Any) -> Optional[Dic
     try:
         shares = float(holding.get("shares", 0) or 0)
         cost_basis = float(holding.get("cost_basis", 0) or 0)
+        currency = str(holding.get("currency") or "USD")
     except (TypeError, ValueError):
         logger.warning("[PORTFOLIO] %s: non-numeric shares/cost_basis — skipped", symbol)
         return None
@@ -127,6 +128,7 @@ async def _analyze_holding(holding: Dict[str, Any], yf_svc: Any) -> Optional[Dic
             "symbol":         symbol,
             "name":           name,
             "sector":         sector if sector and sector != "N/A" else "Unknown",
+            "currency":       currency,
             "shares":         round(shares, 6),
             "costBasis":      round(cost_basis, 4),
             "price":          round(price, 4),

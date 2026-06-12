@@ -35,6 +35,14 @@ _SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-:]{1,15}$")
 _UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 _SUMMARY_TTL = 900  # 15 minutes
 
+# Mirrors the CHECK constraint in supabase/migrations/0002_holdings_currency.sql.
+# GBp = London Stock Exchange pence (yfinance native unit for LSE tickers).
+_ALLOWED_CURRENCIES = frozenset({
+    "USD", "GBP", "GBp", "CAD", "AUD", "INR", "EUR", "JPY",
+    "HKD", "SGD", "CHF", "SEK", "NOK", "DKK", "NZD", "ZAR",
+    "BRL", "MXN", "KRW", "TWD", "CNY",
+})
+
 
 def _bearer(authorization: str) -> str:
     """Extract the raw JWT. require_user already guarantees it's present+valid."""
@@ -48,9 +56,18 @@ def _summary_cache_key(user_id: str) -> str:
 def _handle_store_error(exc: Exception) -> HTTPException:
     """Map Supabase helper errors to clean HTTP errors (no traceback leakage)."""
     if isinstance(exc, supabase_rest.SupabaseConfigError):
+        logger.error("[PORTFOLIO] Supabase not configured — SUPABASE_URL / SUPABASE_ANON_KEY missing.")
         return HTTPException(status_code=503, detail="Portfolio storage is not configured.")
     if isinstance(exc, supabase_rest.SupabaseRestError):
-        logger.warning("[PORTFOLIO] Supabase REST %s: %s", exc.status_code, exc)
+        # Status 0 = network / connection error (httpx.HTTPError wrapped by supabase_rest).
+        # Any other status = PostgREST responded with an error — migration not applied,
+        # invalid JWT, or misconfigured URL are the most common causes.
+        logger.error(
+            "[PORTFOLIO] Supabase REST error (HTTP %s): %s — "
+            "if HTTP 404/42P01, the holdings migration may not have been applied; "
+            "if HTTP 0, the backend cannot reach SUPABASE_URL.",
+            exc.status_code, exc,
+        )
         return HTTPException(status_code=502, detail="Could not reach the holdings store.")
     logger.error("[PORTFOLIO] unexpected store error: %s", exc)
     return HTTPException(status_code=500, detail="An internal server error occurred.")
@@ -64,6 +81,7 @@ class HoldingCreate(BaseModel):
     symbol: str
     shares: float
     cost_basis: float
+    currency: str = "USD"
 
     @field_validator("symbol")
     @classmethod
@@ -85,6 +103,17 @@ class HoldingCreate(BaseModel):
     def _validate_cost_basis(cls, v: float) -> float:
         if v < 0:
             raise ValueError("cost_basis must be >= 0")
+        return v
+
+    @field_validator("currency")
+    @classmethod
+    def _validate_currency(cls, v: str) -> str:
+        v = (v or "USD").strip()
+        if v not in _ALLOWED_CURRENCIES:
+            raise ValueError(
+                f"Unsupported currency '{v}'. "
+                f"Allowed: {', '.join(sorted(_ALLOWED_CURRENCIES))}"
+            )
         return v
 
 
@@ -116,7 +145,7 @@ async def add_holding(
 ):
     try:
         row = await supabase_rest.upsert_holding(
-            _bearer(authorization), body.symbol, body.shares, body.cost_basis
+            _bearer(authorization), body.symbol, body.shares, body.cost_basis, body.currency
         )
     except Exception as exc:
         raise _handle_store_error(exc)

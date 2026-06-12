@@ -62,35 +62,52 @@ async def list_holdings(user_jwt: str) -> List[Dict[str, Any]]:
     """Return the authenticated user's holdings (RLS-scoped), newest first."""
     url = _base_url()
     params = {
-        "select": "id,symbol,shares,cost_basis,opened_at",
+        "select": "id,symbol,shares,cost_basis,currency,opened_at",
         "order": "opened_at.desc",
     }
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.get(url, headers=_headers(user_jwt), params=params)
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(url, headers=_headers(user_jwt), params=params)
+    except httpx.HTTPError as exc:
+        logger.error("[PORTFOLIO] list_holdings: network error contacting %s: %s", url, exc)
+        raise SupabaseRestError(0, f"Network error: {exc}") from exc
     if resp.status_code != 200:
+        logger.error(
+            "[PORTFOLIO] list_holdings: PostgREST returned HTTP %s from %s — "
+            "body: %s — check migration 0001/0002 applied and SUPABASE_URL/SUPABASE_ANON_KEY are correct.",
+            resp.status_code, url, _safe_body(resp),
+        )
         raise SupabaseRestError(resp.status_code, _safe_body(resp))
     data = resp.json()
     return data if isinstance(data, list) else []
 
 
 async def upsert_holding(
-    user_jwt: str, symbol: str, shares: float, cost_basis: float
+    user_jwt: str, symbol: str, shares: float, cost_basis: float, currency: str = "USD"
 ) -> Dict[str, Any]:
-    """Insert a holding, or replace shares/cost_basis if the user already holds it.
+    """Insert a holding, or replace shares/cost_basis/currency if the user already holds it.
 
     Relies on the `holdings_user_symbol_unique` constraint + PostgREST
     merge-duplicates upsert. RLS check (auth.uid() = user_id) enforces ownership.
     """
     url = _base_url()
-    payload = {"symbol": symbol, "shares": shares, "cost_basis": cost_basis}
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.post(
-            url,
-            headers=_headers(user_jwt, prefer="resolution=merge-duplicates,return=representation"),
-            params={"on_conflict": "user_id,symbol"},
-            json=payload,
-        )
+    payload = {"symbol": symbol, "shares": shares, "cost_basis": cost_basis, "currency": currency}
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(
+                url,
+                headers=_headers(user_jwt, prefer="resolution=merge-duplicates,return=representation"),
+                params={"on_conflict": "user_id,symbol"},
+                json=payload,
+            )
+    except httpx.HTTPError as exc:
+        logger.error("[PORTFOLIO] upsert_holding(%s): network error: %s", symbol, exc)
+        raise SupabaseRestError(0, f"Network error: {exc}") from exc
     if resp.status_code not in (200, 201):
+        logger.error(
+            "[PORTFOLIO] upsert_holding(%s): PostgREST returned HTTP %s — body: %s",
+            symbol, resp.status_code, _safe_body(resp),
+        )
         raise SupabaseRestError(resp.status_code, _safe_body(resp))
     rows = resp.json()
     return rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else {})
@@ -103,13 +120,21 @@ async def delete_holding(user_jwt: str, holding_id: str) -> bool:
     (wrong id, or another user's row that RLS hid).
     """
     url = _base_url()
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.delete(
-            url,
-            headers=_headers(user_jwt, prefer="return=representation"),
-            params={"id": f"eq.{holding_id}"},
-        )
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.delete(
+                url,
+                headers=_headers(user_jwt, prefer="return=representation"),
+                params={"id": f"eq.{holding_id}"},
+            )
+    except httpx.HTTPError as exc:
+        logger.error("[PORTFOLIO] delete_holding(%s): network error: %s", holding_id, exc)
+        raise SupabaseRestError(0, f"Network error: {exc}") from exc
     if resp.status_code not in (200, 204):
+        logger.error(
+            "[PORTFOLIO] delete_holding(%s): PostgREST returned HTTP %s — body: %s",
+            holding_id, resp.status_code, _safe_body(resp),
+        )
         raise SupabaseRestError(resp.status_code, _safe_body(resp))
     try:
         rows = resp.json()
