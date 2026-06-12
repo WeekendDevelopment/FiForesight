@@ -383,3 +383,39 @@ export interface PortfolioSummary {
   /** Symbols skipped because live data couldn't be resolved (degraded gracefully). */
   skipped:              string[];
 }
+
+// ── Alerts & Notifications (Feature 9) ───────────────────────────────────────
+// Users define alert rules; a scheduled evaluator checks them against live data
+// and notifies via Web Push (+ optional email).
+
+export type AlertRuleType =
+  | 'price_cross'
+  | 'rsi_threshold'
+  | 'pct_move'
+  | 'earnings_soon'
+  | 'forecast_breakout';
+
+export type AlertOperator = 'above' | 'below';
+
+/** A rule row from the Supabase `alert_rules` table (GET /alerts/rules). */
+export interface AlertRule {
+  id:          string;
+  symbol:      string;
+  type:        AlertRuleType;
+  operator:    AlertOperator | null;
+  threshold:   number | null;
+  active:      boolean;
+  last_fired:  string | null;
+  created_at:  string;
+}
+
+/** A fire-history row (GET /alerts/fires). */
+export interface AlertFire {
+  id:       string;
+  rule_id:  string;
+  symbol:   string;
+  type:     string;
+  message:  string;
+  value:    number | null;
+  fired_at: string;
+}
