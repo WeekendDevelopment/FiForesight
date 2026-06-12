@@ -28,7 +28,7 @@ AI-driven quantitative financial forecasting SaaS. Ticker lookup → ensemble ML
 ```
 FiForesight/
 ├── backend/
-│   ├── main.py                 # ~50-line entry point (lifespan + include_router × 4)
+│   ├── main.py                 # ~50-line entry point (lifespan + include_router × 9)
 │   ├── dependencies.py         # Service singletons shared across routers
 │   ├── routers/
 │   │   ├── predict.py          # /health /debug /predict /sparklines /compare
@@ -36,16 +36,20 @@ FiForesight/
 │   │   ├── trade.py            # /trade-setup /chat
 │   │   ├── market.py           # /dcf /options /ipo/calendar /earnings/calendar /sectors /briefing /orderbook
 │   │   ├── analytics.py        # /analytics/accuracy/{symbol} /analytics/sentiment/{symbol}
-│   │   └── portfolio.py        # /portfolio/holdings (GET/POST/DELETE) /portfolio/summary (auth-gated)
+│   │   ├── portfolio.py        # /portfolio/holdings (GET/POST/DELETE) /portfolio/summary (auth-gated)
+│   │   └── alerts.py           # /alerts/rules (CRUD) /alerts/fires /alerts/subscribe /alerts/evaluate [cron] (Feature 9)
 │   ├── config.py               # Env var loading (InfluxDB, Groq, SerpAPI, Supabase)
 │   ├── models.py               # Pydantic schemas + run_monte_carlo
 │   ├── services.py             # YFinanceService, InfluxService, SerpService, SentimentService, AnalystJuryService
 │   ├── supabase_rest.py        # RLS-scoped holdings CRUD via the caller's forwarded JWT (Feature 10)
+│   ├── alerts_store.py         # Alerts/fires/push-subs storage — user-JWT (RLS) + service-role (evaluator) (Feature 9)
+│   ├── alerts_evaluator.py     # Scheduled rule evaluator + daily digest (pure evaluate_rule + orchestrator) (Feature 9)
+│   ├── notifications.py        # Web Push (pywebpush/VAPID) + optional Resend email delivery (Feature 9)
 │   ├── jury_graph.py           # LangGraph StateGraph for parallel analyst fan-out
 │   ├── simulation_service.py   # Simulator "race" engine (suggest + performance) — NOT real holdings
 │   ├── portfolio_service.py    # Portfolio Manager summary (live P&L, sector alloc, HHI, forecast)
 │   ├── mcp_server.py           # FastMCP server — predict/sparklines/health as MCP tools
-│   ├── tests/                  # pytest harness — 144 tests, no network calls
+│   ├── tests/                  # pytest harness — 189 tests, no network calls
 │   └── newrelic.ini            # New Relic APM config
 ├── frontend/
 │   ├── app/
@@ -57,9 +61,11 @@ FiForesight/
 │   │   │   ├── analytics/accuracy/[symbol]/route.ts   # → /analytics/accuracy
 │   │   │   ├── analytics/sentiment/[symbol]/route.ts  # → /analytics/sentiment
 │   │   │   ├── simulation/{suggest,performance,state}/route.ts
-│   │   │   └── portfolio/{holdings,holdings/[id],summary}/route.ts  # → /portfolio/*
+│   │   │   ├── portfolio/{holdings,holdings/[id],summary}/route.ts  # → /portfolio/*
+│   │   │   └── alerts/{rules,rules/[id],fires,subscribe,unsubscribe,vapid-public-key}/route.ts  # → /alerts/*
 │   │   ├── (app)/insights/page.tsx           # Insights tab — accuracy + sentiment dashboard (Recharts)
 │   │   ├── (app)/portfolio/page.tsx          # "My Portfolio" tab — real holdings + live P&L (Feature 10)
+│   │   ├── (app)/alerts/page.tsx             # "Alerts" tab — rule builder + fires + Web Push (Feature 9)
 │   │   ├── simulation/page.tsx               # "Simulator" tab — backtest race vs S&P (NOT real holdings)
 │   │   ├── layout.tsx                        # Root layout (ClientProviders + New Relic)
 │   │   └── page.tsx                          # Main dashboard
@@ -103,7 +109,7 @@ cd frontend && pnpm run dev     # Next.js on :3000
 python -m uvicorn main:app --app-dir backend --host 0.0.0.0 --port 8000 --reload
 
 # Tests
-python -m pytest backend/tests/ -v   # 144 tests, ~7s
+python -m pytest backend/tests/ -v   # 189 tests, ~7s
 ruff check backend/                   # linter
 
 # Frontend
@@ -140,6 +146,18 @@ RATE_LIMIT_BACKTEST=5/minute
 RATE_LIMIT_READONLY=60/minute       # DCF, options, earnings, IPO, sectors, briefing, orderbook, analytics
 RATE_LIMIT_PORTFOLIO=30/minute          # Portfolio holdings CRUD (per user)
 RATE_LIMIT_PORTFOLIO_SUMMARY=15/minute  # Portfolio summary (yfinance fan-out, per user)
+
+# Alerts & Notifications (Feature 9)
+SUPABASE_SERVICE_ROLE_KEY=   # Evaluator only — bypasses RLS to read all users' rules. Never user-facing.
+CRON_SECRET=                 # Guards POST /alerts/evaluate + /alerts/digest (X-Cron-Secret). Fail-closed.
+ALERT_COOLDOWN_HOURS=6       # Min hours between re-fires of the same rule
+VAPID_PUBLIC_KEY=            # Web Push — `npx web-push generate-vapid-keys`
+VAPID_PRIVATE_KEY=
+VAPID_SUBJECT=mailto:alerts@fiforesight.duckdns.org
+ALERT_EMAIL_ENABLED=false    # Optional email fallback (Resend free tier); web-push works without it
+RESEND_API_KEY=
+ALERT_EMAIL_FROM=FiForesight Alerts <alerts@fiforesight.duckdns.org>
+RATE_LIMIT_ALERTS=30/minute  # Alerts rule CRUD + push subscribe (per user)
 ```
 
 Frontend `frontend/.env.local`:
@@ -195,6 +213,25 @@ Portfolio Manager flow (/portfolio page — "My Portfolio" tab, REAL holdings + 
   GET    /api/portfolio/summary        → live P&L per holding + totals, sector allocation,
                                          diversification score (HHI), portfolio forecast
                                          (yfinance fan-out, Redis-cached 15min, skips bad symbols)
+
+Alerts & Notifications flow (/alerts page — "Alerts" tab, auth-gated; Feature 9):
+  GET    /api/alerts/rules             → list user's rules (Supabase, RLS by JWT)
+  POST   /api/alerts/rules             → create a rule (validated per type)
+  PATCH  /api/alerts/rules/{id}        → toggle active / update threshold
+  DELETE /api/alerts/rules/{id}        → delete (ownership enforced by RLS)
+  GET    /api/alerts/fires             → recent fire history
+  GET    /api/alerts/vapid-public-key  → VAPID public key for the browser subscribe
+  POST   /api/alerts/subscribe         → store a Web-Push subscription (upsert on endpoint)
+  POST   /api/alerts/unsubscribe       → remove a Web-Push subscription
+
+  Scheduled evaluator (NO sleep loop — driven by an external scheduler):
+  POST /alerts/evaluate  [X-Cron-Secret] → every 15 min during market hours. Loads ALL active
+       rules (service-role, cross-user), groups by symbol (one fetch each), evaluates each rule
+       type (price_cross / rsi_threshold / pct_move / earnings_soon / forecast_breakout). On a
+       fire outside its 6h cooldown: records an alert_fire, stamps last_fired, and delivers a
+       Web Push (pywebpush/VAPID) + optional email (Resend). One bad symbol never aborts the batch.
+  POST /alerts/digest    [X-Cron-Secret] → once daily. Reuses /briefing market data + each user's
+       holdings movers, pushed/emailed to everyone with a push subscription.
 ```
 
 ---
@@ -226,7 +263,8 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 | Free IPO calendar (Nasdaq → EDGAR; FMP removed) | #231 |
 | Security hardening (rate limits, auth enforcement, CORS, input validation) | pending |
 | Forecast accuracy & sentiment dashboard (Insights tab) | #244 |
-| Portfolio Manager — real holdings + live P&L ("My Portfolio" tab) | pending |
+| Portfolio Manager — real holdings + live P&L ("My Portfolio" tab) | #249 |
+| Alerts & Notifications — rule builder + scheduled evaluator + Web Push ("Alerts" tab) | #254 |
 
 ---
 
@@ -253,6 +291,7 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 - **Backend router split** — `main.py` is now ~50 lines; all routes live in `backend/routers/`. Service singletons in `dependencies.py`.
 - **Supabase auth** — `frontend/lib/supabase.ts` + `frontend/contexts/AuthContext.tsx`. Falls back to placeholder strings if env vars not set (build succeeds without them).
 - **Portfolio Manager (Feature 10)** — the **"My Portfolio"** tab (`frontend/app/(app)/portfolio/page.tsx`, `/portfolio`) tracks a user's **real holdings + live P&L**. This is DISTINCT from the **"Simulator"** tab (`/simulation`, formerly mislabeled "Portfolio"), which is a backtest **race vs the S&P** — endpoints (`/portfolio/*` vs `/simulation/*`) and tab labels are kept clearly separate. Holdings live in the Supabase **`holdings`** table (`id, user_id, symbol, shares, cost_basis, opened_at`; `unique(user_id, symbol)`) with a single RLS "own rows" policy `auth.uid() = user_id` — migration at `supabase/migrations/0001_holdings.sql` (mirrors the watchlist pattern). All `/portfolio/*` endpoints (`routers/portfolio.py`) are **auth-gated via `require_user`** (401 anon). The backend reads/writes holdings through Supabase **PostgREST** (`supabase_rest.py`) forwarding the caller's **own JWT** as Bearer + `SUPABASE_ANON_KEY` as `apikey`, so RLS scopes every query — **no service-role key** (free-tier safe). `GET /portfolio/summary` (`portfolio_service.py`) fans out to yfinance per holding (`asyncio.gather`, per-call `wait_for`, semaphore 6), computing per-holding market value/P&L/weight + sector, totals, **sector allocation**, a **diversification score** (`(1 − Σwᵢ²)×100`, HHI-based 0–100), and a **portfolio forecast** = market-value-weighted mean of a lightweight per-holding trend signal (SMA20 vs price, SMA20 vs SMA50, ~1-mo momentum) — NOT the full Prophet/SARIMAX/RF ensemble or jury (too expensive per holding). A holding whose data can't be fetched is **skipped (reported in `skipped`), never 500s**. Summary is Redis-cached 15min per user, invalidated on mutation. **Out of scope v1**: stock splits, dividends, multi-currency — cost basis is shown as the user entered it.
+- **Alerts & Notifications (Feature 9)** — the **"Alerts"** tab (`frontend/app/(app)/alerts/page.tsx`, `/alerts`, auth-gated) lets users define rules of five types: **price_cross** (price above/below a level), **rsi_threshold** (14-period RSI above/below), **pct_move** (today's move ≥ %, optional up/down), **earnings_soon** (earnings within N days), **forecast_breakout** (price breaks the latest ensemble d1 high/low band). Rules + fire history + push subscriptions live in Supabase tables **`alert_rules`**, **`alert_fires`**, **`push_subscriptions`** (migrations `0003_alerts.sql` + `0004_push_subscriptions.sql`), each with a single RLS "own rows" policy on `auth.uid()`. User-facing CRUD (`routers/alerts.py`, all `require_user`) reads/writes via the caller's forwarded JWT through `alerts_store.py` (PostgREST + RLS — same model as holdings). **The scheduled evaluator is the one place that needs elevated access**: `alerts_evaluator.evaluate_alerts()` loads ALL active rules across users (service-role key, **bypasses RLS** — never used by a user request), groups by symbol (one yfinance/Influx fetch each), runs the pure `evaluate_rule()` per type, and on a fire outside its **`ALERT_COOLDOWN_HOURS`** (default 6h) window records an `alert_fire`, stamps `last_fired`, and delivers. Delivery (`notifications.py`): **Web Push** via `pywebpush` + a server **VAPID** key pair (free, no third-party — keys via `npx web-push generate-vapid-keys`; browser subscribes through a service worker at `frontend/public/sw.js`), plus an **optional** email fallback (Resend free tier, gated by `ALERT_EMAIL_ENABLED`). One bad symbol never aborts the batch (logged + continue). **Scheduling has NO sleep loop**: `POST /alerts/evaluate` (every 15 min) and `POST /alerts/digest` (once daily) are internal endpoints guarded by a shared **`X-Cron-Secret`** header (env `CRON_SECRET`, fail-closed → 503 when unset); drive them from a GitHub Actions cron, a Supabase scheduled Edge Function, or any cron+curl. Both also 503 without `SUPABASE_SERVICE_ROLE_KEY`. The daily digest reuses `/briefing` market data + each user's holdings movers.
 - **react-plotly.js exception** — `MonteCarloProbabilitySurface.tsx` is the only component using react-plotly.js (3D surface). All 2D charts remain Recharts.
 - `strict: false` in tsconfig.
 - pnpm workspace root has no source — all code in `frontend/` or `backend/`.

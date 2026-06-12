@@ -8,7 +8,7 @@ import {
 } from '@mui/material';
 import {
   BrainCircuit, Home, Search, BarChart2, Calendar, Rocket, LineChart,
-  Activity, Wallet, ChevronLeft, ChevronRight, Sun, Moon, LogIn, LogOut,
+  Activity, Wallet, Bell, ChevronLeft, ChevronRight, Sun, Moon, LogIn, LogOut,
 } from 'lucide-react';
 import { AppShellProvider, useAppShell } from '../../contexts/AppShellContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -35,6 +35,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Insights',     href: '/insights',   icon: Activity,  mobile: false },
   { label: 'Simulator',    href: '/simulation', icon: LineChart, mobile: false },
   { label: 'My Portfolio', href: '/portfolio',  icon: Wallet,    mobile: false },
+  { label: 'Alerts',       href: '/alerts',     icon: Bell,      mobile: false },
 ];
 
 const EXPANDED_WIDTH  = 220;
