@@ -19,9 +19,10 @@ import {
   Box, Paper, Stack, Typography, Table, TableBody, TableCell, TableHead, TableRow,
   TextField, Button, IconButton, Skeleton, Chip, Tooltip, useMediaQuery, Alert,
   Select, MenuItem, FormControl, InputLabel,
+  Dialog, DialogTitle, DialogContent, DialogActions,
 } from '@mui/material';
 import {
-  Wallet, Plus, Trash2, TrendingUp, TrendingDown, Minus, ShieldCheck,
+  Wallet, Plus, Trash2, Pencil, TrendingUp, TrendingDown, Minus, ShieldCheck,
 } from 'lucide-react';
 import {
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RTooltip,
@@ -99,6 +100,13 @@ export default function PortfolioPage() {
   const [adding,    setAdding]    = useState(false);
   const [deleting,  setDeleting]  = useState<string | null>(null);
 
+  // Edit dialog
+  const [editTarget,    setEditTarget]    = useState<PortfolioSummary['holdings'][number] | null>(null);
+  const [editShares,    setEditShares]    = useState('');
+  const [editCostBasis, setEditCostBasis] = useState('');
+  const [editCurrency,  setEditCurrency]  = useState('USD');
+  const [saving,        setSaving]        = useState(false);
+
   const load = useCallback(async (refresh = false) => {
     if (!token) return;
     setLoading(true);
@@ -145,6 +153,34 @@ export default function PortfolioPage() {
       setError(e instanceof Error ? e.message : 'Could not delete holding.');
     } finally {
       setDeleting(null);
+    }
+  };
+
+  const openEdit = (h: PortfolioSummary['holdings'][number]) => {
+    setEditTarget(h);
+    setEditShares(String(h.shares));
+    setEditCostBasis(String(h.costBasis));
+    setEditCurrency(h.currency ?? 'USD');
+  };
+
+  const handleEdit = async () => {
+    if (!editTarget) return;
+    const sh = Number(editShares);
+    const cb = Number(editCostBasis);
+    if (!Number.isFinite(sh) || sh <= 0 || !Number.isFinite(cb) || cb < 0) {
+      setError('Enter valid shares > 0 and cost basis ≥ 0.');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await addHolding(token, editTarget.symbol, sh, cb, editCurrency);
+      setEditTarget(null);
+      await load(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not update holding.');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -270,13 +306,20 @@ export default function PortfolioPage() {
                     {!isMobile && <TableCell align="right">{h.weightPct.toFixed(1)}%</TableCell>}
                     {!isMobile && <TableCell><Chip size="small" label={h.sector} variant="outlined" sx={{ fontSize: 10 }} /></TableCell>}
                     <TableCell align="right" onClick={e => e.stopPropagation()}>
-                      <Tooltip title="Remove holding">
-                        <span>
-                          <IconButton size="small" disabled={deleting === h.id} onClick={() => handleDelete(h.id)} aria-label={`Remove ${h.symbol}`}>
-                            <Trash2 size={15} />
+                      <Stack direction="row" justifyContent="flex-end" spacing={0.5}>
+                        <Tooltip title="Edit holding">
+                          <IconButton size="small" onClick={() => openEdit(h)} aria-label={`Edit ${h.symbol}`}>
+                            <Pencil size={14} />
                           </IconButton>
-                        </span>
-                      </Tooltip>
+                        </Tooltip>
+                        <Tooltip title="Remove holding">
+                          <span>
+                            <IconButton size="small" color="error" disabled={deleting === h.id} onClick={() => handleDelete(h.id)} aria-label={`Remove ${h.symbol}`}>
+                              <Trash2 size={14} />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      </Stack>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -318,6 +361,45 @@ export default function PortfolioPage() {
       )}
 
       <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
+
+      {/* Edit holding dialog */}
+      <Dialog open={!!editTarget} onClose={() => setEditTarget(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>
+          Edit {editTarget?.symbol}
+        </DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <TextField
+              label="Symbol" value={editTarget?.symbol ?? ''} disabled
+              size="small" fullWidth
+            />
+            <TextField
+              label="Shares" type="number" size="small" fullWidth
+              value={editShares} onChange={e => setEditShares(e.target.value)}
+              inputProps={{ min: 0, step: 'any' }}
+            />
+            <TextField
+              label="Cost basis / share" type="number" size="small" fullWidth
+              value={editCostBasis} onChange={e => setEditCostBasis(e.target.value)}
+              inputProps={{ min: 0, step: 'any' }}
+            />
+            <FormControl size="small" fullWidth>
+              <InputLabel>Currency</InputLabel>
+              <Select value={editCurrency} label="Currency" onChange={e => setEditCurrency(e.target.value)}>
+                {CURRENCIES.map(c => (
+                  <MenuItem key={c.code} value={c.code}>{c.label}</MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+          </Stack>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 2 }}>
+          <Button onClick={() => setEditTarget(null)} disabled={saving}>Cancel</Button>
+          <Button variant="contained" onClick={handleEdit} disabled={saving}>
+            {saving ? 'Saving…' : 'Save changes'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
