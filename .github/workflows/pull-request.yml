@@ -240,6 +240,7 @@ jobs:
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           SUPABASE_JWT_SECRET: ${{ secrets.SUPABASE_JWT_SECRET }}
           SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
           # SUPABASE_SERVICE_ROLE_KEY and CRON_SECRET intentionally omitted from
           # preview: the evaluator/digest endpoints fail-closed (503) without them,
           # which is the correct behaviour for PR preview environments.
