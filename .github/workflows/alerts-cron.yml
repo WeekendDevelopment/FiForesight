@@ -17,6 +17,8 @@ on:
           - evaluate
           - digest
 
+permissions: {}
+
 jobs:
   run-evaluator:
     runs-on: ubuntu-latest
