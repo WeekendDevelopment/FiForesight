@@ -13,11 +13,12 @@ Supabase, yfinance, and web-push are fully mocked; no network is required.
 """
 import asyncio
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import importlib as _il
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
@@ -33,7 +34,7 @@ _app = FastAPI()
 _app.state.limiter = limiter
 
 
-async def _rl_handler(req, exc: RateLimitExceeded) -> JSONResponse:
+async def _rl_handler(req: Request, exc: RateLimitExceeded) -> JSONResponse:
     return JSONResponse(status_code=429, content={"detail": "Too many requests — please slow down."})
 
 
@@ -122,11 +123,48 @@ def test_evaluate_503_when_service_role_missing() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Cron-secret gate on /alerts/digest (mirrors evaluate tests)
+# ---------------------------------------------------------------------------
+
+def test_digest_503_when_cron_secret_unset() -> None:
+    with patch.object(Config, "CRON_SECRET", ""):
+        assert client.post("/alerts/digest").status_code == 503
+
+
+def test_digest_403_without_header() -> None:
+    with patch.object(Config, "CRON_SECRET", "topsecret"):
+        assert client.post("/alerts/digest").status_code == 403
+
+
+def test_digest_403_with_wrong_header() -> None:
+    with patch.object(Config, "CRON_SECRET", "topsecret"):
+        resp = client.post("/alerts/digest", headers={"X-Cron-Secret": "nope"})
+        assert resp.status_code == 403
+
+
+def test_digest_200_with_correct_header() -> None:
+    summary = {"users": 0, "delivered": 0, "errors": 0}
+    with patch.object(Config, "CRON_SECRET", "topsecret"), \
+         patch.object(Config, "SUPABASE_SERVICE_ROLE_KEY", "svc-role"), \
+         patch.object(alerts.alerts_evaluator, "build_and_send_digest", new=AsyncMock(return_value=summary)):
+        resp = client.post("/alerts/digest", headers={"X-Cron-Secret": "topsecret"})
+    assert resp.status_code == 200
+    assert resp.json()["summary"] == summary
+
+
+def test_digest_503_when_service_role_missing() -> None:
+    with patch.object(Config, "CRON_SECRET", "topsecret"), \
+         patch.object(Config, "SUPABASE_SERVICE_ROLE_KEY", ""):
+        resp = client.post("/alerts/digest", headers={"X-Cron-Secret": "topsecret"})
+        assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
 # Pure rule evaluation — per type
 # ---------------------------------------------------------------------------
 
-def _rule(**kw):
-    base = {"id": "r1", "user_id": "u1", "symbol": "AAPL", "type": "price_cross",
+def _rule(**kw: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {"id": "r1", "user_id": "u1", "symbol": "AAPL", "type": "price_cross",
             "operator": None, "threshold": None, "last_fired": None}
     base.update(kw)
     return base

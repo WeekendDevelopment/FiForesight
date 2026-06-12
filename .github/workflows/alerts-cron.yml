@@ -4,8 +4,10 @@ name: Alerts Evaluator Cron
 # Digest runs once daily at 13:00 UTC (9am ET).
 on:
   schedule:
-    - cron: "*/15 13-20 * * 1-5"  # evaluator: every 15 min market hours
-    - cron: "0 13 * * 1-5"        # digest: 9am ET weekdays
+    - cron: "30,45 13 * * 1-5"    # evaluator: 9:30–9:59am ET (market open)
+    - cron: "*/15 14-20 * * 1-5"  # evaluator: 10am–4:59pm ET (core window)
+    - cron: "0 21 * * 1-5"        # evaluator: 5pm ET close tick
+    - cron: "0 13 * * 1-5"        # digest: 9am ET (before market open)
   workflow_dispatch:
     inputs:
       endpoint:
@@ -36,7 +38,11 @@ jobs:
 
       - name: POST /alerts/${{ steps.ep.outputs.path }}
         run: |
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+          HTTP_STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
+            --connect-timeout 5 \
+            --max-time 30 \
+            --retry 2 \
+            --retry-all-errors \
             -X POST \
             -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
             "https://fiforesight.duckdns.org/alerts/${{ steps.ep.outputs.path }}")

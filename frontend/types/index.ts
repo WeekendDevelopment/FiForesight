@@ -414,7 +414,7 @@ export interface AlertFire {
   id:       string;
   rule_id:  string;
   symbol:   string;
-  type:     string;
+  type:     AlertRuleType;
   message:  string;
   value:    number | null;
   fired_at: string;

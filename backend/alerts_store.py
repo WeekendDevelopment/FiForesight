@@ -38,15 +38,20 @@ _TIMEOUT = 8.0
 # ---------------------------------------------------------------------------
 
 def _rest_url(table: str) -> str:
-    if not Config.SUPABASE_URL or not Config.SUPABASE_ANON_KEY:
+    if not Config.SUPABASE_URL:
         raise SupabaseConfigError(
-            "Supabase is not configured (SUPABASE_URL / SUPABASE_ANON_KEY). "
+            "Supabase is not configured (SUPABASE_URL missing). "
             "Alerts require a Supabase project."
         )
     return f"{Config.SUPABASE_URL.rstrip('/')}/rest/v1/{table}"
 
 
 def _user_headers(user_jwt: str, *, prefer: Optional[str] = None) -> Dict[str, str]:
+    if not Config.SUPABASE_ANON_KEY:
+        raise SupabaseConfigError(
+            "Supabase is not configured (SUPABASE_ANON_KEY missing). "
+            "User-scoped alerts operations require the anon key."
+        )
     headers = {
         "apikey": Config.SUPABASE_ANON_KEY,
         "Authorization": f"Bearer {user_jwt}",

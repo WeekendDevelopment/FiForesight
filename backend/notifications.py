@@ -86,8 +86,14 @@ async def send_web_push(subscription: Dict[str, Any], title: str, body: str, url
     sub_info = {"endpoint": endpoint, "keys": {"p256dh": p256dh, "auth": auth_key}}
     payload = json.dumps({"title": title, "body": body, "url": url})
     try:
-        await asyncio.to_thread(_send_web_push_sync, sub_info, payload)
+        await asyncio.wait_for(
+            asyncio.to_thread(_send_web_push_sync, sub_info, payload),
+            timeout=12,
+        )
         return "sent"
+    except asyncio.TimeoutError:
+        logger.warning("[NOTIFY] web push timed out for endpoint %s", endpoint)
+        return "error"
     except WebPushException as exc:  # type: ignore[misc]
         status = getattr(getattr(exc, "response", None), "status_code", None)
         if status in (404, 410):

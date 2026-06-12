@@ -98,7 +98,28 @@ export default function AlertsPage() {
   }, [token]);
 
   useEffect(() => { if (token) load(); }, [token, load]);
-  useEffect(() => { isPushSubscribed().then(setPushOn).catch(() => {}); }, []);
+  // On mount / token change: check local subscription and re-register with the
+  // current user so the backend subscription stays linked after account switch.
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const localSubscribed = await isPushSubscribed();
+        if (cancelled) return;
+        if (localSubscribed) {
+          // Re-link the existing browser subscription to the current user.
+          try { await enablePushNotifications(token); } catch { /* ignore — best-effort */ }
+          if (!cancelled) setPushOn(true);
+        } else {
+          if (!cancelled) setPushOn(false);
+        }
+      } catch {
+        if (!cancelled) setPushOn(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
 
   // Reset operator sensibly when the rule type changes.
   useEffect(() => {

@@ -284,7 +284,10 @@ async def evaluate_alerts(yf_svc: Any, forecast_store: Any, *, now: Optional[dat
     for symbol, sym_rules in by_symbol.items():
         needed = {r.get("type") for r in sym_rules}
         try:
-            signals = await asyncio.to_thread(_fetch_symbol_signals, symbol, needed, yf_svc, forecast_store)
+            signals = await asyncio.wait_for(
+                asyncio.to_thread(_fetch_symbol_signals, symbol, needed, yf_svc, forecast_store),
+                timeout=20,
+            )
         except Exception as exc:
             logger.warning("[ALERTS] signal fetch failed for %s: %s — skipping its rules", symbol, exc)
             summary["errors"] += 1
@@ -346,7 +349,7 @@ async def _market_headline() -> str:
                 if pct is not None:
                     out.append({"label": label, "change_pct": pct})
             return out
-        indices = await asyncio.to_thread(_fetch)
+        indices = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=12)
     parts = [
         f"{i['label']} {i['change_pct']:+.2f}%"
         for i in (indices or [])
@@ -373,7 +376,7 @@ async def _user_movers_line(user_id: str, yf_svc: Any) -> str:
                 rows.append((s, pct))
         return rows
 
-    rows = await asyncio.to_thread(_movers)
+    rows = await asyncio.wait_for(asyncio.to_thread(_movers), timeout=12)
     if not rows:
         return ""
     rows.sort(key=lambda x: x[1])
@@ -390,8 +393,10 @@ async def build_and_send_digest(yf_svc: Any, *, now: Optional[datetime] = None) 
     try:
         subs = await alerts_store.admin_list_all_push_subscriptions()
     except Exception as exc:
-        logger.error("[ALERTS] digest: could not load subscriptions: %s", exc)
-        raise
+        logger.error("[ALERTS] digest: could not load subscriptions — skipping all recipients: %s", exc)
+        summary["errors"] += 1
+        logger.info("[ALERTS] digest complete (no recipients): %s", summary)
+        return summary
     user_ids = sorted({s.get("user_id") for s in subs if s.get("user_id")})
     summary["users"] = len(user_ids)
 

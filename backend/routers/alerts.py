@@ -172,7 +172,7 @@ async def list_rules(
     request: Request,
     user_id: str = Depends(require_user),
     authorization: str = Header(default=""),
-):
+) -> Dict[str, Any]:
     try:
         rules = await alerts_store.list_rules(_bearer(authorization))
     except Exception as exc:
@@ -187,7 +187,7 @@ async def create_rule(
     body: RuleCreate,
     user_id: str = Depends(require_user),
     authorization: str = Header(default=""),
-):
+) -> Dict[str, Any]:
     _validate_combo(body)
     try:
         rule = await alerts_store.create_rule(
@@ -206,7 +206,7 @@ async def update_rule(
     body: RuleUpdate,
     user_id: str = Depends(require_user),
     authorization: str = Header(default=""),
-):
+) -> Dict[str, Any]:
     if not _UUID_RE.match(rule_id):
         raise HTTPException(status_code=422, detail="Invalid rule id.")
     fields: Dict[str, Any] = {}
@@ -232,7 +232,7 @@ async def delete_rule(
     rule_id: str,
     user_id: str = Depends(require_user),
     authorization: str = Header(default=""),
-):
+) -> Dict[str, Any]:
     if not _UUID_RE.match(rule_id):
         raise HTTPException(status_code=422, detail="Invalid rule id.")
     try:
@@ -250,7 +250,7 @@ async def list_fires(
     request: Request,
     user_id: str = Depends(require_user),
     authorization: str = Header(default=""),
-):
+) -> Dict[str, Any]:
     try:
         fires = await alerts_store.list_fires(_bearer(authorization))
     except Exception as exc:
@@ -267,7 +267,7 @@ async def list_fires(
 async def vapid_public_key(
     request: Request,
     user_id: str = Depends(require_user),
-):
+) -> Dict[str, Any]:
     return {
         "public_key": Config.VAPID_PUBLIC_KEY or "",
         "configured": web_push_configured(),
@@ -281,7 +281,7 @@ async def subscribe(
     body: PushSubscription,
     user_id: str = Depends(require_user),
     authorization: str = Header(default=""),
-):
+) -> Dict[str, Any]:
     p256dh = body.keys.get("p256dh", "")
     auth_key = body.keys.get("auth", "")
     if not p256dh or not auth_key:
@@ -302,7 +302,7 @@ async def unsubscribe(
     body: Unsubscribe,
     user_id: str = Depends(require_user),
     authorization: str = Header(default=""),
-):
+) -> Dict[str, Any]:
     try:
         await alerts_store.delete_push_subscription(_bearer(authorization), body.endpoint)
     except Exception as exc:
@@ -328,7 +328,7 @@ def require_cron(x_cron_secret: str = Header(default="", alias="X-Cron-Secret"))
 
 
 @router.post("/alerts/evaluate")
-async def run_evaluator(request: Request, _ok: bool = Depends(require_cron)):
+async def run_evaluator(request: Request, _ok: bool = Depends(require_cron)) -> Dict[str, Any]:
     if not Config.SUPABASE_SERVICE_ROLE_KEY:
         raise HTTPException(status_code=503, detail="Evaluator requires SUPABASE_SERVICE_ROLE_KEY.")
     try:
@@ -339,7 +339,7 @@ async def run_evaluator(request: Request, _ok: bool = Depends(require_cron)):
 
 
 @router.post("/alerts/digest")
-async def run_digest(request: Request, _ok: bool = Depends(require_cron)):
+async def run_digest(request: Request, _ok: bool = Depends(require_cron)) -> Dict[str, Any]:
     if not Config.SUPABASE_SERVICE_ROLE_KEY:
         raise HTTPException(status_code=503, detail="Digest requires SUPABASE_SERVICE_ROLE_KEY.")
     try:
