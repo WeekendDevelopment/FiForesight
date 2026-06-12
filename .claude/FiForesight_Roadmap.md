@@ -125,16 +125,18 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 **Files:** `backend/routers/portfolio.py`, `backend/portfolio_service.py`, `backend/supabase_rest.py`, `supabase/migrations/0001_holdings.sql`, `frontend/app/(app)/portfolio/page.tsx`, `frontend/lib/holdings.ts`, `/api/portfolio/*` proxies, sidebar nav rename
 **Complexity:** Medium–High
 
-### Feature 9 · Alerts & Notifications *(do last)*
+### Feature 9 · Alerts & Notifications ✅ *SHIPPED (PR #PRNUM)*
 **Branch:** `feat/alerts-notifications`
 **Problem:** Engagement is pull-only; no proactive signals.
-- **Schema** — Supabase `alert_rules(id, user_id, symbol, type, operator, threshold, active, last_fired)`; types: price cross, RSI threshold, % move, earnings-tomorrow, forecast-breakout.
-- **Backend** — `GET/POST/DELETE /alerts/rules` (auth-gated); scheduled evaluator (cron/worker) checks rules against live data, records fires.
-- **Delivery** — web-push (free) and/or email via Supabase edge function; daily-briefing digest reuses `/briefing`.
-- **Frontend** — `/alerts` tab: rule builder UI, active rules list, fired history.
-- **Depends on:** F11 (auth) + ideally F10 (alert on holdings).
+- **Schema** — Supabase `alert_rules(id, user_id, symbol, type, operator, threshold, active, last_fired, created_at)` + `alert_fires` (fire log) + `push_subscriptions` (Web Push); types: `price_cross`, `rsi_threshold`, `pct_move`, `earnings_soon`, `forecast_breakout`. RLS `auth.uid() = user_id` (`supabase/migrations/0003_alerts.sql` + `0004_push_subscriptions.sql`).
+- **Backend CRUD** — `GET/POST/PATCH/DELETE /alerts/rules`, `GET /alerts/fires`, `POST /alerts/subscribe|unsubscribe`, `GET /alerts/vapid-public-key` — all auth-gated via `require_user`, reading/writing via the caller's forwarded JWT (RLS), through `alerts_store.py`.
+- **Evaluator** — `alerts_evaluator.evaluate_alerts()` loads all active rules **cross-user via the service-role key** (the one place RLS is bypassed; never user-facing), groups by symbol, runs a pure `evaluate_rule()` per type, fires outside a 6h cooldown (`ALERT_COOLDOWN_HOURS`), records a fire + stamps `last_fired`. One bad symbol never aborts the batch.
+- **Delivery** — Web Push via `pywebpush` + a server **VAPID** key pair (free, service worker at `frontend/public/sw.js`); optional Resend email fallback (`ALERT_EMAIL_ENABLED`). Daily digest (`/alerts/digest`) reuses `/briefing` + holdings movers.
+- **Scheduling** — NO sleep loop: internal `POST /alerts/evaluate` (15-min) + `/alerts/digest` (daily) guarded by an `X-Cron-Secret` header (`CRON_SECRET`, fail-closed). Driven by GitHub Actions cron / Supabase scheduled function / cron+curl.
+- **Frontend** — `/alerts` tab: adaptive rule builder, active-rules list (toggle/delete), fire history, "enable browser notifications" Web-Push flow; `lib/alerts.ts` + `/api/alerts/*` proxies.
+- **Tests** — `backend/tests/test_alerts.py` (CRUD auth 401, per-type firing logic, cooldown suppression, cron-secret rejection, bad-symbol resilience).
 
-**Files:** new `backend/routers/alerts.py` + worker, Supabase migration, `frontend/app/(app)/alerts/page.tsx`, proxies
+**Files:** `backend/routers/alerts.py`, `backend/alerts_store.py`, `backend/alerts_evaluator.py`, `backend/notifications.py`, `supabase/migrations/0003_alerts.sql` + `0004_push_subscriptions.sql`, `frontend/app/(app)/alerts/page.tsx`, `frontend/lib/alerts.ts`, `frontend/public/sw.js`, `/api/alerts/*` proxies, sidebar nav
 **Complexity:** High
 
 ---

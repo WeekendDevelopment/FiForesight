@@ -23,7 +23,8 @@
 11. [Setup & Running Guide (Windows-focused)](#11-setup--running-guide-windows-focused)
 12. [Security](#12-security)
 13. [Portfolio Manager (Feature 10)](#13-portfolio-manager-feature-10)
-14. [Glossary](#14-glossary)
+14. [Alerts & Notifications (Feature 9)](#14-alerts--notifications-feature-9)
+15. [Glossary](#15-glossary)
 
 ---
 
@@ -1722,7 +1723,125 @@ so Row-Level Security scopes every read/write to `auth.uid() = user_id`. Ownersh
 
 ---
 
-## 14. Glossary
+## 14. Alerts & Notifications (Feature 9)
+
+The **"Alerts"** tab (`/alerts`, auth-gated) lets users define alert **rules**. A scheduled backend **evaluator** checks them against live market data and, when one fires, records it and pushes a **Web Push** notification (with an optional email fallback). A once-daily **digest** reuses the `/briefing` market overview.
+
+This is the first feature with a **scheduled, cross-user** workload. User-facing CRUD keeps the holdings security model (caller's JWT + RLS), but the evaluator necessarily reads every user's rules at once — so it (and only it) uses the Supabase **service-role key**, behind a cron-secret-gated endpoint.
+
+### 14.1 Rule types
+
+| Type | Operator | Threshold | Fires when |
+|---|---|---|---|
+| `price_cross` | `above` / `below` (required) | price (required) | live price ≥ / ≤ the threshold |
+| `rsi_threshold` | `above` / `below` (required) | 0–100 (required) | 14-period RSI ≥ / ≤ the threshold |
+| `pct_move` | `above` (up) / `below` (down) / none (either) | percent > 0 (required) | today's move vs prev close passes the threshold |
+| `earnings_soon` | — | days 1–30 (optional, default 1) | next earnings date is within N days |
+| `forecast_breakout` | — | — | live price breaks the latest ensemble **d1 high/low** band (from `forecast_record`) |
+
+### 14.2 Supabase schema + migrations
+
+Two migrations: `supabase/migrations/0003_alerts.sql` (rules + fires) and `0004_push_subscriptions.sql`. All three tables carry a single RLS "own rows" policy on `auth.uid() = user_id`.
+
+```sql
+create table if not exists public.alert_rules (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references auth.users(id) on delete cascade default auth.uid(),
+  symbol     text not null,
+  type       text not null check (type in (
+    'price_cross','rsi_threshold','pct_move','earnings_soon','forecast_breakout')),
+  operator   text check (operator is null or operator in ('above','below')),
+  threshold  numeric,
+  active      boolean     not null default true,
+  last_fired  timestamptz,
+  created_at  timestamptz not null default now()
+);
+alter table public.alert_rules enable row level security;
+create policy "own rules" on public.alert_rules
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+
+create table if not exists public.alert_fires (
+  id        uuid primary key default gen_random_uuid(),
+  rule_id   uuid not null references public.alert_rules(id) on delete cascade,
+  user_id   uuid not null references auth.users(id) on delete cascade default auth.uid(),
+  symbol    text not null, type text not null, message text not null,
+  value     numeric, fired_at timestamptz not null default now()
+);
+alter table public.alert_fires enable row level security;
+create policy "own fires read"   on public.alert_fires for select using (auth.uid() = user_id);
+create policy "own fires insert" on public.alert_fires for insert with check (auth.uid() = user_id);
+
+create table if not exists public.push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade default auth.uid(),
+  endpoint text not null, p256dh text not null, auth text not null,
+  created_at timestamptz not null default now(),
+  constraint push_subscriptions_endpoint_unique unique (endpoint)
+);
+alter table public.push_subscriptions enable row level security;
+create policy "own push subscriptions" on public.push_subscriptions
+  for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+```
+
+### 14.3 Auth + data access (two modes)
+
+- **User mode (CRUD)** — every `/alerts/*` user endpoint is gated by `require_user` (HTTP **401** without a valid Bearer token). `backend/alerts_store.py` reaches Supabase PostgREST with `apikey: <SUPABASE_ANON_KEY>` + `Authorization: Bearer <caller's own JWT>`, so RLS scopes all access to the owner — identical to the holdings model, **no service-role key**.
+- **Service-role mode (evaluator)** — the scheduled evaluator must read **all users'** active rules and write fires on their behalf, which no single user JWT can authorise. The `admin_*` functions in `alerts_store.py` use `SUPABASE_SERVICE_ROLE_KEY` (which **bypasses RLS**). They run **only** inside the cron-secret-gated `/alerts/evaluate` + `/alerts/digest` endpoints — never from a user request, never sent to the browser.
+
+### 14.4 API contracts
+
+| Method | Path | Auth | Body / Params | Response |
+|---|---|---|---|---|
+| `GET` | `/alerts/rules` | Required (JWT) | — | `{ "rules": [ … ] }` |
+| `POST` | `/alerts/rules` | Required (JWT) | `{ symbol, type, operator?, threshold? }` | `{ "rule": { … } }` |
+| `PATCH` | `/alerts/rules/{id}` | Required (JWT) | `{ active?, threshold? }` | `{ "rule": { … } }` / **404** |
+| `DELETE` | `/alerts/rules/{id}` | Required (JWT) | path `id` (uuid) | `{ "deleted": true, "id" }` / **404** |
+| `GET` | `/alerts/fires` | Required (JWT) | — | `{ "fires": [ … ] }` |
+| `GET` | `/alerts/vapid-public-key` | Required (JWT) | — | `{ "public_key", "configured" }` |
+| `POST` | `/alerts/subscribe` | Required (JWT) | `{ endpoint, keys: { p256dh, auth } }` | `{ "subscribed": true, "id" }` |
+| `POST` | `/alerts/unsubscribe` | Required (JWT) | `{ endpoint }` | `{ "unsubscribed": true }` |
+| `POST` | `/alerts/evaluate` | `X-Cron-Secret` | — | `{ "ok": true, "summary": { … } }` |
+| `POST` | `/alerts/digest` | `X-Cron-Secret` | — | `{ "ok": true, "summary": { … } }` |
+
+**Validation** (`POST /alerts/rules`): `symbol` matches `[A-Za-z0-9.\-:]{1,15}`; type ⇄ operator ⇄ threshold combinations are enforced per the table in §14.1 (otherwise HTTP 422). `/alerts/evaluate` + `/alerts/digest` return **503** when `CRON_SECRET` (or `SUPABASE_SERVICE_ROLE_KEY`) is unset, and **403** on a missing/incorrect `X-Cron-Secret` (constant-time compare).
+
+### 14.5 The evaluator (`alerts_evaluator.py`)
+
+`evaluate_alerts()`:
+1. Loads all **active** rules across users (service-role) and **groups by symbol** so each symbol's live data (price, prev close, RSI, next-earnings date, latest forecast band) is fetched **once**, in a worker thread.
+2. Runs the pure, side-effect-free **`evaluate_rule(rule, signals)`** per rule → `(fired, message, value)`. A missing signal degrades to "not fired", never raises.
+3. On a fire **outside the cooldown** (`ALERT_COOLDOWN_HOURS`, default 6h — prevents a persistently-true condition from notifying every run): records an `alert_fire`, stamps `last_fired`, and delivers notifications.
+4. **Defensive by symbol** — one bad/halted ticker is logged and skipped; the rest of the batch still runs. One rule's failure never aborts the others. Returns a summary `{ rules_checked, fired, symbols, errors, skipped_cooldown }`.
+
+### 14.6 Scheduling & delivery
+
+- **No sleep loop.** `POST /alerts/evaluate` (every 15 min during market hours) and `POST /alerts/digest` (once daily) are internal endpoints protected by a shared `X-Cron-Secret` header (env `CRON_SECRET`). Drive them from any scheduler — a **GitHub Actions** cron, a **Supabase scheduled Edge Function**, or a cron + `curl`:
+
+  ```yaml
+  # .github/workflows/alerts-cron.yml (add manually — needs the `workflow` scope)
+  on:
+    schedule:
+      - cron: '*/15 13-21 * * 1-5'   # every 15 min, ~US market hours (UTC)
+  jobs:
+    evaluate:
+      runs-on: ubuntu-latest
+      steps:
+        - run: |
+            curl -fsS -X POST "$BACKEND_URL/alerts/evaluate" \
+              -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}"
+  ```
+
+- **Web Push (primary, free).** `notifications.py` sends encrypted push via `pywebpush` + a server **VAPID** key pair (generate once with `npx web-push generate-vapid-keys`). The browser subscribes through the service worker at `frontend/public/sw.js`; the public key is served by `GET /alerts/vapid-public-key`. A subscription that returns 404/410 (expired) is auto-deleted. When VAPID keys aren't set, push is skipped and fires are still recorded.
+- **Email (optional fallback).** Gated behind `ALERT_EMAIL_ENABLED=true` + `RESEND_API_KEY` (Resend free tier). The feature is fully functional **web-push-only**; email is best-effort and never blocks.
+- **Daily digest.** Reuses the cached `/briefing` market overview plus each user's holdings movers, delivered to everyone with a push subscription.
+
+### 14.7 Frontend
+
+`frontend/app/(app)/alerts/page.tsx` — signed-out users see an `AuthGate`. Signed-in users get: an **"enable browser notifications"** banner (requests Notification permission → registers `sw.js` → subscribes with the VAPID key → POSTs the subscription), an **adaptive rule builder** (inputs change with the chosen type — e.g. `price_cross` shows above/below + price; `earnings_soon` shows a days field; `forecast_breakout` shows none), the **active-rules list** with an active/paused toggle + delete, and the **fire history**. Data flows through `frontend/lib/alerts.ts` → `/api/alerts/*` proxies (which forward `Authorization`) → the backend.
+
+---
+
+## 15. Glossary
 
 **Ask the expert first** — plain-English definitions for the terms used throughout this document.
 
