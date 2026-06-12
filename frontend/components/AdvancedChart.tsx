@@ -64,6 +64,7 @@ interface Props {
   resistance?: number[];
   intraday?: boolean;   // show HH:MM on the time axis (1D/5D/1M ranges)
   showVwap?: boolean;   // dashed VWAP overlay (intraday ranges only)
+  priceHeight?: number; // height of the main price pane in px (default 380)
 }
 
 /**
@@ -127,6 +128,7 @@ export default function AdvancedChart({
   resistance = [],
   intraday = false,
   showVwap = false,
+  priceHeight = 380,
 }: Props) {
   const priceRef   = useRef<HTMLDivElement>(null);
   const volumeRef  = useRef<HTMLDivElement>(null);
@@ -388,7 +390,7 @@ export default function AdvancedChart({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
-      <div style={{ position: 'relative', height: 380, border: paneBorder, borderRadius: 8, overflow: 'hidden' }}>
+      <div style={{ position: 'relative', height: priceHeight, border: paneBorder, borderRadius: 8, overflow: 'hidden' }}>
         <span style={labelStyle}>Price</span>
         <div ref={priceRef} style={{ position: 'absolute', inset: 0 }} />
       </div>

@@ -48,7 +48,7 @@ export default function DCFCard({ dcf, isDark, primaryColor }: Props) {
         </Stack>
 
         {/* 3-scenario grid */}
-        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 1.5, mb: 1.5 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr 1fr' }, gap: 1.5, mb: 1.5 }}>
           {SCENARIOS.map(({ key, label, color }) => {
             const s = dcf[key];
             return (

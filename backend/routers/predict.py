@@ -776,21 +776,117 @@ async def health():
     return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
+def _fetch_intraday_bars(symbol: str) -> dict:
+    """Fetch 1-day 5-min OHLCV for symbol; return {price, change_pct, bars}.
+
+    Runs synchronously — call via asyncio.to_thread.
+    Strips pre/post-market bars (keeps 09:30–16:00 ET only).
+    Returns {} on any failure so callers can skip gracefully.
+    """
+    import yfinance as _yf
+
+    try:
+        df = _yf.download(
+            symbol, period="1d", interval="5m",
+            progress=False, auto_adjust=True, timeout=10,
+        )
+        if df is None or df.empty:
+            return {}
+
+        # Flatten MultiIndex columns if present (yfinance ≥ 0.2.38)
+        if hasattr(df.columns, "levels"):
+            df.columns = df.columns.get_level_values(0)
+
+        # Strip pre/post-market: keep 09:30–16:00 ET
+        idx = df.index
+        if idx.tz is None:
+            idx = idx.tz_localize("UTC")
+        idx_et = idx.tz_convert("America/New_York")
+        mask = (
+            ((idx_et.hour == 9)  & (idx_et.minute >= 30)) |
+            ((idx_et.hour > 9)   & (idx_et.hour < 16))    |
+            ((idx_et.hour == 16) & (idx_et.minute == 0))
+        )
+        df = df[mask][:78]  # max 78 bars (full trading day)
+
+        if df.empty:
+            return {}
+
+        close_col = "Close" if "Close" in df.columns else "close"
+        closes_s  = df[close_col].dropna()
+        if len(closes_s) < 2:
+            return {}
+
+        first_close = float(closes_s.iloc[0])
+        last_close  = float(closes_s.iloc[-1])
+        change_pct  = ((last_close - first_close) / first_close * 100) if first_close else 0.0
+
+        bars = [
+            {"t": ts.strftime("%Y-%m-%dT%H:%M:%S"), "c": round(float(v), 4)}
+            for ts, v in zip(
+                closes_s.index.tz_convert("UTC").tz_localize(None),
+                closes_s,
+            )
+        ]
+        return {"price": round(last_close, 4), "change_pct": round(change_pct, 4), "bars": bars}
+    except Exception as exc:
+        logger.debug("[sparklines] _fetch_intraday_bars(%s) error: %s", symbol, exc)
+        return {}
+
+
 @router.get("/sparklines")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def sparklines(request: Request, tickers: str):
-    """Return last-5-close prices for a comma-separated list of tickers."""
-    symbols = [t.strip().upper() for t in tickers.split(",") if t.strip()][:18]
-    result: Dict[str, List[float]] = {}
-    for sym in symbols:
-        try:
-            closes = await asyncio.to_thread(yf_svc.fetch_history, sym, "7d")
-            if closes is not None and not closes.empty:
-                vals = closes["Close"].dropna().tolist()[-5:]
-                result[sym] = [round(float(v), 2) for v in vals]
-        except Exception as e:
-            logger.warning("[sparklines] %s fetch failed: %s", sym, e, exc_info=True)
-    return result
+async def sparklines(request: Request, tickers: str = "", extra: str = ""):
+    """Return intraday 1d/5m bar data for trending tickers + optional extra symbols.
+
+    Query params:
+      tickers — comma-separated base list (legacy; kept for backwards compat)
+      extra   — comma-separated additional symbols (frontend appends watchlist here)
+
+    Response per symbol:
+      { symbol, price, change_pct, bars: [{t, c}] }
+
+    Partial failures are skipped silently; the rest still return.
+    Each symbol is cached individually for 5 minutes to avoid redundant yfinance calls.
+    """
+    # Build deduplicated symbol list (base + extras, max 24)
+    base   = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    extras = [t.strip().upper() for t in extra.split(",") if t.strip()]
+    seen: set = set()
+    symbols: List[str] = []
+    for s in base + extras:
+        if s and s not in seen:
+            seen.add(s)
+            symbols.append(s)
+    symbols = symbols[:24]
+
+    _SPARKLINE_TTL = 300  # 5 minutes
+
+    async def _get_one(sym: str) -> Optional[dict]:
+        cache_key = f"sparkline:{sym}"
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            return cached
+        data = await asyncio.wait_for(
+            asyncio.to_thread(_fetch_intraday_bars, sym),
+            timeout=10.0,
+        )
+        if data:
+            payload = {"symbol": sym, **data}
+            await cache_set(cache_key, payload, ttl_seconds=_SPARKLINE_TTL)
+            return payload
+        return None
+
+    tasks = [asyncio.create_task(_get_one(s)) for s in symbols]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    output: List[dict] = []
+    for sym, res in zip(symbols, results):
+        if isinstance(res, Exception):
+            logger.warning("[sparklines] %s failed: %s", sym, res)
+        elif res is not None:
+            output.append(res)
+    return output
 
 
 @router.get("/debug")

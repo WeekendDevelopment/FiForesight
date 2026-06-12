@@ -37,11 +37,12 @@ FiForesight/
 │   │   ├── market.py           # /dcf /options /ipo/calendar /earnings/calendar /sectors /briefing /orderbook
 │   │   ├── analytics.py        # /analytics/accuracy/{symbol} /analytics/sentiment/{symbol}
 │   │   ├── portfolio.py        # /portfolio/holdings (GET/POST/DELETE) /portfolio/summary (auth-gated)
-│   │   └── alerts.py           # /alerts/rules (CRUD) /alerts/fires /alerts/subscribe /alerts/evaluate [cron] (Feature 9)
+│   │   ├── alerts.py           # /alerts/rules (CRUD) /alerts/fires /alerts/subscribe /alerts/evaluate [cron] (Feature 9)
+│   │   └── watchlist.py        # /watchlist (GET/POST/DELETE) — Feature 13
 │   ├── config.py               # Env var loading (InfluxDB, Groq, SerpAPI, Supabase)
 │   ├── models.py               # Pydantic schemas + run_monte_carlo
 │   ├── services.py             # YFinanceService, InfluxService, SerpService, SentimentService, AnalystJuryService
-│   ├── supabase_rest.py        # RLS-scoped holdings CRUD via the caller's forwarded JWT (Feature 10)
+│   ├── supabase_rest.py        # RLS-scoped holdings + watchlist CRUD via caller's forwarded JWT
 │   ├── alerts_store.py         # Alerts/fires/push-subs storage — user-JWT (RLS) + service-role (evaluator) (Feature 9)
 │   ├── alerts_evaluator.py     # Scheduled rule evaluator + daily digest (pure evaluate_rule + orchestrator) (Feature 9)
 │   ├── notifications.py        # Web Push (pywebpush/VAPID) + optional Resend email delivery (Feature 9)
@@ -62,17 +63,18 @@ FiForesight/
 │   │   │   ├── analytics/sentiment/[symbol]/route.ts  # → /analytics/sentiment
 │   │   │   ├── simulation/{suggest,performance,state}/route.ts
 │   │   │   ├── portfolio/{holdings,holdings/[id],summary}/route.ts  # → /portfolio/*
-│   │   │   └── alerts/{rules,rules/[id],fires,subscribe,unsubscribe,vapid-public-key}/route.ts  # → /alerts/*
+│   │   │   ├── alerts/{rules,rules/[id],fires,subscribe,unsubscribe,vapid-public-key}/route.ts  # → /alerts/*
+│   │   │   └── watchlist/{route.ts,[symbol]/route.ts}  # → /watchlist (Feature 13)
 │   │   ├── (app)/insights/page.tsx           # Insights tab — accuracy + sentiment dashboard (Recharts)
 │   │   ├── (app)/portfolio/page.tsx          # "My Portfolio" tab — real holdings + live P&L (Feature 10)
 │   │   ├── (app)/alerts/page.tsx             # "Alerts" tab — rule builder + fires + Web Push (Feature 9)
 │   │   ├── simulation/page.tsx               # "Simulator" tab — backtest race vs S&P (NOT real holdings)
-│   │   ├── layout.tsx                        # Root layout (ClientProviders + New Relic)
+│   │   ├── layout.tsx                        # Root layout + sidebar WatchlistPanel + MobileWatchlistBar (F13)
 │   │   └── page.tsx                          # Main dashboard
 │   ├── components/
 │   │   ├── AnalystJuryPanel.tsx              # 3-analyst verdict cards + consensus badge
 │   │   ├── AuthModal.tsx                     # Supabase sign-in / sign-up MUI dialog
-│   │   ├── ClientProviders.tsx               # 'use client' wrapper for AuthProvider
+│   │   ├── ClientProviders.tsx               # 'use client' wrapper (AuthProvider + WatchlistProvider)
 │   │   ├── DCFCard.tsx                       # 3-scenario DCF valuation (bear/base/bull)
 │   │   ├── FundamentalsPanel.tsx             # Extended metrics panel
 │   │   ├── MonteCarloFanChart.tsx            # P10/P50/P90 fan chart (Recharts)
@@ -84,8 +86,11 @@ FiForesight/
 │   │   ├── TradeSetupCard.tsx                # Entry/stop/targets + position sizing row
 │   │   └── TrendingSparklines.tsx
 │   ├── contexts/AuthContext.tsx              # AuthProvider + useAuth (Supabase session)
+│   ├── contexts/WatchlistContext.tsx         # WatchlistProvider + useWatchlistContext (Feature 13)
+│   ├── hooks/useWatchlist.ts                 # Thin wrapper over WatchlistContext (backward-compat API)
 │   ├── lib/supabase.ts                       # createClient with env-var fallbacks
-│   ├── lib/holdings.ts                        # Portfolio holdings client → /api/portfolio proxies
+│   ├── lib/holdings.ts                       # Portfolio holdings client → /api/portfolio proxies
+│   ├── lib/watchlist.ts                      # Watchlist client → /api/watchlist proxies (Feature 13)
 │   └── ...config files
 ├── .claude/
 │   └── FiForesight_Roadmap.md     # Source of truth for planned work
@@ -232,6 +237,19 @@ Alerts & Notifications flow (/alerts page — "Alerts" tab, auth-gated; Feature 
        Web Push (pywebpush/VAPID) + optional email (Resend). One bad symbol never aborts the batch.
   POST /alerts/digest    [X-Cron-Secret] → once daily. Reuses /briefing market data + each user's
        holdings movers, pushed/emailed to everyone with a push subscription.
+
+Watchlist flow (Feature 13 — auth-gated writes, anon read = []):
+  GET    /api/watchlist        → list saved symbols [{id, symbol, added_at}]; [] for anon
+  POST   /api/watchlist        → add symbol (upsert; no 409 on duplicate); auth required
+  DELETE /api/watchlist/{sym}  → remove symbol; 204 success, 404 not found; auth required
+  (backed by Supabase `watchlists` table with RLS `auth.uid() = user_id`; GET Redis-cached 60s per user)
+
+Sparklines intraday flow (Feature 13 — updated shape):
+  GET /api/sparklines?tickers=AAPL,MSFT&extra=NVDA
+    → List[{symbol, price, change_pct, bars: [{t, c}]}]
+    → fetches yfinance 1d/5m per symbol; strips pre/post-market (09:30–16:00 ET)
+    → per-symbol Redis cache 5min; partial failures skipped (other symbols still returned)
+    → ?extra= merges watchlist symbols; deduplication; max 24 symbols total
 ```
 
 ---
@@ -261,10 +279,11 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 | Router split (main.py → routers/) | #195 |
 | IPO tracker tab | #229 |
 | Free IPO calendar (Nasdaq → EDGAR; FMP removed) | #231 |
-| Security hardening (rate limits, auth enforcement, CORS, input validation) | pending |
+| Security hardening (rate limits, auth enforcement, CORS, input validation) | #235 |
 | Forecast accuracy & sentiment dashboard (Insights tab) | #244 |
 | Portfolio Manager — real holdings + live P&L ("My Portfolio" tab) | #249 |
 | Alerts & Notifications — rule builder + scheduled evaluator + Web Push ("Alerts" tab) | #254 |
+| Watchlist persistence + intraday sparklines + responsive design (F13) | pending |
 
 ---
 
@@ -298,4 +317,7 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 - Deploys: PRs → preview (`fiforesight-preview.duckdns.org`), main → prod (`fiforesight.duckdns.org` + Koyeb).
 - `/compare` frontend route exists; backend endpoint is implemented in `routers/predict.py`.
 - **IPO calendar** (`GET /ipo/calendar` in `market.py`) — **no API key**. Free **Nasdaq** calendar (`api.nasdaq.com/api/ipo/calendar`, needs a browser User-Agent; the default) → **SEC EDGAR** S-1 search (keyless last resort, recent filings only, no upcoming). Response carries `source: "nasdaq"|"edgar"`. `?refresh=true` bypasses the 4h Redis cache. Nasdaq dedup is upcoming-first (a scheduled deal also appears in priced/withdrawn tables). FMP was dropped — it retired its *free* IPO calendar on 2025-08-31.
+- **Watchlist (Feature 13)** — `watchlists` Supabase table (`id, user_id, symbol, added_at`; `unique(user_id, symbol)`); RLS `auth.uid() = user_id`; migration at `supabase/migrations/0006_watchlist.sql`. Router at `backend/routers/watchlist.py`. GET is public (anon → `[]`); POST/DELETE are `require_user`-gated. Same PostgREST forwarding pattern as holdings — caller's JWT + anon key, no service-role. Backend Redis caches GET 60s per user; invalidated on write. Frontend: `WatchlistContext` (`frontend/contexts/WatchlistContext.tsx`) is the source of truth — wraps `AuthProvider` in `ClientProviders.tsx`, fetches on auth-state change, exposes `{watchlist, isLoading, isWatched, add, remove, reload}`. `frontend/hooks/useWatchlist.ts` is a thin backward-compat wrapper over `useWatchlistContext()`. `lib/watchlist.ts` was rewritten to proxy through `/api/watchlist*` (NOT direct Supabase SDK calls). The sidebar shows a collapsible **Watchlist** section below nav items; mobile gets a fixed bottom chip bar. The old `watchlist` (singular) Supabase table from `AuthContext` groundwork is superseded by `watchlists` (plural) via backend proxy.
+- **Intraday sparklines (Feature 13)** — `/sparklines` response shape changed from `Dict[str, List[float]]` (old flat prices) to `List[{symbol, price, change_pct, bars: [{t, c}]}]`. `TrendingSparklines` now accepts `tickers: string[]` (not `{symbol}[]`). The `?extra=` param appends watchlist symbols to the base list; deduplicated to max 24. Each symbol cached 5min in Redis independently. `_fetch_intraday_bars` strips pre/post-market (keeps 09:30–16:00 ET via tz_convert), returns `{}` on any failure.
+- **Responsive design (Feature 13)** — breakpoints: 320px (xs, mobile), 768px (sm, tablet), 1280px (md, desktop), 2560px (4K). Key fixes: PriceChart height 220/300/400px via `useMediaQuery`; DCFCard + TradeSetupCard 3-column grids stack on xs; FundamentalsPanel grid xs:6/sm:4/md:3; Earnings/IPO responsive CSS grid; sidebar `maxWidth: 280` cap at 4K; Shell content `maxWidth: 1600` for 4K; MobileNav tap targets `minHeight: 44`. MorningBriefingPanel + SectorHeatmap use `overflowX: auto` / `flexWrap: wrap` — fine at 320px. OptionsChainPanel table has `overflowX: auto` wrapper. Portfolio table hides columns on mobile via `isMobile` (`useMediaQuery`).
 - **Security model** — `dependencies.py` holds the `limiter` singleton and all auth helpers. `require_user` dependency raises HTTP 401 when no valid Bearer token is present; applied to `/trade-setup` and `/jury/reanalyze`. `/predict` uses a single rate limit keyed by user ID (authed) or IP (anon) via `_user_rate_key`. `/chat` message is capped at 500 chars with control-char sanitization on all context values. CORS is restricted to `ALLOWED_ORIGINS`. Symbol inputs are validated with `[A-Za-z0-9.\-:]{1,15}` on `/predict`, `/dcf/{symbol}`, `/options/{symbol}`, and history. JWT verification picks the verifier by the token's `alg`: **ES256/RS256** (Supabase's default signing-key tokens) are verified against the project **JWKS** (`SUPABASE_URL`, or `SUPABASE_JWKS_URL`); legacy **HS256** tokens use `SUPABASE_JWT_SECRET`. JWKS-only (ES256) is a valid secure production config — the shared secret is not required when a JWKS URL is set. The backend fails closed when **neither** a JWKS URL nor a secret is configured (or decodes unsigned only when `ALLOW_INSECURE_JWT=true`, dev-only; logged at startup). All frontend auth API routes forward the `Authorization` header.

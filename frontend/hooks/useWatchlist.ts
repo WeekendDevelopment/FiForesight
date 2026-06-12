@@ -1,60 +1,44 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { useAuth } from '../contexts/AuthContext';
-import { fetchWatchlist, addToWatchlist, removeFromWatchlist } from '../lib/watchlist';
+import { useState, useCallback } from 'react';
+import { useWatchlistContext } from '../contexts/WatchlistContext';
 
+/**
+ * Per-symbol watchlist hook — thin wrapper around WatchlistContext that
+ * exposes the star-button API used by the analysis page.
+ *
+ * `currentSymbol` is optional; when provided, `currentIsSaved` reflects
+ * whether that ticker is currently in the watchlist.
+ */
 export function useWatchlist(currentSymbol?: string) {
-  const { user } = useAuth();
-  const [watchlist, setWatchlist]   = useState<string[]>([]);
-  const [loading, setLoading]       = useState(false);
-  const [toggling, setToggling]     = useState(false);
-  const loadSeqRef                  = useRef(0);
+  const { watchlist, isLoading, isWatched, add, remove } = useWatchlistContext();
+  const [toggling, setToggling] = useState(false);
 
-  const load = useCallback(async () => {
-    const seq = ++loadSeqRef.current;
-    if (!user) { setWatchlist([]); setLoading(false); return; }
-    setLoading(true);
-    try {
-      const rows = await fetchWatchlist(user.id);
-      if (seq === loadSeqRef.current) setWatchlist(rows);
-    } catch {
-      // non-fatal — watchlist feature silently unavailable if table not set up
-    } finally {
-      if (seq === loadSeqRef.current) setLoading(false);
-    }
-  }, [user]);
-
-  useEffect(() => { void load(); }, [load]);
-
-  const isSaved = (symbol: string) =>
-    watchlist.includes(symbol.toUpperCase());
-
-  async function toggle(symbol: string) {
-    if (!user) return;
-    const sym = symbol.toUpperCase();
+  const toggle = useCallback(async (symbol: string) => {
     setToggling(true);
     try {
-      if (isSaved(sym)) {
-        await removeFromWatchlist(user.id, sym);
-        setWatchlist(prev => prev.filter(s => s !== sym));
+      if (isWatched(symbol)) {
+        await remove(symbol);
       } else {
-        await addToWatchlist(user.id, sym);
-        setWatchlist(prev => [sym, ...prev]);
+        await add(symbol);
       }
-    } catch {
-      // non-fatal
     } finally {
       setToggling(false);
     }
-  }
+  }, [isWatched, add, remove]);
 
   return {
+    /** Full WatchlistItem list (id, symbol, added_at). */
     watchlist,
-    loading,
+    /** True while the initial list is loading. */
+    loading: isLoading,
+    /** True while an add/remove is in-flight for the toggled symbol. */
     toggling,
-    isSaved,
+    /** Returns true when the given symbol is in the watchlist. */
+    isSaved: isWatched,
+    /** Toggle add/remove for the given symbol. */
     toggle,
-    currentIsSaved: currentSymbol ? isSaved(currentSymbol) : false,
+    /** Whether the `currentSymbol` prop is currently saved. */
+    currentIsSaved: currentSymbol ? isWatched(currentSymbol) : false,
   };
 }

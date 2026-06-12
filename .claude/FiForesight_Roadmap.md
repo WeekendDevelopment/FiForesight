@@ -1,7 +1,7 @@
 # FiForesight Roadmap
 
 > Source of truth for planned work. Feature-based, free-tier only.
-> Last synced: 2026-06-08 — Features 5–8 shipped. Features 9–12 committed (security, analytics, portfolio, alerts). Sequence: F11 → F12 → F10 → F9.
+> Last synced: 2026-06-12 — F11/F12/F10 shipped. F13 (Watchlist + Intraday Sparklines + Responsive) shipped. F9 (Alerts) remains.
 
 ---
 
@@ -37,6 +37,8 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Jury quant lens swapped to `openai/gpt-oss-20b`; verdict parsing hardened; malformed output tracked (#226)
 - Forecast Accuracy & Sentiment Analytics Dashboard — `/insights` tab + `GET /analytics/{accuracy,sentiment}/{symbol}`; persists VADER compound to new `sentiment_score` measurement (Feature 12, PR #244)
 - Portfolio Manager — real holdings + live P&L ("My Portfolio" tab) + `GET/POST/DELETE /portfolio/holdings` + `GET /portfolio/summary` (Supabase `holdings` + RLS); existing race sim renamed "Simulator" (Feature 10, PR #249)
+
+- Watchlist persistence + intraday sparklines + responsive design (Feature 13): `watchlists` Supabase table, `/watchlist` CRUD, intraday 5m bars on `/sparklines`, `WatchlistContext`, sidebar watchlist panel, mobile bottom chip bar, full responsive audit across all tabs (320px–4K). 13 new backend tests. (#pending-F13)
 
 ### Data & UX
 - SerpAPI news + trending sparklines
@@ -171,8 +173,6 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Earnings call transcript sentiment — SEC EDGAR free; NLP on 10-Q/8-K filings · `[Value: Med]` `[Effort: High]`
 
 ### UX & Data Display
-- Intraday sparklines (QW-1) — replace static trending ticker list with 1-day `5m` bars; "Today" label; dynamic list from SerpAPI trending + SPY/QQQ/BTC anchors · `[Value: High]` `[Effort: Low]` · *Files: `TrendingSparklines.tsx`, `GET /sparklines` endpoint*
-- Watchlist persistence (Supabase) — auth is shipped; save/load watchlist tickers to Supabase; sync across devices · `[Value: High]` `[Effort: Med]`
 - Multi-ticker overlay comparison — ratio chart (stock vs SPY); rolling 30d correlation line · `[Value: Med]` `[Effort: Low]`
 - Macro dashboard (`/macro` tab) — standalone FRED tab: GDP, CPI, rates, yield curve, fed dot plot · `[Value: Med]` `[Effort: Med]`
 - International markets — yfinance supports non-US tickers; exchange detection already exists · `[Value: Med]` `[Effort: Med]`

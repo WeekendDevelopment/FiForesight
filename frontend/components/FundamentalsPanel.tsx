@@ -83,7 +83,7 @@ export default function FundamentalsPanel({ prediction, rsiInfo, isDark, primary
               },
               { label: 'DIVIDEND', val: prediction.metrics.yield },
             ].map(item => (
-              <Grid size={6} key={item.label}>
+              <Grid size={{ xs: 6, sm: 4, md: 3 }} key={item.label}>
                 <Typography variant="caption" sx={{ opacity: 0.4 }}>{item.label}</Typography>
                 <Typography variant="body2" sx={{ fontWeight: 700, color: item.color ?? 'inherit' }}>
                   {item.val}
@@ -175,7 +175,7 @@ export default function FundamentalsPanel({ prediction, rsiInfo, isDark, primary
               ] as { label: string; val: string; tip?: string; color?: string }[])
                 .filter(item => item.val && item.val !== 'N/A')
                 .map(item => (
-                  <Grid size={6} key={item.label}>
+                  <Grid size={{ xs: 6, sm: 4, md: 3 }} key={item.label}>
                     <Typography variant="caption" sx={{ opacity: 0.4 }}>{item.label}</Typography>
                     <Typography variant="body2" sx={{ fontWeight: 700, color: item.color ?? 'inherit' }}>
                       {item.val}

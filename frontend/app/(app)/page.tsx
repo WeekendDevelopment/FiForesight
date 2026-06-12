@@ -8,6 +8,7 @@ import {
 } from '@mui/material';
 import { Search } from 'lucide-react';
 import { useAppShell } from '../../contexts/AppShellContext';
+import { useWatchlistContext } from '../../contexts/WatchlistContext';
 import MorningBriefingPanel from '../../components/MorningBriefingPanel';
 import SectorHeatmap from '../../components/SectorHeatmap';
 import TrendingSparklines from '../../components/TrendingSparklines';
@@ -28,8 +29,7 @@ const POPULAR_TICKERS = [
 ];
 
 // Curated trending list for the landing page (TrendingSparklines fetches /api/sparklines).
-const TRENDING = ['NVDA','AAPL','MSFT','TSLA','AMZN','META','GOOGL','AMD','AVGO','SPY','QQQ','BTC-USD']
-  .map(symbol => ({ symbol }));
+const TRENDING = ['NVDA','AAPL','MSFT','TSLA','AMZN','META','GOOGL','AMD','AVGO','SPY','QQQ','BTC-USD'];
 
 function getMarketStatus(): { open: boolean; label: string } {
   const now = new Date();
@@ -53,6 +53,7 @@ function getGreeting(): string {
 export default function LandingPage() {
   const router = useRouter();
   const { isDark, primaryColor } = useAppShell();
+  const { watchlist } = useWatchlistContext();
   const [ticker, setTicker]     = useState('');
   const [exchange, setExchange] = useState('');
   const [navigating, setNavigating] = useState(false);
@@ -176,7 +177,11 @@ export default function LandingPage() {
               background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.015)',
             }}
           >
-            <TrendingSparklines tickers={TRENDING} isDark={isDark} />
+            <TrendingSparklines
+              tickers={TRENDING}
+              isDark={isDark}
+              extraSymbols={watchlist.map(w => w.symbol)}
+            />
           </Paper>
         </Grid>
       </Grid>

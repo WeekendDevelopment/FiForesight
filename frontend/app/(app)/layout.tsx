@@ -9,9 +9,12 @@ import {
 import {
   BrainCircuit, Home, Search, BarChart2, Calendar, Rocket, LineChart,
   Activity, Wallet, Bell, ChevronLeft, ChevronRight, Sun, Moon, LogIn, LogOut,
+  Star, ChevronDown, ChevronUp,
 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { AppShellProvider, useAppShell } from '../../contexts/AppShellContext';
 import { useAuth } from '../../contexts/AuthContext';
+import { useWatchlistContext } from '../../contexts/WatchlistContext';
 import AuthModal from '../../components/AuthModal';
 
 // ── Navigation model ────────────────────────────────────────────────────────
@@ -49,6 +52,75 @@ function isActive(pathname: string, href: string): boolean {
 }
 
 // ── Desktop sidebar ─────────────────────────────────────────────────────────
+function WatchlistPanel({ collapsed, isDark, primaryColor }: { collapsed: boolean; isDark: boolean; primaryColor: string }) {
+  const router = useRouter();
+  const { watchlist, isLoading } = useWatchlistContext();
+  const [open, setOpen] = useState(true);
+
+  const dimColor  = isDark ? 'rgba(220,220,220,0.35)' : 'rgba(20,30,50,0.35)';
+  const hoverBg   = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
+  const borderCol = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+
+  if (collapsed) {
+    // In collapsed mode show just the star icon (no panel)
+    return (
+      <Tooltip title="Watchlist" placement="right">
+        <Box sx={{ display: 'flex', justifyContent: 'center', py: 1 }}>
+          <Star size={18} color={dimColor} />
+        </Box>
+      </Tooltip>
+    );
+  }
+
+  return (
+    <Box sx={{ px: 1, mt: 0.5, borderTop: `1px solid ${borderCol}`, pt: 1 }}>
+      {/* Header row */}
+      <Box
+        onClick={() => setOpen(p => !p)}
+        sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              px: 1.5, py: 0.75, borderRadius: 2, cursor: 'pointer',
+              '&:hover': { bgcolor: hoverBg } }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Star size={14} color={primaryColor} />
+          <Typography sx={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.8,
+                            textTransform: 'uppercase', color: dimColor }}>
+            Watchlist
+          </Typography>
+          {isLoading && <Typography sx={{ fontSize: 10, color: dimColor, opacity: 0.6 }}>…</Typography>}
+        </Box>
+        {open ? <ChevronUp size={12} color={dimColor} /> : <ChevronDown size={12} color={dimColor} />}
+      </Box>
+
+      {open && (
+        <Box sx={{ mt: 0.5 }}>
+          {watchlist.length === 0 ? (
+            <Typography sx={{ fontSize: 11, color: dimColor, px: 1.5, py: 0.5, opacity: 0.7 }}>
+              Star a ticker to save it here.
+            </Typography>
+          ) : (
+            watchlist.slice(0, 12).map(item => (
+              <Box
+                key={item.id}
+                onClick={() => router.push(`/analysis?symbol=${encodeURIComponent(item.symbol)}`)}
+                sx={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  px: 1.5, py: 0.6, borderRadius: 1.5, cursor: 'pointer',
+                  '&:hover': { bgcolor: hoverBg },
+                }}
+              >
+                <Typography sx={{ fontSize: 12, fontWeight: 700, color: 'text.primary', lineHeight: 1.2 }}>
+                  {item.symbol}
+                </Typography>
+              </Box>
+            ))
+          )}
+        </Box>
+      )}
+    </Box>
+  );
+}
+
 function Sidebar() {
   const pathname            = usePathname();
   const { isDark, primaryColor, themeMode, toggleTheme } = useAppShell();
@@ -100,6 +172,7 @@ function Sidebar() {
         borderRight: `1px solid ${borderCol}`,
         bgcolor: 'background.paper',
         transition: 'width 0.2s ease',
+        maxWidth: 280,  // prevent sprawl at 4K
       }}
     >
       {/* Header */}
@@ -142,6 +215,9 @@ function Sidebar() {
             : link;
         })}
       </Stack>
+
+      {/* Watchlist panel */}
+      <WatchlistPanel collapsed={collapsed} isDark={isDark} primaryColor={primaryColor} />
 
       {/* Footer: theme toggle + auth + collapse */}
       <Stack spacing={0.5} sx={{ px: 1, py: 1.5, borderTop: `1px solid ${borderCol}` }}>
@@ -197,10 +273,54 @@ function Sidebar() {
   );
 }
 
+// ── Mobile watchlist chip row (shown above bottom nav) ─────────────────────
+function MobileWatchlistBar() {
+  const router                   = useRouter();
+  const { isDark, primaryColor } = useAppShell();
+  const { watchlist }            = useWatchlistContext();
+  const borderCol = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+  const chipBg    = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.06)';
+
+  if (!watchlist.length) return null;
+
+  return (
+    <Box
+      sx={{
+        display: { xs: 'flex', md: 'none' },
+        position: 'fixed', bottom: 60, left: 0, right: 0, zIndex: 1199,
+        borderTop: `1px solid ${borderCol}`, bgcolor: 'background.paper',
+        overflowX: 'auto', maxHeight: 48, alignItems: 'center',
+        px: 1, gap: 0.75, flexShrink: 0,
+        // Hide scrollbar but keep scrollability
+        '&::-webkit-scrollbar': { display: 'none' },
+        scrollbarWidth: 'none',
+      }}
+    >
+      {watchlist.slice(0, 20).map(item => (
+        <Box
+          key={item.symbol}
+          onClick={() => router.push(`/analysis?symbol=${encodeURIComponent(item.symbol)}`)}
+          sx={{
+            flexShrink: 0, px: 1.5, py: 0.5, borderRadius: 10,
+            bgcolor: chipBg, cursor: 'pointer', minHeight: 28,
+            display: 'flex', alignItems: 'center',
+            '&:hover': { bgcolor: `${primaryColor}22` },
+          }}
+        >
+          <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'text.primary', whiteSpace: 'nowrap' }}>
+            {item.symbol}
+          </Typography>
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
 // ── Mobile bottom navigation ────────────────────────────────────────────────
 function MobileNav() {
   const pathname = usePathname();
   const { isDark, primaryColor } = useAppShell();
+  const { watchlist } = useWatchlistContext();
   const items = NAV_ITEMS.filter(i => i.mobile);
   const borderCol = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
 
@@ -225,6 +345,7 @@ function MobileNav() {
               flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
               justifyContent: 'center', gap: 0.25, textDecoration: 'none',
               color: active ? primaryColor : 'text.secondary',
+              minHeight: 44, // ≥44px tap target
             }}
           >
             <Icon size={20} color={active ? primaryColor : 'currentColor'} />
@@ -239,6 +360,9 @@ function MobileNav() {
 // ── Shell ───────────────────────────────────────────────────────────────────
 function Shell({ children }: { children: React.ReactNode }) {
   const isMobile = useMediaQuery('(max-width:899.95px)');
+  const { watchlist } = useWatchlistContext();
+  const hasWatchlistBar = isMobile && watchlist.length > 0;
+
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
       <Sidebar />
@@ -247,12 +371,17 @@ function Shell({ children }: { children: React.ReactNode }) {
         sx={{
           flexGrow: 1, minWidth: 0,
           overflowY: 'auto',
-          p: 3,
-          pb: isMobile ? 9 : 3, // leave room for the mobile bottom nav
+          p: { xs: 2, sm: 3 },
+          // Leave room for bottom nav (+watchlist bar when present)
+          pb: isMobile ? (hasWatchlistBar ? 13 : 9) : 3,
+          // 4K: centre main content, prevent full-width sprawl
+          maxWidth: { '2xl': 1600 },
+          mx: 'auto',
         }}
       >
         {children}
       </Box>
+      <MobileWatchlistBar />
       <MobileNav />
     </Box>
   );

@@ -4,7 +4,7 @@ import { useState, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import {
   Box, Card, CardContent, Chip, Collapse, CircularProgress, Stack, Typography,
-  ToggleButton, ToggleButtonGroup, Button,
+  ToggleButton, ToggleButtonGroup, Button, useMediaQuery, useTheme,
 } from '@mui/material';
 import { Info, ChevronDown, ChevronUp } from 'lucide-react';
 import dynamic from 'next/dynamic';
@@ -45,6 +45,11 @@ export default function PriceChartCard({
   chartMode, setChartMode,
   isDark, primaryColor, trendColor, chartStats, indicatorSignals,
 }: Props) {
+  const theme    = useTheme();
+  const isXs     = useMediaQuery(theme.breakpoints.down('sm'));
+  const isSm     = useMediaQuery(theme.breakpoints.between('sm', 'md'));
+  const chartH   = isXs ? 220 : isSm ? 300 : 400;
+
   const [legendOpen,       setLegendOpen]       = useState(false);
   const [selectedInterval, setSelectedInterval] = useState<string>('2y');
   const [intervalData,     setIntervalData]     = useState<IntervalHistoryData | null>(null);
@@ -345,6 +350,7 @@ export default function PriceChartCard({
             resistance={isTwoYear ? (prediction.indicators?.resistance ?? []) : []}
             intraday={intraday}
             showVwap={intraday && showVwap}
+            priceHeight={chartH}
           />
         </Box>
       </CardContent>

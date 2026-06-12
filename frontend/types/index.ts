@@ -370,6 +370,26 @@ export interface PortfolioForecast {
   score: number;
 }
 
+// ── Watchlist (Feature 13) ──────────────────────────────────────────────────
+
+export interface WatchlistItem {
+  id:       string;
+  symbol:   string;
+  added_at: string;
+}
+
+export interface SparklineBar {
+  t: string;   // ISO timestamp (UTC, no tz suffix)
+  c: number;   // close price
+}
+
+export interface SparklineTicker {
+  symbol:     string;
+  price:      number;
+  change_pct: number;
+  bars:       SparklineBar[];
+}
+
 export interface PortfolioSummary {
   holdings:             PortfolioHolding[];
   totalMarketValue:     number;

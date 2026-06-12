@@ -24,7 +24,8 @@
 12. [Security](#12-security)
 13. [Portfolio Manager (Feature 10)](#13-portfolio-manager-feature-10)
 14. [Alerts & Notifications (Feature 9)](#14-alerts--notifications-feature-9)
-15. [Glossary](#15-glossary)
+15. [Watchlist, Intraday Sparklines & Responsive Design (Feature 13)](#15-watchlist-intraday-sparklines--responsive-design-feature-13)
+16. [Glossary](#16-glossary)
 
 ---
 
@@ -1839,10 +1840,106 @@ create policy "own push subscriptions" on public.push_subscriptions
 ### 14.7 Frontend
 
 `frontend/app/(app)/alerts/page.tsx` — signed-out users see an `AuthGate`. Signed-in users get: an **"enable browser notifications"** banner (requests Notification permission → registers `sw.js` → subscribes with the VAPID key → POSTs the subscription), an **adaptive rule builder** (inputs change with the chosen type — e.g. `price_cross` shows above/below + price; `earnings_soon` shows a days field; `forecast_breakout` shows none), the **active-rules list** with an active/paused toggle + delete, and the **fire history**. Data flows through `frontend/lib/alerts.ts` → `/api/alerts/*` proxies (which forward `Authorization`) → the backend.
+## 15. Watchlist, Intraday Sparklines & Responsive Design (Feature 13)
+
+### 14.1 Watchlist persistence
+
+Users can **star** any ticker on the analysis page to save it to their watchlist. Watchlist items are stored in a dedicated Supabase table, synced to the user's JWT via PostgREST (same pattern as holdings — no service-role key).
+
+**Supabase schema** (`supabase/migrations/0006_watchlist.sql`):
+
+```sql
+create table if not exists watchlists (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references auth.users(id) on delete cascade,
+  symbol     text not null,
+  added_at   timestamptz default now(),
+  unique(user_id, symbol)
+);
+alter table watchlists enable row level security;
+create policy "users manage own watchlist"
+  on watchlists for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+```
+
+**API contracts** (`backend/routers/watchlist.py`):
+
+| Method | Path | Auth | Body | Response |
+|---|---|---|---|---|
+| `GET` | `/watchlist` | Optional | — | `{ "watchlist": [{id, symbol, added_at}] }` — `[]` for anonymous |
+| `POST` | `/watchlist` | Required | `{ "symbol": "AAPL" }` | `{ "item": {id, symbol, added_at} }` (upsert, no 409 on duplicate) |
+| `DELETE` | `/watchlist/{symbol}` | Required | — | **204** (success) or **404** (not in watchlist) |
+
+Symbol validation: `[A-Za-z0-9.\-:]{1,15}` (same regex as predict/holdings). GET is cached in Redis 60s per user; POST/DELETE invalidate the cache.
+
+**Frontend architecture:**
+
+- `WatchlistContext` (`frontend/contexts/WatchlistContext.tsx`) is the single source of truth. It wraps `AuthProvider` inside `ClientProviders.tsx` and re-fetches on auth-state changes. Exposes `{ watchlist, isLoading, isWatched(symbol), add(symbol), remove(symbol), reload() }`.
+- `useWatchlist` hook (`frontend/hooks/useWatchlist.ts`) is a thin backward-compat wrapper over `useWatchlistContext()`, preserving the pre-existing `{ watchlist, loading, toggling, isSaved, toggle, currentIsSaved }` API.
+- `lib/watchlist.ts` makes HTTP calls to `/api/watchlist` and `/api/watchlist/{symbol}` (Next.js proxy routes). The old approach of calling the Supabase SDK directly has been replaced with this backend-proxy pattern.
+- **Sidebar**: a collapsible Watchlist panel below the nav items shows saved tickers; clicking navigates to `/analysis?symbol=…`. On mobile a fixed bottom chip bar shows watchlist items horizontally.
+
+### 14.2 Intraday sparklines
+
+The `/sparklines` endpoint was upgraded to return real 1-day 5-minute OHLCV bars instead of a flat list of daily closes.
+
+**New response shape** (breaking change from the old `Dict[str, List[float]]`):
+
+```jsonc
+// GET /sparklines?tickers=AAPL,MSFT&extra=NVDA
+[
+  {
+    "symbol": "AAPL",
+    "price": 195.42,         // last bar close
+    "change_pct": 1.23,      // (last − first) / first × 100
+    "bars": [
+      { "t": "2025-01-15T14:30:00", "c": 193.10 },  // UTC naive ISO
+      { "t": "2025-01-15T14:35:00", "c": 193.55 },
+      // … up to 78 bars (full 6.5h trading session at 5m)
+    ]
+  }
+]
+```
+
+- **Pre/post-market stripped**: only bars between 09:30 and 16:00 ET are kept.
+- **`?extra=` param**: the frontend appends watchlist symbols here; the backend deduplicates against `?tickers=` and caps at 24 symbols total.
+- **Partial failure**: if one symbol's yfinance call fails, `{}` is returned for that symbol and it is silently skipped — other symbols still return.
+- **Per-symbol Redis cache** (5-min TTL): concurrent `asyncio.gather` + `asyncio.to_thread` for non-blocking I/O.
+- `TrendingSparklines` component now accepts `tickers: string[]` (not `{symbol: string}[]`); it draws a live Recharts sparkline from `bars`.
+
+### 14.3 Responsive design
+
+All application tabs were audited against four breakpoints:
+
+| Breakpoint | Width | Target |
+|---|---|---|
+| xs (mobile) | 320 px | Single-column; all grids stack; charts 220 px tall |
+| sm (tablet) | 768 px | 2–3 column layouts; charts 300 px tall |
+| md (desktop) | 1280 px | Full multi-column; charts 400 px tall |
+| 2xl (4K) | 2560 px | Sidebar `maxWidth: 280`; main content `maxWidth: 1600` centred |
+
+**Key fixes shipped:**
+
+| Component | Change |
+|---|---|
+| `PriceChartCard` + `AdvancedChart` | Chart height 220/300/400 px via `useMediaQuery` + `priceHeight` prop |
+| `DCFCard` | 3-scenario grid stacks on xs: `gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr 1fr' }` |
+| `TradeSetupCard` | Entry/stop/targets grid stacks on xs (same pattern as DCFCard) |
+| `FundamentalsPanel` | Grid `xs: 6 / sm: 4 / md: 3` (2-col mobile → 3-col tablet → 4-col desktop) |
+| `OrderBookPanel` | `overflowX: 'auto'` + responsive padding |
+| `earnings/page.tsx` | Responsive CSS grid: `{ xs: '1fr 1fr', sm: 'repeat(3,1fr)', md: 'repeat(4,1fr)', lg: 'repeat(6,1fr)' }` |
+| `ipo/page.tsx` | `{ xs: '1fr', md: '1fr 1fr' }` card grid (already correct) |
+| `analysis/page.tsx` | Forecast grid `{ xs: 'repeat(3,1fr)', sm: 'repeat(5,1fr)' }` |
+| `layout.tsx` (App Shell) | Sidebar `maxWidth: 280`; Shell `maxWidth: 1600` at 4K; MobileNav `minHeight: 44` tap targets |
+| `MorningBriefingPanel` | `overflowX: auto` horizontal scroll (already correct) |
+| `SectorHeatmap` | `flexWrap: wrap` (already correct) |
+| `OptionsChainPanel` | `overflowX: auto` on table wrapper (already correct) |
+| `portfolio/page.tsx` | `isMobile` hides columns; table `overflow: 'auto'` (already correct) |
 
 ---
 
-## 15. Glossary
+## 16. Glossary
 
 **Ask the expert first** — plain-English definitions for the terms used throughout this document.
 
@@ -1908,5 +2005,5 @@ create policy "own push subscriptions" on public.push_subscriptions
 ### Document provenance
 
 - **Source of truth.** Every fact in this document was derived by reading the code in this repository. Code-path citations use the `path:line` convention; click-able links resolve relative to `docs/`.
-- **Last reconciled.** With the `main` branch as of commit `1d54ed0` on branch `tig-documentation` (2026-04-15). Facts about external services (Groq pricing, InfluxDB retention, etc.) reflect the code comments at that commit and may drift over time.
+- **Last reconciled.** With the `main` branch as of 2026-06-12 (Feature 13 — Watchlist + Intraday Sparklines + Responsive Design). Facts about external services (Groq pricing, InfluxDB retention, etc.) may drift over time.
 - **When in doubt, re-read the code.** This document is an *accurate summary* — but the repository is the spec.
