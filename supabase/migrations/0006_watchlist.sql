@@ -12,7 +12,16 @@ create table if not exists watchlists (
 
 alter table watchlists enable row level security;
 
-create policy "users manage own watchlist"
-  on watchlists for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+do $$ begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename  = 'watchlists'
+      and policyname = 'users manage own watchlist'
+  ) then
+    create policy "users manage own watchlist"
+      on watchlists for all
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+end $$;
