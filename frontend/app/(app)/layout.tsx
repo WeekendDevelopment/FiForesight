@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import {
   Box, Drawer, List, ListItemButton, ListItemIcon, ListItemText,
-  Stack, Typography, IconButton, Tooltip, useMediaQuery,
+  Stack, Typography, IconButton, Tooltip,
 } from '@mui/material';
 import {
   BrainCircuit, Home, Search, BarChart2, Calendar, Rocket, LineChart,
@@ -36,6 +36,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Options',      href: '/options',    icon: BarChart2, mobile: true  },
   { label: 'Earnings',     href: '/earnings',   icon: Calendar,  mobile: true  },
   { label: 'IPO Tracker',  href: '/ipo',        icon: Rocket,    mobile: true  },
+  { label: 'Watchlist',    href: '/watchlist',  icon: Star,      mobile: false },
   { label: 'Insights',     href: '/insights',   icon: Activity,  mobile: false },
   { label: 'Simulator',    href: '/simulation', icon: LineChart, mobile: false },
   { label: 'My Portfolio', href: '/portfolio',  icon: Wallet,    mobile: false },
@@ -413,9 +414,7 @@ function MobileNav() {
 
 // ── Shell ───────────────────────────────────────────────────────────────────
 function Shell({ children }: { children: React.ReactNode }) {
-  const isMobile = useMediaQuery('(max-width:899.95px)');
   const { watchlist } = useWatchlistContext();
-  const hasWatchlistBar = isMobile && watchlist.length > 0;
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
@@ -425,9 +424,15 @@ function Shell({ children }: { children: React.ReactNode }) {
         sx={{
           flexGrow: 1, minWidth: 0,
           overflowY: 'auto',
-          p: { xs: 2, sm: 3 },
-          // Leave room for bottom nav (+watchlist bar when present)
-          pb: isMobile ? (hasWatchlistBar ? 13 : 9) : 3,
+          px: { xs: 2, sm: 3 },
+          pt: { xs: 2, sm: 3 },
+          // Bottom clearance: fixed nav (60px) + optional watchlist bar (48px) + iOS safe-area inset
+          pb: {
+            xs: watchlist.length > 0
+              ? 'calc(120px + env(safe-area-inset-bottom, 0px))'
+              : 'calc(80px + env(safe-area-inset-bottom, 0px))',
+            md: 3,
+          },
           // 4K: centre main content, prevent full-width sprawl
           maxWidth: { '2xl': 1600 },
           mx: 'auto',
