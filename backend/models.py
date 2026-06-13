@@ -287,6 +287,258 @@ def calculate_support_resistance(
     )
     return {"support": support_levels, "resistance": resistance_levels}
 
+# ---------------------------------------------------------------------------
+# Advanced Technical Signals (Feature 14)
+# ATR · Stochastic · ADX · OBV · RSI/MACD divergence
+# Each wrapped so any failure degrades gracefully (None / all-false) and never
+# aborts a /predict request.
+# ---------------------------------------------------------------------------
+
+@newrelic.agent.function_trace()
+def calculate_atr(
+    highs: List[float],
+    lows: List[float],
+    closes: List[float],
+    period: int = 14,
+) -> Optional[float]:
+    """
+    Average True Range (ATR-14) — volatility in price units.
+
+    TR_t = max(high−low, |high−prev_close|, |low−prev_close|); ATR is the
+    `period`-span EMA of TR. Returns the latest value, or None when there is
+    insufficient data / any failure (logged at DEBUG, never raises).
+    """
+    try:
+        if (
+            highs is None or lows is None or closes is None
+            or len(highs) != len(closes) or len(lows) != len(closes)
+            or len(closes) < period + 1
+        ):
+            return None
+        h = pd.Series(highs, dtype=float)
+        lo = pd.Series(lows, dtype=float)
+        c = pd.Series(closes, dtype=float)
+        prev_c = c.shift(1)
+        tr = pd.concat(
+            [(h - lo), (h - prev_c).abs(), (lo - prev_c).abs()], axis=1
+        ).max(axis=1)
+        atr = tr.ewm(span=period, adjust=False).mean().iloc[-1]
+        if pd.isna(atr):
+            return None
+        logger.info(f"[ATR] ✓ ATR-{period}={float(atr):.4f} ({len(closes)} bars)")
+        return round(float(atr), 4)
+    except Exception as exc:
+        logger.debug("[ATR] calculate_atr failed: %s", exc, exc_info=True)
+        return None
+
+
+@newrelic.agent.function_trace()
+def calculate_stochastic(
+    highs: List[float],
+    lows: List[float],
+    closes: List[float],
+    k_period: int = 14,
+    d_period: int = 3,
+) -> Dict[str, Optional[float]]:
+    """
+    Stochastic oscillator. %K = 100 × (close − lowest_low) / (highest_high −
+    lowest_low) over `k_period`; %D = `d_period`-SMA of %K. Returns the latest
+    {stoch_k, stoch_d} (None on insufficient data / failure).
+    """
+    out: Dict[str, Optional[float]] = {"stoch_k": None, "stoch_d": None}
+    try:
+        if (
+            highs is None or lows is None or closes is None
+            or len(highs) != len(closes) or len(lows) != len(closes)
+            or len(closes) < k_period + d_period
+        ):
+            return out
+        h = pd.Series(highs, dtype=float)
+        lo = pd.Series(lows, dtype=float)
+        c = pd.Series(closes, dtype=float)
+        lowest = lo.rolling(window=k_period).min()
+        highest = h.rolling(window=k_period).max()
+        rng = (highest - lowest).replace(0, 1e-9)
+        k = 100 * (c - lowest) / rng
+        d = k.rolling(window=d_period).mean()
+        k_last, d_last = k.iloc[-1], d.iloc[-1]
+        out["stoch_k"] = round(float(k_last), 2) if not pd.isna(k_last) else None
+        out["stoch_d"] = round(float(d_last), 2) if not pd.isna(d_last) else None
+        logger.info(f"[STOCH] ✓ %K={out['stoch_k']} %D={out['stoch_d']}")
+        return out
+    except Exception as exc:
+        logger.debug("[STOCH] calculate_stochastic failed: %s", exc, exc_info=True)
+        return out
+
+
+@newrelic.agent.function_trace()
+def calculate_adx(
+    highs: List[float],
+    lows: List[float],
+    closes: List[float],
+    period: int = 14,
+) -> Dict[str, Optional[float]]:
+    """
+    Average Directional Index using Wilder smoothing (14-period). Returns the
+    latest {adx_14, plus_di, minus_di} (None on insufficient data / failure).
+    """
+    out: Dict[str, Optional[float]] = {"adx_14": None, "plus_di": None, "minus_di": None}
+    try:
+        if (
+            highs is None or lows is None or closes is None
+            or len(highs) != len(closes) or len(lows) != len(closes)
+            or len(closes) < 2 * period + 1
+        ):
+            return out
+        h = pd.Series(highs, dtype=float)
+        lo = pd.Series(lows, dtype=float)
+        c = pd.Series(closes, dtype=float)
+
+        up_move = h.diff()
+        down_move = -lo.diff()
+        plus_dm = ((up_move > down_move) & (up_move > 0)) * up_move
+        minus_dm = ((down_move > up_move) & (down_move > 0)) * down_move
+
+        prev_c = c.shift(1)
+        tr = pd.concat(
+            [(h - lo), (h - prev_c).abs(), (lo - prev_c).abs()], axis=1
+        ).max(axis=1)
+
+        # Wilder smoothing ≈ EMA with alpha = 1/period
+        alpha = 1.0 / period
+        atr = tr.ewm(alpha=alpha, adjust=False).mean()
+        plus_di = 100 * plus_dm.ewm(alpha=alpha, adjust=False).mean() / atr.replace(0, 1e-9)
+        minus_di = 100 * minus_dm.ewm(alpha=alpha, adjust=False).mean() / atr.replace(0, 1e-9)
+        di_sum = (plus_di + minus_di).replace(0, 1e-9)
+        dx = 100 * (plus_di - minus_di).abs() / di_sum
+        adx = dx.ewm(alpha=alpha, adjust=False).mean()
+
+        adx_last, p_last, m_last = adx.iloc[-1], plus_di.iloc[-1], minus_di.iloc[-1]
+        out["adx_14"] = round(float(adx_last), 2) if not pd.isna(adx_last) else None
+        out["plus_di"] = round(float(p_last), 2) if not pd.isna(p_last) else None
+        out["minus_di"] = round(float(m_last), 2) if not pd.isna(m_last) else None
+        logger.info(
+            f"[ADX] ✓ ADX={out['adx_14']} +DI={out['plus_di']} −DI={out['minus_di']}"
+        )
+        return out
+    except Exception as exc:
+        logger.debug("[ADX] calculate_adx failed: %s", exc, exc_info=True)
+        return out
+
+
+@newrelic.agent.function_trace()
+def calculate_obv(
+    closes: List[float],
+    volumes: List[float],
+    history: int = 30,
+) -> Optional[List[float]]:
+    """
+    On-Balance Volume — cumulative volume that adds on up-close days and
+    subtracts on down-close days. Returns the last `history` OBV values, or
+    None on insufficient data / failure.
+    """
+    try:
+        if (
+            closes is None or volumes is None
+            or len(closes) != len(volumes) or len(closes) < 2
+        ):
+            return None
+        c = pd.Series(closes, dtype=float)
+        v = pd.Series(volumes, dtype=float)
+        direction = np.sign(c.diff().fillna(0.0))
+        obv = (direction * v).cumsum()
+        tail = obv.tail(history)
+        result = [round(float(x), 2) for x in tail]
+        logger.info(f"[OBV] ✓ {len(result)} points | last={result[-1] if result else None}")
+        return result
+    except Exception as exc:
+        logger.debug("[OBV] calculate_obv failed: %s", exc, exc_info=True)
+        return None
+
+
+def _tail_clean(series: Optional[List], lookback: int) -> Optional[np.ndarray]:
+    """Last `lookback` values as a float array, or None if any are None/NaN."""
+    if series is None or len(series) < lookback:
+        return None
+    tail = series[-lookback:]
+    if any(v is None for v in tail):
+        return None
+    arr = np.array(tail, dtype=float)
+    if np.any(np.isnan(arr)):
+        return None
+    return arr
+
+
+@newrelic.agent.function_trace()
+def detect_divergences(
+    closes: List[float],
+    rsi_series: List,
+    macd_hist: List,
+    lookback: int = 20,
+    min_distance: int = 5,
+) -> Dict[str, bool]:
+    """
+    RSI/MACD-histogram divergence over the last `lookback` bars.
+
+    Bullish: price prints a lower low while the indicator prints a higher low.
+    Bearish: price prints a higher high while the indicator prints a lower high.
+    Troughs/peaks are located with scipy.signal.find_peaks (≥`min_distance`
+    bars apart) on the price and indicator series independently, then the two
+    most-recent extrema of each are compared.
+
+    Returns all-False when fewer than 30 bars are available or on any failure
+    (logged at DEBUG, never raises).
+    """
+    result = {
+        "rsi_bullish": False, "rsi_bearish": False,
+        "macd_bullish": False, "macd_bearish": False,
+    }
+    try:
+        if closes is None or len(closes) < 30:
+            return result
+        from scipy.signal import find_peaks
+
+        price = _tail_clean(closes, lookback)
+        if price is None:
+            return result
+
+        def _last_two(arr: np.ndarray, invert: bool):
+            """Indices of the two most recent extrema (troughs if invert)."""
+            peaks, _ = find_peaks(-arr if invert else arr, distance=min_distance)
+            return peaks[-2:] if len(peaks) >= 2 else None
+
+        def _bullish(ind: np.ndarray) -> bool:
+            pt = _last_two(price, invert=True)
+            it = _last_two(ind, invert=True)
+            if pt is None or it is None:
+                return False
+            return price[pt[1]] < price[pt[0]] and ind[it[1]] > ind[it[0]]
+
+        def _bearish(ind: np.ndarray) -> bool:
+            pp = _last_two(price, invert=False)
+            ip = _last_two(ind, invert=False)
+            if pp is None or ip is None:
+                return False
+            return price[pp[1]] > price[pp[0]] and ind[ip[1]] < ind[ip[0]]
+
+        rsi_arr = _tail_clean(rsi_series, lookback)
+        if rsi_arr is not None:
+            result["rsi_bullish"] = bool(_bullish(rsi_arr))
+            result["rsi_bearish"] = bool(_bearish(rsi_arr))
+
+        macd_arr = _tail_clean(macd_hist, lookback)
+        if macd_arr is not None:
+            result["macd_bullish"] = bool(_bullish(macd_arr))
+            result["macd_bearish"] = bool(_bearish(macd_arr))
+
+        if any(result.values()):
+            logger.info(f"[DIVERGENCE] ✓ {result}")
+        return result
+    except Exception as exc:
+        logger.debug("[DIVERGENCE] detect_divergences failed: %s", exc, exc_info=True)
+        return result
+
+
 @newrelic.agent.function_trace()
 def calculate_model_stats(prices: List[float]) -> Dict:
     """
@@ -483,6 +735,31 @@ def _sarima_forecast(
     return result
 
 
+def _rf_top_importances(rf, use_ohlcv: bool, window: int, top_n: int = 5) -> List[Dict]:
+    """
+    Top-`top_n` RandomForest feature importances, normalised to sum 1.0 and
+    sorted descending. Feature names encode the lag and (in OHLCV mode) which
+    column they came from, e.g. "Close[t-1]" / "Volume[t-3]".
+    Returns [] on any failure (never raises).
+    """
+    try:
+        imp = rf.feature_importances_
+        if use_ohlcv:
+            cols = ["Open", "High", "Low", "Close", "Volume"]
+            names = [f"{cols[j % 5]}[t-{window - (j // 5)}]" for j in range(len(imp))]
+        else:
+            names = [f"Close[t-{window - j}]" for j in range(len(imp))]
+        pairs = sorted(zip(names, imp), key=lambda x: x[1], reverse=True)[:top_n]
+        total = sum(float(v) for _, v in pairs) or 1.0
+        return [
+            {"feature": n, "importance": round(float(v) / total, 4)}
+            for n, v in pairs
+        ]
+    except Exception as exc:
+        logger.debug("[RF] feature importance extraction failed: %s", exc)
+        return []
+
+
 def _rf_forecast(
     prices: List[float],
     steps: int,
@@ -490,7 +767,7 @@ def _rf_forecast(
     highs: Optional[List[float]] = None,
     lows: Optional[List[float]] = None,
     volumes: Optional[List[float]] = None,
-) -> np.ndarray:
+) -> tuple:
     """
     Random Forest on a sliding window of past observations.
 
@@ -527,7 +804,7 @@ def _rf_forecast(
             np.full(steps, last),
             np.full(steps, last),
             np.full(steps, last),
-        ])
+        ]), []
 
     vol = np.std(prices[-20:]) / np.mean(prices[-20:]) if len(prices) >= 20 else 0.02
 
@@ -568,6 +845,7 @@ def _rf_forecast(
         )
         rf = RandomForestRegressor(n_estimators=100, random_state=42)
         rf.fit(X, y)
+        rf_importance = _rf_top_importances(rf, use_ohlcv=True, window=window)
 
         preds           = []
         last_window_raw = raw[-window:].copy()   # shape (window, 5)
@@ -601,6 +879,7 @@ def _rf_forecast(
         )
         rf = RandomForestRegressor(n_estimators=100, random_state=42)
         rf.fit(X, y)
+        rf_importance = _rf_top_importances(rf, use_ohlcv=False, window=window)
 
         preds       = []
         last_window = list(prices[-window:])
@@ -618,8 +897,9 @@ def _rf_forecast(
         f"[RF] ✓ Forecast complete — "
         f"Day-1: predicted=${result[0, 0]:.2f} band=[{result[0, 1]:.2f}–{result[0, 2]:.2f}] | "
         f"Day-{steps}: predicted=${result[-1, 0]:.2f} band=[{result[-1, 1]:.2f}–{result[-1, 2]:.2f}]"
+        + (f" | top feature: {rf_importance[0]['feature']}" if rf_importance else "")
     )
-    return result
+    return result, rf_importance
 
 
 # ---------------------------------------------------------------------------
@@ -855,6 +1135,7 @@ def run_ensemble_forecast(
             "conf": "low", "stats": stats,
             "weights":       {"prophet": 0.0, "sarima": 0.0, "rf": 0.0},
             "per_model_d1":  {"prophet": None, "sarima": None, "rf": None},
+            "rf_feature_importance": [],
             "monte_carlo":   mc_result,
         }
 
@@ -899,7 +1180,14 @@ def run_ensemble_forecast(
 
     p_fc = results.get("Prophet")
     s_fc = results.get("SARIMA")
-    r_fc = results.get("RF")
+    # _rf_forecast returns (forecast_array, feature_importance); a failed run
+    # left None in the results map (set in the except above).
+    rf_raw = results.get("RF")
+    rf_feature_importance: List[Dict] = []
+    if isinstance(rf_raw, tuple):
+        r_fc, rf_feature_importance = rf_raw
+    else:
+        r_fc = rf_raw
 
     available = [fc for fc in [p_fc, s_fc, r_fc] if fc is not None]
     n_success = len(available)
@@ -936,6 +1224,7 @@ def run_ensemble_forecast(
             "conf":          "low", "stats": stats,
             "weights":       {"prophet": 0.0, "sarima": 0.0, "rf": 0.0},
             "per_model_d1":  {"prophet": None, "sarima": None, "rf": None},
+            "rf_feature_importance": [],
             "monte_carlo":   mc_result,
         }
 
@@ -1113,5 +1402,6 @@ def run_ensemble_forecast(
             "sarima":  float(s_fc[0, 0]) if s_fc is not None else None,
             "rf":      float(r_fc[0, 0]) if r_fc is not None else None,
         },
+        "rf_feature_importance": rf_feature_importance,
         "monte_carlo":   mc_result,
     }

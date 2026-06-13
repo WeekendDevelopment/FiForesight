@@ -8,6 +8,9 @@ numpy
 statsmodels
 prophet
 scikit-learn
+# scipy.signal.find_peaks powers RSI/MACD divergence detection (Feature 14).
+# Already a transitive dep of prophet/scikit-learn — pinned explicitly here.
+scipy
 yfinance
 newrelic
 # Sentiment analysis

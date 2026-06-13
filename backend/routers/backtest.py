@@ -86,7 +86,9 @@ def _run_backtest(symbol: str, closes: List[float], dates: List[str]) -> Optiona
     fitters = {
         "prophet":       lambda tr: _prophet_forecast(tr, HORIZON),
         "sarimax":       lambda tr: _sarima_forecast(tr, HORIZON),
-        "random_forest": lambda tr: _rf_forecast(tr, HORIZON),
+        # _rf_forecast now returns (forecast_array, feature_importance); the
+        # backtest only needs the forecast array.
+        "random_forest": lambda tr: _rf_forecast(tr, HORIZON)[0],
     }
 
     start = 0
