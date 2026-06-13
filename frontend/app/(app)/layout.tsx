@@ -4,8 +4,8 @@ import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import {
-  Box, Drawer, List, ListItemButton, ListItemIcon, ListItemText,
-  Stack, Typography, IconButton, Tooltip,
+  Box, Button, Drawer, List, ListItemButton, ListItemIcon, ListItemText,
+  Stack, Typography, IconButton, Tooltip, useMediaQuery,
 } from '@mui/material';
 import {
   BrainCircuit, Home, Search, BarChart2, Calendar, Rocket, LineChart,
@@ -35,7 +35,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Analysis',     href: '/analysis',   icon: Search,    mobile: true  },
   { label: 'Options',      href: '/options',    icon: BarChart2, mobile: true  },
   { label: 'Earnings',     href: '/earnings',   icon: Calendar,  mobile: true  },
-  { label: 'IPO Tracker',  href: '/ipo',        icon: Rocket,    mobile: true  },
+  { label: 'IPO Tracker',  href: '/ipo',        icon: Rocket,    mobile: false },
   { label: 'Watchlist',    href: '/watchlist',  icon: Star,      mobile: false },
   { label: 'Insights',     href: '/insights',   icon: Activity,  mobile: false },
   { label: 'Simulator',    href: '/simulation', icon: LineChart, mobile: false },
@@ -319,15 +319,24 @@ function MobileWatchlistBar() {
 }
 
 // ── Mobile bottom navigation ────────────────────────────────────────────────
-const _PRIMARY_NAV  = NAV_ITEMS.filter(i => i.mobile);
-const _SECONDARY_NAV = NAV_ITEMS.filter(i => !i.mobile);
+// Base items always in the primary bar; extended items only on phones > 375px.
+const _BASE_HREFS     = ['/', '/analysis'];
+const _EXTENDED_HREFS = ['/options', '/earnings'];
 
 function MobileNav() {
-  const pathname               = usePathname();
+  const pathname                 = usePathname();
   const { isDark, primaryColor } = useAppShell();
-  const [moreOpen, setMoreOpen]  = useState(false);
+  const { user, signOut }        = useAuth();
+  const [moreOpen,  setMoreOpen] = useState(false);
+  const [authOpen,  setAuthOpen] = useState(false);
+  // ≤375px covers iPhone SE (2nd/3rd gen) and older 320px phones
+  const isSmallPhone             = useMediaQuery('(max-width:375px)');
   const borderCol = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
-  const moreActive = _SECONDARY_NAV.some(i => isActive(pathname, i.href));
+
+  const primaryHrefs = isSmallPhone ? _BASE_HREFS : [..._BASE_HREFS, ..._EXTENDED_HREFS];
+  const primaryNav   = NAV_ITEMS.filter(i => primaryHrefs.includes(i.href));
+  const secondaryNav = NAV_ITEMS.filter(i => !primaryHrefs.includes(i.href));
+  const moreActive   = secondaryNav.some(i => isActive(pathname, i.href));
 
   return (
     <>
@@ -340,7 +349,7 @@ function MobileNav() {
           justifyContent: 'space-around', alignItems: 'stretch', height: 60,
         }}
       >
-        {_PRIMARY_NAV.map(({ label, href, icon: Icon }) => {
+        {primaryNav.map(({ label, href, icon: Icon }) => {
           const active = isActive(pathname, href);
           return (
             <Box
@@ -360,7 +369,7 @@ function MobileNav() {
           );
         })}
 
-        {/* More — opens secondary nav drawer */}
+        {/* More — opens secondary nav + auth drawer */}
         <Box
           onClick={() => setMoreOpen(true)}
           sx={{
@@ -375,7 +384,7 @@ function MobileNav() {
         </Box>
       </Box>
 
-      {/* Secondary nav bottom drawer */}
+      {/* More drawer — secondary nav + auth */}
       <Drawer
         anchor="bottom"
         open={moreOpen}
@@ -385,8 +394,44 @@ function MobileNav() {
         <Box sx={{ pt: 1, pb: 0.5, display: 'flex', justifyContent: 'center' }}>
           <Box sx={{ width: 36, height: 4, borderRadius: 2, bgcolor: 'divider' }} />
         </Box>
+
+        {/* Auth section */}
+        <Box sx={{ px: 2, py: 1.5, borderBottom: `1px solid ${borderCol}` }}>
+          {user ? (
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+              <Box sx={{ minWidth: 0 }}>
+                <Typography sx={{ fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {user.email?.split('@')[0] ?? 'Account'}
+                </Typography>
+                <Typography sx={{ fontSize: 11, opacity: 0.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {user.email}
+                </Typography>
+              </Box>
+              <Button
+                size="small"
+                variant="outlined"
+                color="inherit"
+                onClick={() => { signOut().catch(console.error); setMoreOpen(false); }}
+                startIcon={<LogOut size={14} />}
+                sx={{ flexShrink: 0, fontSize: 11, borderRadius: 2 }}
+              >
+                Sign Out
+              </Button>
+            </Box>
+          ) : (
+            <Button
+              fullWidth
+              variant="outlined"
+              onClick={() => { setMoreOpen(false); setAuthOpen(true); }}
+              startIcon={<LogIn size={16} />}
+            >
+              Sign In
+            </Button>
+          )}
+        </Box>
+
         <List disablePadding>
-          {_SECONDARY_NAV.map(({ label, href, icon: Icon }) => {
+          {secondaryNav.map(({ label, href, icon: Icon }) => {
             const active = isActive(pathname, href);
             return (
               <ListItemButton
@@ -408,6 +453,8 @@ function MobileNav() {
           })}
         </List>
       </Drawer>
+
+      <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
     </>
   );
 }
