@@ -623,7 +623,9 @@ function AnalysisContent() {
             size="medium"
             aria-label={user ? (chatOpen ? 'Close chat' : 'Open AI chat') : 'Sign in to open AI chat'}
             sx={{
-              position: 'fixed', bottom: 24, right: 24,
+              position: 'fixed',
+              bottom: { xs: 84, md: 24 },  // clear 60px mobile nav + 24px margin
+              right: 24,
               background: primaryColor,
               '&:hover': { background: primaryColor, filter: 'brightness(1.15)' },
               boxShadow: `0 0 20px ${primaryColor}66`,

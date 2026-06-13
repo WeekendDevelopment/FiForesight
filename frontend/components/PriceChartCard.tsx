@@ -138,11 +138,13 @@ export default function PriceChartCard({
 
   return (
     <Card>
-      <CardContent sx={{ p: 4 }}>
+      <CardContent sx={{ p: { xs: 2, sm: 3, md: 4 } }}>
         {/* Symbol header */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
           <Box>
-            <Typography variant="h2">{prediction.symbol}</Typography>
+            <Typography sx={{ fontWeight: 800, fontSize: { xs: '1.75rem', sm: '2.5rem', md: '3.75rem' }, lineHeight: 1.1 }}>
+              {prediction.symbol}
+            </Typography>
             <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
               <Chip
                 label={`${prediction.prediction.trend} Trend`}
@@ -156,7 +158,9 @@ export default function PriceChartCard({
             </Stack>
           </Box>
           <Box sx={{ textAlign: 'right' }}>
-            <Typography variant="h3" color="primary.main">${prediction.currentPrice}</Typography>
+            <Typography color="primary.main" sx={{ fontWeight: 700, fontSize: { xs: '1.5rem', sm: '2rem', md: '3rem' }, lineHeight: 1.1 }}>
+              ${prediction.currentPrice}
+            </Typography>
             <Typography variant="caption" sx={{ opacity: 0.4 }}>
               {prediction.metrics.currency ?? 'USD'} · LIVE FEED
             </Typography>

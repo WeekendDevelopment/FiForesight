@@ -82,7 +82,7 @@ export default function LandingPage() {
         sx={{ mb: 3 }}
       >
         <Box>
-          <Typography variant="h4" sx={{ fontWeight: 800 }}>
+          <Typography sx={{ fontWeight: 800, fontSize: { xs: '1.25rem', sm: '2.125rem' }, lineHeight: 1.2 }}>
             {getGreeting()}. Markets are {market.open ? 'open' : 'closed'}.
           </Typography>
           <Typography variant="body2" sx={{ opacity: 0.6, mt: 0.5 }}>
