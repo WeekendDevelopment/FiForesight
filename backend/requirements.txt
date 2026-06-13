@@ -9,7 +9,8 @@ statsmodels
 prophet
 scikit-learn
 # scipy.signal.find_peaks powers RSI/MACD divergence detection (Feature 14).
-# Already a transitive dep of prophet/scikit-learn — pinned explicitly here.
+# Already a transitive dep of prophet/scikit-learn — declared explicitly here
+# (unpinned, matching the rest of this manifest).
 scipy
 yfinance
 newrelic

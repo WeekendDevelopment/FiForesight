@@ -288,7 +288,7 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 | Portfolio Manager — real holdings + live P&L ("My Portfolio" tab) | #249 |
 | Alerts & Notifications — rule builder + scheduled evaluator + Web Push ("Alerts" tab) | #254 |
 | Watchlist persistence + intraday sparklines + responsive design (F13) | pending |
-| Advanced Technical Signals — ATR stops, divergence, earnings surprise, RF importance, Stoch/ADX/OBV (F14) | pending |
+| Advanced Technical Signals — ATR stops, divergence, earnings surprise, RF importance, Stoch/ADX/OBV (F14) | #260 |
 
 ---
 

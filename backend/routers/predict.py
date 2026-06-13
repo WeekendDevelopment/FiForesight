@@ -1348,7 +1348,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         try:
             data = await asyncio.wait_for(
                 asyncio.to_thread(yf_svc.fetch_earnings_surprise, symbol),
-                timeout=8.0,
+                timeout=12.0,
             )
         except Exception as exc:
             logger.debug("[STEP-4c] earnings surprise fetch failed: %s", exc)

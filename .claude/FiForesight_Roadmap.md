@@ -27,7 +27,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Dynamic chart time intervals (1D/5D/1M/3M/6M/1Y/2Y) — `GET /history`, VWAP overlay, contextual metrics (#208)
 - Chart zoom/pan across all intervals — drop classic view, AdvancedChart timestamp hardening (#221)
 - Walk-forward backtester — rolling 252-day train → 5-day predict, per-model MAE + directional accuracy (#222)
-- Advanced Technical Signals (Feature 14): ATR-14 volatility-adaptive trade stops (2.0×/2.5×, 8% cap), RSI/MACD divergence detection (scipy `find_peaks`, injected into jury context + prompts), earnings surprise history (last 4Q), RF feature importance (top-5), and Stochastic/ADX/OBV sub-panels (`SignalPanels`, localStorage-persisted). New helpers in `models.py`; `indicators` payload extended; 19 new backend tests. (#pending-F14)
+- Advanced Technical Signals (Feature 14): ATR-14 volatility-adaptive trade stops (2.0×/2.5×, 8% cap), RSI/MACD divergence detection (scipy `find_peaks`, injected into jury context + prompts), earnings surprise history (last 4Q), RF feature importance (top-5), and Stochastic/ADX/OBV sub-panels (`SignalPanels`, localStorage-persisted). New helpers in `models.py`; `indicators` payload extended; 19 new backend tests. (#260)
 
 ### Intelligence
 - 3-model LLM Analyst Jury (Llama 4 Scout, Llama 3.3 70B, GPT-OSS 20B) via Groq + LangGraph

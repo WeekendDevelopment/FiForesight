@@ -81,7 +81,7 @@ export default function TradeSetupCard({ setup, loading, isDark, primaryColor }:
             </Typography>
             {setup.atr_14 != null && setup.atr_multiplier != null && (
               <Typography sx={{ fontSize: '0.55rem', color: red, opacity: 0.65, mt: 0.25, lineHeight: 1.3 }}>
-                ATR-14: {setup.atr_14.toFixed(2)} · entry − {setup.atr_multiplier}×ATR
+                ATR-14: {setup.atr_14.toFixed(2)} · entry {setup.stop_loss <= (setup.entry_low + setup.entry_high) / 2 ? '−' : '+'} {setup.atr_multiplier.toFixed(1)}×ATR
               </Typography>
             )}
           </Box>
