@@ -4,12 +4,13 @@ import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import {
-  Box, Stack, Typography, IconButton, Tooltip, useMediaQuery,
+  Box, Drawer, List, ListItemButton, ListItemIcon, ListItemText,
+  Stack, Typography, IconButton, Tooltip, useMediaQuery,
 } from '@mui/material';
 import {
   BrainCircuit, Home, Search, BarChart2, Calendar, Rocket, LineChart,
   Activity, Wallet, Bell, ChevronLeft, ChevronRight, Sun, Moon, LogIn, LogOut,
-  Star, ChevronDown, ChevronUp,
+  Star, ChevronDown, ChevronUp, MoreHorizontal,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AppShellProvider, useAppShell } from '../../contexts/AppShellContext';
@@ -317,42 +318,96 @@ function MobileWatchlistBar() {
 }
 
 // ── Mobile bottom navigation ────────────────────────────────────────────────
+const _PRIMARY_NAV  = NAV_ITEMS.filter(i => i.mobile);
+const _SECONDARY_NAV = NAV_ITEMS.filter(i => !i.mobile);
+
 function MobileNav() {
-  const pathname = usePathname();
+  const pathname               = usePathname();
   const { isDark, primaryColor } = useAppShell();
-  const items = NAV_ITEMS.filter(i => i.mobile);
+  const [moreOpen, setMoreOpen]  = useState(false);
   const borderCol = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+  const moreActive = _SECONDARY_NAV.some(i => isActive(pathname, i.href));
 
   return (
-    <Box
-      component="nav"
-      sx={{
-        display: { xs: 'flex', md: 'none' },
-        position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 1200,
-        borderTop: `1px solid ${borderCol}`, bgcolor: 'background.paper',
-        justifyContent: 'space-around', alignItems: 'stretch', height: 60,
-      }}
-    >
-      {items.map(({ label, href, icon: Icon }) => {
-        const active = isActive(pathname, href);
-        return (
-          <Box
-            key={href}
-            component={Link}
-            href={href}
-            sx={{
-              flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
-              justifyContent: 'center', gap: 0.25, textDecoration: 'none',
-              color: active ? primaryColor : 'text.secondary',
-              minHeight: 44, // ≥44px tap target
-            }}
-          >
-            <Icon size={20} color={active ? primaryColor : 'currentColor'} />
-            <Typography sx={{ fontSize: 10, fontWeight: active ? 700 : 500 }}>{label}</Typography>
-          </Box>
-        );
-      })}
-    </Box>
+    <>
+      <Box
+        component="nav"
+        sx={{
+          display: { xs: 'flex', md: 'none' },
+          position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 1200,
+          borderTop: `1px solid ${borderCol}`, bgcolor: 'background.paper',
+          justifyContent: 'space-around', alignItems: 'stretch', height: 60,
+        }}
+      >
+        {_PRIMARY_NAV.map(({ label, href, icon: Icon }) => {
+          const active = isActive(pathname, href);
+          return (
+            <Box
+              key={href}
+              component={Link}
+              href={href}
+              sx={{
+                flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
+                justifyContent: 'center', gap: 0.25, textDecoration: 'none',
+                color: active ? primaryColor : 'text.secondary',
+                minHeight: 44,
+              }}
+            >
+              <Icon size={20} color={active ? primaryColor : 'currentColor'} />
+              <Typography sx={{ fontSize: 10, fontWeight: active ? 700 : 500 }}>{label}</Typography>
+            </Box>
+          );
+        })}
+
+        {/* More — opens secondary nav drawer */}
+        <Box
+          onClick={() => setMoreOpen(true)}
+          sx={{
+            flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
+            justifyContent: 'center', gap: 0.25, cursor: 'pointer',
+            color: moreActive ? primaryColor : 'text.secondary',
+            minHeight: 44,
+          }}
+        >
+          <MoreHorizontal size={20} color={moreActive ? primaryColor : 'currentColor'} />
+          <Typography sx={{ fontSize: 10, fontWeight: moreActive ? 700 : 500 }}>More</Typography>
+        </Box>
+      </Box>
+
+      {/* Secondary nav bottom drawer */}
+      <Drawer
+        anchor="bottom"
+        open={moreOpen}
+        onClose={() => setMoreOpen(false)}
+        sx={{ display: { xs: 'block', md: 'none' }, '& .MuiDrawer-paper': { borderRadius: '16px 16px 0 0', pb: 2 } }}
+      >
+        <Box sx={{ pt: 1, pb: 0.5, display: 'flex', justifyContent: 'center' }}>
+          <Box sx={{ width: 36, height: 4, borderRadius: 2, bgcolor: 'divider' }} />
+        </Box>
+        <List disablePadding>
+          {_SECONDARY_NAV.map(({ label, href, icon: Icon }) => {
+            const active = isActive(pathname, href);
+            return (
+              <ListItemButton
+                key={href}
+                component={Link}
+                href={href}
+                onClick={() => setMoreOpen(false)}
+                sx={{ py: 1.5, color: active ? primaryColor : 'text.primary' }}
+              >
+                <ListItemIcon sx={{ minWidth: 40, color: 'inherit' }}>
+                  <Icon size={20} />
+                </ListItemIcon>
+                <ListItemText
+                  primary={label}
+                  slotProps={{ primary: { sx: { fontWeight: active ? 700 : 500, fontSize: '0.9rem' } } }}
+                />
+              </ListItemButton>
+            );
+          })}
+        </List>
+      </Drawer>
+    </>
   );
 }
 
