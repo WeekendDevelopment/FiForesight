@@ -45,6 +45,18 @@ class TradeSetupRequest(BaseModel):
     trend: str = "Bullish"
     sentiment_label: str = "Neutral"
     var_95: Optional[float] = None
+    # ATR-14 in price units (Feature 14). When supplied, the stop is placed an
+    # ATR multiple away from entry instead of a flat %. Optional for backward
+    # compatibility — falls back to the support/resistance % stop when absent.
+    atr_14: Optional[float] = None
+    conservative: bool = False
+
+    @field_validator("atr_14")
+    @classmethod
+    def validate_atr(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and v < 0:
+            raise ValueError("atr_14 must be non-negative")
+        return v
 
     @field_validator("current_price")
     @classmethod
@@ -87,12 +99,23 @@ class TradeSetupResponse(BaseModel):
     risk_per_share: float
     risk_pct: float
     suggested_position_pct: float
+    atr_14: Optional[float] = None
+    atr_multiplier: Optional[float] = None
 
 
 @router.post("/trade-setup", response_model=TradeSetupResponse)
 @limiter.limit(lambda: Config.RATE_LIMIT_TRADE, key_func=_user_rate_key)
 async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Depends(require_user)):
     p = req.current_price
+
+    # ── ATR-based adaptive stop (Feature 14) ──────────────────────────────────
+    # When ATR-14 is supplied, the stop is placed an ATR multiple from entry
+    # (2.0× default, 2.5× conservative) instead of a flat %, so a high-volatility
+    # name gets a wider stop than a quiet one. Hard-capped at 8% from entry so a
+    # huge ATR can't suggest a reckless stop. Falls back to the S/R % stop when
+    # ATR is absent (anonymous/legacy callers).
+    use_atr        = req.atr_14 is not None and req.atr_14 > 0
+    atr_multiplier = (2.5 if req.conservative else 2.0) if use_atr else None
 
     if req.trend == "Bearish":
         # Entry zone: nearest resistance within 3% above price, else price ± 0.5%
@@ -114,8 +137,14 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
             raw_stop = round(resistance_above[0] * 1.015, 2)
         else:
             raw_stop = round(entry_high * 1.03, 2)
-        max_stop  = round(entry_mid * 1.05, 2)
-        stop_loss = round(min(raw_stop, max_stop), 2)
+        if use_atr:
+            # Short stop sits above entry; never more than 8% above.
+            atr_stop  = entry_mid + atr_multiplier * req.atr_14
+            ceil_stop = entry_mid * 1.08
+            stop_loss = round(min(atr_stop, ceil_stop), 2)
+        else:
+            max_stop  = round(entry_mid * 1.05, 2)
+            stop_loss = round(min(raw_stop, max_stop), 2)
 
         # Targets: descending below entry_mid toward low_range
         target_1 = round(entry_mid - (entry_mid - req.low_range) / 3, 2)
@@ -156,10 +185,16 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
         target_2 = round(req.high_range, 2)
         target_3 = round(req.high_range + (req.high_range - entry_low), 2)
 
-        # R:R — cap stop at 5% below entry so R:R stays meaningful
-        raw_stop    = stop_loss
-        min_stop    = round(entry_mid * 0.95, 2)
-        stop_loss   = round(max(raw_stop, min_stop), 2)
+        # Stop: ATR-based when available, else cap the S/R stop at 5% below entry.
+        if use_atr:
+            # Long stop sits below entry; never more than 8% below.
+            atr_stop   = entry_mid - atr_multiplier * req.atr_14
+            floor_stop = entry_mid * 0.92
+            stop_loss  = round(max(atr_stop, floor_stop), 2)
+        else:
+            raw_stop  = stop_loss
+            min_stop  = round(entry_mid * 0.95, 2)
+            stop_loss = round(max(raw_stop, min_stop), 2)
         risk        = max(entry_mid - stop_loss, 0.01)
         reward      = max(target_2 - entry_mid, 0.01)
         risk_reward = f"1:{reward / risk:.1f}"
@@ -222,6 +257,8 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
         risk_per_share=risk_ps,
         risk_pct=risk_pct_val,
         suggested_position_pct=suggested_pct,
+        atr_14=round(req.atr_14, 4) if use_atr else None,
+        atr_multiplier=atr_multiplier,
     )
 
 
