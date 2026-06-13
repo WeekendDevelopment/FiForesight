@@ -395,15 +395,28 @@ function MobileNav() {
           <Box sx={{ width: 36, height: 4, borderRadius: 2, bgcolor: 'divider' }} />
         </Box>
 
-        {/* Auth section */}
-        <Box sx={{ px: 2, py: 1.5, borderBottom: `1px solid ${borderCol}` }}>
+        {/* Auth section — centered profile card */}
+        <Box sx={{ px: 2, py: 2.5, borderBottom: `1px solid ${borderCol}`, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.25 }}>
           {user ? (
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
-              <Box sx={{ minWidth: 0 }}>
-                <Typography sx={{ fontSize: 13, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <>
+              {/* Avatar: initials in a circle */}
+              <Box sx={{
+                width: 56, height: 56, borderRadius: '50%',
+                bgcolor: `${primaryColor}1e`,
+                border: `2px solid ${primaryColor}55`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                flexShrink: 0,
+              }}>
+                <Typography sx={{ fontSize: 22, fontWeight: 800, color: primaryColor, lineHeight: 1 }}>
+                  {(user.email?.[0] ?? 'U').toUpperCase()}
+                </Typography>
+              </Box>
+              {/* Name + email */}
+              <Box sx={{ textAlign: 'center' }}>
+                <Typography sx={{ fontSize: 14, fontWeight: 700, lineHeight: 1.3 }}>
                   {user.email?.split('@')[0] ?? 'Account'}
                 </Typography>
-                <Typography sx={{ fontSize: 11, opacity: 0.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <Typography sx={{ fontSize: 11, opacity: 0.5, lineHeight: 1.4 }}>
                   {user.email}
                 </Typography>
               </Box>
@@ -413,20 +426,30 @@ function MobileNav() {
                 color="inherit"
                 onClick={() => { signOut().catch(console.error); setMoreOpen(false); }}
                 startIcon={<LogOut size={14} />}
-                sx={{ flexShrink: 0, fontSize: 11, borderRadius: 2 }}
+                sx={{ fontSize: 11, borderRadius: 2, mt: 0.5 }}
               >
                 Sign Out
               </Button>
-            </Box>
+            </>
           ) : (
-            <Button
-              fullWidth
-              variant="outlined"
-              onClick={() => { setMoreOpen(false); setAuthOpen(true); }}
-              startIcon={<LogIn size={16} />}
-            >
-              Sign In
-            </Button>
+            <>
+              {/* Guest avatar placeholder */}
+              <Box sx={{
+                width: 56, height: 56, borderRadius: '50%',
+                bgcolor: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.06)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <LogIn size={24} color={isDark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.3)'} />
+              </Box>
+              <Button
+                variant="outlined"
+                onClick={() => { setMoreOpen(false); setAuthOpen(true); }}
+                startIcon={<LogIn size={16} />}
+                sx={{ borderRadius: 2 }}
+              >
+                Sign In
+              </Button>
+            </>
           )}
         </Box>
 
