@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Skeleton from '@mui/material/Skeleton';
@@ -22,25 +22,42 @@ export default function WatchlistPage() {
   const [authOpen,    setAuthOpen]    = useState(false);
   const [sparklines,  setSparklines]  = useState<SparklineTicker[]>([]);
   const [splLoading,  setSplLoading]  = useState(false);
+  const controllerRef                 = useRef<AbortController | null>(null);
 
+  // Deduplicate and cap at 24 to match the backend's symbols[:24] truncation
   const symbolKey = useMemo(
-    () => watchlist.map(i => i.symbol).join(','),
+    () => [...new Set(watchlist.map(i => i.symbol))].slice(0, 24).join(','),
     [watchlist],
   );
 
   const fetchSparklines = useCallback(async () => {
     if (!symbolKey) { setSparklines([]); return; }
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
     setSplLoading(true);
     try {
-      const res  = await fetch(`/api/sparklines?tickers=${encodeURIComponent(symbolKey)}`);
+      const res  = await fetch(`/api/sparklines?tickers=${encodeURIComponent(symbolKey)}`, {
+        signal: controller.signal,
+      });
       const data = await res.json() as SparklineTicker[];
-      setSparklines(Array.isArray(data) ? data : []);
-    } catch { /* non-fatal */ } finally {
-      setSplLoading(false);
+      if (controllerRef.current === controller) {
+        setSparklines(Array.isArray(data) ? data : []);
+      }
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') return;
+    } finally {
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+        setSplLoading(false);
+      }
     }
   }, [symbolKey]);
 
   useEffect(() => { void fetchSparklines(); }, [fetchSparklines]);
+
+  // Abort in-flight request on unmount
+  useEffect(() => () => { controllerRef.current?.abort(); }, []);
 
   const splMap = useMemo(() => {
     const m: Record<string, SparklineTicker> = {};
