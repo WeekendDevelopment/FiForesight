@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
-import { LineChart, Line } from 'recharts';
+import { LineChart, Line, YAxis } from 'recharts';
 import Box from '@mui/material/Box';
 import Skeleton from '@mui/material/Skeleton';
 import Typography from '@mui/material/Typography';
@@ -120,6 +120,7 @@ export default function TrendingSparklines({ tickers, isDark, extraSymbols }: Pr
                   <Box sx={{ width: 52, height: 28, flexShrink: 0 }}>
                     {pts.length >= 2 ? (
                       <LineChart data={pts} width={52} height={28} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+                        <YAxis domain={['dataMin', 'dataMax']} hide />
                         <Line
                           type="monotone"
                           dataKey="v"
