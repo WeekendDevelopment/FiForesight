@@ -15,6 +15,8 @@ from models import (
     calculate_rsi, calculate_rsi_series, run_ensemble_forecast,
     calculate_macd, calculate_bollinger_bands, calculate_sma_series,
     calculate_ema_series, calculate_support_resistance,
+    calculate_atr, calculate_stochastic, calculate_adx, calculate_obv,
+    detect_divergences,
     _skill_to_weights,
 )
 from services import DataCleaner, ANALYST_PERSONAS
@@ -220,6 +222,7 @@ async def _run_analyst_jury(
     track_record: str = "",
     sentiment: Optional[dict] = None,
     stocktwits: Optional[dict] = None,
+    divergences: Optional[dict] = None,
     ctx_only: bool = False,
 ) -> List[dict]:
     """
@@ -356,6 +359,20 @@ async def _run_analyst_jury(
         f"prob_gain={_mc['prob_gain']:.1f}%, VaR95=${_mc['var_95']:.2f}\n"
     ) if _mc else ""
 
+    # Divergence signals (Feature 14) — only surfaced when at least one fired.
+    div_line = ""
+    if divergences:
+        active = [
+            label for key, label in (
+                ("rsi_bullish",  "Bullish RSI divergence"),
+                ("rsi_bearish",  "Bearish RSI divergence"),
+                ("macd_bullish", "Bullish MACD divergence"),
+                ("macd_bearish", "Bearish MACD divergence"),
+            ) if divergences.get(key)
+        ]
+        if active:
+            div_line = f"Divergence signals: {', '.join(active)}\n"
+
     ctx = (
         f"Symbol: {symbol} | Price: ${price:.2f} | RSI: {rsi:.1f} | Sector: {sec_str}\n"
         f"Fundamentals: PE={pe_str} | Cap={cap_str} | Div={div_str} | 52w={rng_str}\n"
@@ -371,6 +388,7 @@ async def _run_analyst_jury(
         f"{sma_line}\n"
         f"Volume: {vol_line}\n"
         f"Support: {sup_str} | Resistance: {res_str}\n"
+        f"{div_line}"
         f"{sentiment_line}"
         f"{news_block}"
         + (f"{track_record}\n" if track_record else "")
@@ -1221,6 +1239,25 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     # Compute RSI series here (also reused for chart at Step 8) so the reversal
     # classifier has it available without a second pass through closes.
     rsi_full = calculate_rsi_series(closes)
+
+    # ── Step 4b#. Advanced technical signals (Feature 14) ─────────────────────
+    # ATR (volatility stops), Stochastic, ADX, OBV, and RSI/MACD divergence.
+    # Each helper is self-contained and returns None / all-false on failure, so
+    # the whole block is non-fatal — a bad indicator never aborts /predict.
+    atr_14 = await asyncio.to_thread(calculate_atr, highs, lows, closes)
+    stoch  = await asyncio.to_thread(calculate_stochastic, highs, lows, closes)
+    adx    = await asyncio.to_thread(calculate_adx, highs, lows, closes)
+    obv_history = await asyncio.to_thread(calculate_obv, closes, volumes)
+    divergences = await asyncio.to_thread(
+        detect_divergences, closes, rsi_full, macd_data["hist"]
+    )
+    logger.info(
+        "[STEP-4b#] ✓ Advanced signals — ATR-14=%s | Stoch %%K=%s %%D=%s | "
+        "ADX=%s | OBV=%s pts | divergences=%s",
+        atr_14, stoch.get("stoch_k"), stoch.get("stoch_d"),
+        adx.get("adx_14"), len(obv_history) if obv_history else 0, divergences,
+    )
+
     try:
         reversal_risk = await asyncio.to_thread(
             compute_reversal_risk,
@@ -1300,6 +1337,26 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     earnings_task = asyncio.create_task(
         asyncio.to_thread(yf_svc.fetch_earnings_dates, symbol)
     )
+
+    # Earnings surprise history (last 4 quarters) — Redis-cached 24h since it
+    # only changes once per quarter. Fired concurrently, 8s timeout.
+    async def _get_earnings_surprise() -> List[dict]:
+        cache_key = f"earnings_surprise:{symbol.upper()}"
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            data = await asyncio.wait_for(
+                asyncio.to_thread(yf_svc.fetch_earnings_surprise, symbol),
+                timeout=8.0,
+            )
+        except Exception as exc:
+            logger.debug("[STEP-4c] earnings surprise fetch failed: %s", exc)
+            data = []
+        await cache_set(cache_key, data, ttl_seconds=86400)
+        return data
+
+    earnings_surprise_task = asyncio.create_task(_get_earnings_surprise())
 
     # ── Support/resistance — now uses intraday highs/lows ────────────────────
     logger.debug(
@@ -1420,6 +1477,13 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         logger.warning(f"[STEP-4e] earnings_task failed: {e}")
         earnings_dates = []
 
+    # Resolve earnings surprise history (fired concurrently at Step 4c)
+    try:
+        earnings_surprise: List[dict] = await earnings_surprise_task
+    except Exception as e:
+        logger.warning(f"[STEP-4e] earnings_surprise_task failed: {e}")
+        earnings_surprise = []
+
     # ── Step 4f. "Why did this move?" explainer (async, runs concurrently) ─────
     try:
         _cur_f = float(live_price)
@@ -1491,6 +1555,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
                 track_record=track_record,
                 sentiment=sentiment,
                 stocktwits=stocktwits_data,
+                divergences=divergences,
                 ctx_only=True,
             ),
         )
@@ -1511,6 +1576,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
                 track_record=track_record,
                 sentiment=sentiment,
                 stocktwits=stocktwits_data,
+                divergences=divergences,
             ),
         )
 
@@ -1660,6 +1726,17 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             "rsi_series": rsi_series,
             "support":    sr_levels["support"],
             "resistance": sr_levels["resistance"],
+            # ── Advanced technical signals (Feature 14) ──
+            "atr_14":      atr_14,
+            "stoch_k":     stoch.get("stoch_k"),
+            "stoch_d":     stoch.get("stoch_d"),
+            "adx_14":      adx.get("adx_14"),
+            "plus_di":     adx.get("plus_di"),
+            "minus_di":    adx.get("minus_di"),
+            "obv_history": obv_history,
+            "divergences": divergences,
+            "rf_feature_importance": forecast.get("rf_feature_importance", []),
+            "earnings_surprise":     earnings_surprise,
         },
         lastUpdated  = now.isoformat(),
         juryAnalysts  = jury,
