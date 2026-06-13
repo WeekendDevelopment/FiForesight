@@ -189,7 +189,7 @@ export default function OrderBookPanel({ symbol }: { symbol: string }) {
   };
 
   return (
-    <Paper sx={{ p: 2, borderRadius: 2 }}>
+    <Paper sx={{ p: { xs: 1.5, sm: 2 }, borderRadius: 2, overflowX: 'auto' }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', mb: 1 }}>
         <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75 }}>
           <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>

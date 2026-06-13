@@ -171,7 +171,11 @@ export default function EarningsPage() {
                   · {group.entries.length} {group.entries.length === 1 ? 'company' : 'companies'}
                 </Typography>
               </Typography>
-              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5 }}>
+              <Box sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, 1fr)', md: 'repeat(4, 1fr)', lg: 'repeat(6, 1fr)' },
+                gap: 1.5,
+              }}>
                 {group.entries.map(e => (
                   <Card
                     key={e.symbol}
@@ -185,12 +189,12 @@ export default function EarningsPage() {
                       }
                     }}
                     sx={{
-                      cursor: 'pointer', width: 168, border: `1px solid ${borderCol}`,
+                      cursor: 'pointer', border: `1px solid ${borderCol}`,
                       transition: 'background 0.15s ease, border-color 0.15s ease',
                       '&:hover': { background: hoverBg, borderColor: `${primaryColor}66` },
                     }}
                   >
-                    <CardContent sx={{ p: '12px !important' }}>
+                    <CardContent sx={{ p: { xs: '10px !important', sm: '12px !important' } }}>
                       <Typography sx={{ fontWeight: 800, fontSize: '0.95rem', color: primaryColor }}>
                         {e.symbol}
                       </Typography>

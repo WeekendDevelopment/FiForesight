@@ -54,7 +54,7 @@ export default function TradeSetupCard({ setup, loading, isDark, primaryColor }:
         </Stack>
 
         {/* 3-column grid */}
-        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 1.5, mb: 1.5 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr 1fr' }, gap: 1.5, mb: 1.5 }}>
 
           {/* Entry zone */}
           <Box sx={{ p: 1.5, borderRadius: 2, border: `1px solid ${primaryColor}22`, background: `${primaryColor}08` }}>

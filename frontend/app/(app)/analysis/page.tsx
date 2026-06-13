@@ -355,7 +355,7 @@ function AnalysisContent() {
                       <Typography variant="overline" sx={{ opacity: 0.5, display: 'flex', alignItems: 'center', gap: 1 }}>
                         <BarChart2 size={14} /> Price Forecast
                       </Typography>
-                      <Box sx={{ mt: 2, display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 1.5 }}>
+                      <Box sx={{ mt: 2, display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)', md: 'repeat(5, 1fr)' }, gap: 1.5 }}>
                         {prediction.forecastDays.map((day, i) => {
                           const isUp = day.predicted >= parseFloat(prediction.currentPrice);
                           const col  = isUp ? (isDark ? '#00ffa3' : '#16a34a') : (isDark ? '#ff0055' : '#dc2626');
@@ -459,13 +459,13 @@ function AnalysisContent() {
                       </Typography>
                     </Stack>
                     <Stack direction="row" flexWrap="wrap" gap={0.75}>
-                      {watchlist.map(sym => (
+                      {watchlist.map(item => (
                         <Chip
-                          key={sym}
-                          label={sym}
+                          key={item.symbol}
+                          label={item.symbol}
                           size="small"
-                          onClick={() => handlePredict(sym)}
-                          onDelete={() => void toggleWatchlist(sym)}
+                          onClick={() => handlePredict(item.symbol)}
+                          onDelete={() => void toggleWatchlist(item.symbol)}
                           sx={{
                             cursor: 'pointer',
                             fontWeight: 700,
@@ -592,7 +592,11 @@ function AnalysisContent() {
 
                 {/* ── Trending Sparklines (real 5-day) ─────────────────── */}
                 {prediction?.trending?.length > 0 && (
-                  <TrendingSparklines tickers={prediction.trending} isDark={isDark} />
+                  <TrendingSparklines
+                    tickers={prediction.trending.map(t => t.symbol).filter(Boolean)}
+                    isDark={isDark}
+                    extraSymbols={watchlist.map(item => item.symbol)}
+                  />
                 )}
 
               </>
@@ -619,7 +623,9 @@ function AnalysisContent() {
             size="medium"
             aria-label={user ? (chatOpen ? 'Close chat' : 'Open AI chat') : 'Sign in to open AI chat'}
             sx={{
-              position: 'fixed', bottom: 24, right: 24,
+              position: 'fixed',
+              bottom: { xs: 84, md: 24 },  // clear 60px mobile nav + 24px margin
+              right: 24,
               background: primaryColor,
               '&:hover': { background: primaryColor, filter: 'brightness(1.15)' },
               boxShadow: `0 0 20px ${primaryColor}66`,

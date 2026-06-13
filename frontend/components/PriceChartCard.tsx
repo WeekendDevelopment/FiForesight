@@ -4,7 +4,7 @@ import { useState, useMemo, useCallback } from 'react';
 import axios from 'axios';
 import {
   Box, Card, CardContent, Chip, Collapse, CircularProgress, Stack, Typography,
-  ToggleButton, ToggleButtonGroup, Button,
+  ToggleButton, ToggleButtonGroup, Button, useMediaQuery, useTheme,
 } from '@mui/material';
 import { Info, ChevronDown, ChevronUp } from 'lucide-react';
 import dynamic from 'next/dynamic';
@@ -45,6 +45,11 @@ export default function PriceChartCard({
   chartMode, setChartMode,
   isDark, primaryColor, trendColor, chartStats, indicatorSignals,
 }: Props) {
+  const theme    = useTheme();
+  const isXs     = useMediaQuery(theme.breakpoints.down('sm'));
+  const isSm     = useMediaQuery(theme.breakpoints.between('sm', 'md'));
+  const chartH   = isXs ? 220 : isSm ? 300 : 400;
+
   const [legendOpen,       setLegendOpen]       = useState(false);
   const [selectedInterval, setSelectedInterval] = useState<string>('2y');
   const [intervalData,     setIntervalData]     = useState<IntervalHistoryData | null>(null);
@@ -133,11 +138,13 @@ export default function PriceChartCard({
 
   return (
     <Card>
-      <CardContent sx={{ p: 4 }}>
+      <CardContent sx={{ p: { xs: 2, sm: 3, md: 4 } }}>
         {/* Symbol header */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
           <Box>
-            <Typography variant="h2">{prediction.symbol}</Typography>
+            <Typography sx={{ fontWeight: 800, fontSize: { xs: '1.75rem', sm: '2.5rem', md: '3.75rem' }, lineHeight: 1.1 }}>
+              {prediction.symbol}
+            </Typography>
             <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
               <Chip
                 label={`${prediction.prediction.trend} Trend`}
@@ -151,7 +158,9 @@ export default function PriceChartCard({
             </Stack>
           </Box>
           <Box sx={{ textAlign: 'right' }}>
-            <Typography variant="h3" color="primary.main">${prediction.currentPrice}</Typography>
+            <Typography color="primary.main" sx={{ fontWeight: 700, fontSize: { xs: '1.5rem', sm: '2rem', md: '3rem' }, lineHeight: 1.1 }}>
+              ${prediction.currentPrice}
+            </Typography>
             <Typography variant="caption" sx={{ opacity: 0.4 }}>
               {prediction.metrics.currency ?? 'USD'} · LIVE FEED
             </Typography>
@@ -345,6 +354,7 @@ export default function PriceChartCard({
             resistance={isTwoYear ? (prediction.indicators?.resistance ?? []) : []}
             intraday={intraday}
             showVwap={intraday && showVwap}
+            priceHeight={chartH}
           />
         </Box>
       </CardContent>
