@@ -11,7 +11,7 @@ AI-driven quantitative financial forecasting SaaS. Ticker lookup → ensemble ML
 |-------|-----------|
 | Frontend | Next.js 16, React 19, TypeScript 6, MUI 7, Recharts 3, Tailwind CSS 4, Axios, Lucide React |
 | Backend | Python 3.12, FastAPI, Uvicorn, LangGraph, FastMCP |
-| ML/Forecasting | Prophet, SARIMAX (statsmodels), RandomForestRegressor (scikit-learn) |
+| ML/Forecasting | Prophet, SARIMAX (statsmodels), RandomForestRegressor (scikit-learn), scipy (`signal.find_peaks` — RSI/MACD divergence) |
 | Market Data | yfinance, SerpAPI (news/trending) |
 | Sentiment | VADER (vaderSentiment) — headline scoring, compound score + label |
 | AI / LLM Jury | Groq API — Llama 4 Scout, Llama 3.3 70B, Llama 3.1 8B (3-analyst jury via LangGraph) |
@@ -184,6 +184,8 @@ User enters ticker
     → FastAPI /predict (routers/predict.py)
       → InfluxDB (cached 2Y OHLCV) → fallback: yfinance
       → Technical indicators: RSI, MACD, BB, SMA50/200, EMA20/50, Support/Resistance, Earnings dates
+      → Advanced signals (Feature 14): ATR-14, Stochastic %K/%D, ADX/+DI/−DI, OBV (last 30),
+        RSI/MACD divergence (scipy find_peaks), earnings surprise (last 4Q), RF feature importance (top-5)
       → Ensemble forecast: Prophet + SARIMAX + RandomForest → high/low/confidence
       → Monte Carlo: 1 000 paths, seed=42 → P10/P50/P90, VaR-95, prob_gain
       → SerpAPI: news headlines + trending symbols
@@ -192,6 +194,8 @@ User enters ticker
           Llama 4 Scout (Macro & Risk) · Llama 3.3 70B (Growth) · Llama 3.1 8B Instant (Quant)
           Each isolated — failures degrade to Hold/25, not 500
       → Response: history, fundamentals, indicators, forecasts, jury verdicts, news, sentiment, monte carlo
+        (indicators payload also carries: atr_14, stoch_k/stoch_d, adx_14/plus_di/minus_di, obv_history,
+         divergences {rsi_bullish, rsi_bearish, macd_bullish, macd_bearish}, rf_feature_importance, earnings_surprise)
 
       → Fire-and-forget: write_sentiment_score (sentiment_score measurement) — only if ≥1 headline scored
 
@@ -284,6 +288,7 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 | Portfolio Manager — real holdings + live P&L ("My Portfolio" tab) | #249 |
 | Alerts & Notifications — rule builder + scheduled evaluator + Web Push ("Alerts" tab) | #254 |
 | Watchlist persistence + intraday sparklines + responsive design (F13) | pending |
+| Advanced Technical Signals — ATR stops, divergence, earnings surprise, RF importance, Stoch/ADX/OBV (F14) | pending |
 
 ---
 
@@ -321,3 +326,4 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 - **Intraday sparklines (Feature 13)** — `/sparklines` response shape changed from `Dict[str, List[float]]` (old flat prices) to `List[{symbol, price, change_pct, bars: [{t, c}]}]`. `TrendingSparklines` now accepts `tickers: string[]` (not `{symbol}[]`). The `?extra=` param appends watchlist symbols to the base list; deduplicated to max 24. Each symbol cached 5min in Redis independently. `_fetch_intraday_bars` strips pre/post-market (keeps 09:30–16:00 ET via tz_convert), returns `{}` on any failure.
 - **Responsive design (Feature 13)** — breakpoints: 320px (xs, mobile), 768px (sm, tablet), 1280px (md, desktop), 2560px (4K). Key fixes: PriceChart height 220/300/400px via `useMediaQuery`; DCFCard + TradeSetupCard 3-column grids stack on xs; FundamentalsPanel grid xs:6/sm:4/md:3; Earnings/IPO responsive CSS grid; sidebar `maxWidth: 280` cap at 4K; Shell content `maxWidth: 1600` for 4K; MobileNav tap targets `minHeight: 44`. MorningBriefingPanel + SectorHeatmap use `overflowX: auto` / `flexWrap: wrap` — fine at 320px. OptionsChainPanel table has `overflowX: auto` wrapper. Portfolio table hides columns on mobile via `isMobile` (`useMediaQuery`).
 - **Security model** — `dependencies.py` holds the `limiter` singleton and all auth helpers. `require_user` dependency raises HTTP 401 when no valid Bearer token is present; applied to `/trade-setup` and `/jury/reanalyze`. `/predict` uses a single rate limit keyed by user ID (authed) or IP (anon) via `_user_rate_key`. `/chat` message is capped at 500 chars with control-char sanitization on all context values. CORS is restricted to `ALLOWED_ORIGINS`. Symbol inputs are validated with `[A-Za-z0-9.\-:]{1,15}` on `/predict`, `/dcf/{symbol}`, `/options/{symbol}`, and history. JWT verification picks the verifier by the token's `alg`: **ES256/RS256** (Supabase's default signing-key tokens) are verified against the project **JWKS** (`SUPABASE_URL`, or `SUPABASE_JWKS_URL`); legacy **HS256** tokens use `SUPABASE_JWT_SECRET`. JWKS-only (ES256) is a valid secure production config — the shared secret is not required when a JWKS URL is set. The backend fails closed when **neither** a JWKS URL nor a secret is configured (or decodes unsigned only when `ALLOW_INSECURE_JWT=true`, dev-only; logged at startup). All frontend auth API routes forward the `Authorization` header.
+- **Advanced Technical Signals (Feature 14)** — five signal upgrades shipped together. Indicator helpers live in `models.py` (`calculate_atr`, `calculate_stochastic`, `calculate_adx`, `calculate_obv`, `detect_divergences`), each self-contained and returning `None`/all-false on failure so a bad indicator never aborts `/predict`. `routers/predict.py` computes them at Step 4b# and adds them to the **`indicators`** payload (`atr_14`, `stoch_k/stoch_d`, `adx_14/plus_di/minus_di`, `obv_history` = last 30, `divergences`, `rf_feature_importance` = RF top-5, `earnings_surprise` = last 4Q). **ATR-based adaptive stop** (`routers/trade.py`): when the frontend passes `atr_14`, the stop is `entry ∓ k×ATR` (k=2.0, or 2.5 when `conservative:true`) instead of a flat %, **hard-capped at 8%** from entry; falls back to the S/R % stop when ATR is absent (legacy/anon callers). Response adds `atr_14` + `atr_multiplier`. **Divergence** (`detect_divergences`, scipy `find_peaks` on price & indicator troughs/peaks ≥5 bars apart over the last 20 bars; all-false under 30 bars) is also injected into the jury context and each analyst's system prompt. **RF feature importance** is threaded out of `_rf_forecast` (now returns `(forecast_array, importances)` — `backtest.py` takes `[0]`) through `run_ensemble_forecast`. **Earnings surprise** comes from `YFinanceService.fetch_earnings_surprise` (yfinance `earnings_history`, Redis-cached 24h, `[]` on failure). Frontend: ATR annotation in `TradeSetupCard`, earnings-surprise Accordion in `FundamentalsPanel`, `ModelFeatureImportanceBar.tsx` below `ModelWeightBar`, and `SignalPanels.tsx` (Stoch/ADX gauges with ref lines, OBV area chart, divergence badges) below the chart in `PriceChartCard` — sub-panel visibility persisted in `localStorage` (`fiforesight:subpanels`), default hidden. Stoch/ADX are latest-value gauges (backend sends scalars, not per-bar series); OBV uses the 30-value history.
