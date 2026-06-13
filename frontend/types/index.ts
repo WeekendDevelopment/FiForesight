@@ -102,7 +102,22 @@ export interface PredictionData {
   };
   news:      { title: string; link: string; source: string; thumbnail: string; date: string; source_label?: string }[];
   trending:  { symbol: string; name?: string; price: string | number; change: string; category?: string }[];
-  indicators?: { rsi_series?: number[]; support?: number[]; resistance?: number[] };
+  indicators?: {
+    rsi_series?: number[];
+    support?:    number[];
+    resistance?: number[];
+    // ── Advanced technical signals (Feature 14) ──
+    atr_14?:      number | null;
+    stoch_k?:     number | null;
+    stoch_d?:     number | null;
+    adx_14?:      number | null;
+    plus_di?:     number | null;
+    minus_di?:    number | null;
+    obv_history?: number[] | null;
+    divergences?: Divergences;
+    rf_feature_importance?: FeatureImportance[];
+    earnings_surprise?:     EarningsSurprise[];
+  };
   juryAnalysts?: AnalystJuror[];
   modelWeights?: { prophet: number; sarima: number; rf: number };
   sentiment?:    { compound: number; label: string; headline_count: number };
@@ -141,6 +156,30 @@ export interface ReversalRisk {
 
 export type ChartEntry = Record<string, string | number | undefined>;
 
+// ── Advanced technical signals (Feature 14) ──────────────────────────────────
+
+export interface Divergences {
+  rsi_bullish:  boolean;
+  rsi_bearish:  boolean;
+  macd_bullish: boolean;
+  macd_bearish: boolean;
+}
+
+export interface FeatureImportance {
+  feature:    string;
+  importance: number;   // 0–1, top-5 normalised to sum 1.0
+}
+
+export interface EarningsSurprise {
+  quarter:      string;
+  estimate:     number | null;
+  actual:       number | null;
+  surprise_pct: number | null;
+}
+
+// Sub-panel indicators toggleable on the price chart (persisted in localStorage).
+export type SubPanelKey = 'stoch' | 'adx' | 'obv';
+
 export type IndicatorKey = 'bb' | 'sma' | 'ema' | 'macd' | 'rsi' | 'volume';
 
 export interface TradeSetupResponse {
@@ -156,6 +195,8 @@ export interface TradeSetupResponse {
   risk_per_share:          number;
   risk_pct:                number;
   suggested_position_pct:  number;
+  atr_14?:                 number | null;
+  atr_multiplier?:         number | null;
 }
 
 export interface ChatMessage {

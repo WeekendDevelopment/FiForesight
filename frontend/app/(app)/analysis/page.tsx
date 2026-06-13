@@ -18,6 +18,7 @@ import { useAuth } from '../../../contexts/AuthContext';
 import { useAppShell } from '../../../contexts/AppShellContext';
 import AuthModal from '../../../components/AuthModal';
 import ModelWeightBar   from '../../../components/ModelWeightBar';
+import ModelFeatureImportanceBar from '../../../components/ModelFeatureImportanceBar';
 import BacktestPanel    from '../../../components/BacktestPanel';
 import TrendingSparklines from '../../../components/TrendingSparklines';
 import MonteCarloFanChart from '../../../components/MonteCarloFanChart';
@@ -101,6 +102,7 @@ function AnalysisContent() {
       trend:           data.prediction.trend,
       sentiment_label: data.sentiment?.label ?? 'Neutral',
       var_95:          data.monteCarlo?.var_95 ?? null,
+      atr_14:          data.indicators?.atr_14 ?? null,
     }, { headers: authHeaders })
       .then(r  => setTradeSetup(r.data))
       .catch(() => { /* non-fatal */ })
@@ -318,9 +320,16 @@ function AnalysisContent() {
                   />
                 )}
 
-                {/* ── Ensemble model weights ───────────────────────── */}
+                {/* ── Ensemble model weights + RF feature importance ─── */}
                 {prediction.modelWeights && (
-                  <ModelWeightBar weights={prediction.modelWeights} isDark={isDark} />
+                  <Box>
+                    <ModelWeightBar weights={prediction.modelWeights} isDark={isDark} />
+                    <ModelFeatureImportanceBar
+                      importances={prediction.indicators?.rf_feature_importance ?? []}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
+                  </Box>
                 )}
 
                 {/* ── Walk-forward backtest (on-demand) ────────────── */}
