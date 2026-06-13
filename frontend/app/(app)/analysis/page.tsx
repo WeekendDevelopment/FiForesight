@@ -355,7 +355,7 @@ function AnalysisContent() {
                       <Typography variant="overline" sx={{ opacity: 0.5, display: 'flex', alignItems: 'center', gap: 1 }}>
                         <BarChart2 size={14} /> Price Forecast
                       </Typography>
-                      <Box sx={{ mt: 2, display: 'grid', gridTemplateColumns: { xs: 'repeat(3, 1fr)', sm: 'repeat(5, 1fr)' }, gap: 1.5 }}>
+                      <Box sx={{ mt: 2, display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)', md: 'repeat(5, 1fr)' }, gap: 1.5 }}>
                         {prediction.forecastDays.map((day, i) => {
                           const isUp = day.predicted >= parseFloat(prediction.currentPrice);
                           const col  = isUp ? (isDark ? '#00ffa3' : '#16a34a') : (isDark ? '#ff0055' : '#dc2626');
@@ -595,6 +595,7 @@ function AnalysisContent() {
                   <TrendingSparklines
                     tickers={prediction.trending.map(t => t.symbol).filter(Boolean)}
                     isDark={isDark}
+                    extraSymbols={watchlist.map(item => item.symbol)}
                   />
                 )}
 

@@ -58,7 +58,10 @@ export default function TrendingSparklines({ tickers, isDark, extraSymbols }: Pr
       if (err instanceof Error && err.name === 'AbortError') return;
       // Non-critical; keep stale data if any
     } finally {
-      setLoading(false);
+      if (controllerRef.current === controller) {
+        controllerRef.current = null;
+        setLoading(false);
+      }
     }
   }, [tickerKey, extraKey]);
 
