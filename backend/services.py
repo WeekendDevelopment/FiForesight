@@ -1,6 +1,7 @@
 # backend/services.py
 import re
 import json
+import math
 import logging
 import asyncio
 import httpx
@@ -1763,7 +1764,7 @@ class InsiderService:
     def _to_float(v: Any) -> Optional[float]:
         try:
             f = float(v)
-            return f if f == f else None  # filter NaN
+            return None if math.isnan(f) else f  # filter NaN
         except (TypeError, ValueError):
             return None
 
