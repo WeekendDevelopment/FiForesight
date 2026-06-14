@@ -1,6 +1,10 @@
 'use client';
 
-import { Box, Card, CardContent, Chip, Divider, Grid, Stack, Typography } from '@mui/material';
+import {
+  Accordion, AccordionDetails, AccordionSummary,
+  Box, Card, CardContent, Chip, Divider, Grid, Stack, Typography,
+} from '@mui/material';
+import { ChevronDown } from 'lucide-react';
 import type { PredictionData } from '../types';
 
 interface Props {
@@ -191,6 +195,78 @@ export default function FundamentalsPanel({ prediction, rsiInfo, isDark, primary
           </CardContent>
         </Card>
       )}
+
+      {/* Earnings Surprise History (Feature 14) — collapsible; default collapsed
+          when no data is available. */}
+      {(() => {
+        const surprises = prediction.indicators?.earnings_surprise ?? [];
+        const hasData = surprises.length > 0;
+        return (
+          <Card>
+            <Accordion
+              disableGutters
+              defaultExpanded={false}
+              sx={{ background: 'transparent', boxShadow: 'none', '&:before': { display: 'none' } }}
+            >
+              <AccordionSummary expandIcon={<ChevronDown size={16} />} sx={{ px: 2 }}>
+                <Typography variant="overline" sx={{ opacity: 0.5 }}>
+                  Earnings Surprise History
+                </Typography>
+              </AccordionSummary>
+              <AccordionDetails sx={{ px: 2, pt: 0 }}>
+                {hasData ? (
+                  <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem' }}>
+                    <Box component="thead">
+                      <Box component="tr" sx={{ opacity: 0.45, textAlign: 'left' }}>
+                        {['Quarter', 'Est', 'Actual', 'Beat/Miss'].map(h => (
+                          <Box component="th" key={h} sx={{ py: 0.5, fontWeight: 700, letterSpacing: 0.5 }}>
+                            {h}
+                          </Box>
+                        ))}
+                      </Box>
+                    </Box>
+                    <Box component="tbody">
+                      {surprises.map((s, i) => {
+                        const beat = s.surprise_pct != null && s.surprise_pct >= 0;
+                        const chipColor = s.surprise_pct == null
+                          ? 'text.secondary'
+                          : beat ? (isDark ? '#00ffa3' : '#16a34a') : (isDark ? '#ff0055' : '#dc2626');
+                        return (
+                          <Box component="tr" key={i} sx={{ borderTop: `1px solid ${isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}` }}>
+                            <Box component="td" sx={{ py: 0.6, fontWeight: 600 }}>{s.quarter}</Box>
+                            <Box component="td" sx={{ py: 0.6 }}>{s.estimate != null ? s.estimate.toFixed(2) : '—'}</Box>
+                            <Box component="td" sx={{ py: 0.6 }}>{s.actual != null ? s.actual.toFixed(2) : '—'}</Box>
+                            <Box component="td" sx={{ py: 0.6 }}>
+                              {s.surprise_pct == null ? (
+                                <Typography component="span" sx={{ fontSize: '0.7rem', opacity: 0.5 }}>—</Typography>
+                              ) : (
+                                <Chip
+                                  label={`${beat ? '+' : ''}${s.surprise_pct.toFixed(1)}%`}
+                                  size="small"
+                                  sx={{
+                                    height: 18, fontSize: '0.62rem', fontWeight: 700,
+                                    color: chipColor,
+                                    bgcolor: `${beat ? (isDark ? 'rgba(0,255,163,0.12)' : 'rgba(22,163,74,0.12)') : (isDark ? 'rgba(255,0,85,0.12)' : 'rgba(220,38,38,0.12)')}`,
+                                    '& .MuiChip-label': { px: 0.75 },
+                                  }}
+                                />
+                              )}
+                            </Box>
+                          </Box>
+                        );
+                      })}
+                    </Box>
+                  </Box>
+                ) : (
+                  <Typography variant="caption" sx={{ opacity: 0.4 }}>
+                    Earnings surprise data unavailable for this ticker.
+                  </Typography>
+                )}
+              </AccordionDetails>
+            </Accordion>
+          </Card>
+        );
+      })()}
     </>
   );
 }

@@ -9,6 +9,7 @@ import {
 import { Info, ChevronDown, ChevronUp } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { PredictionData, IndicatorKey, ChartStats, IndicatorSignals, IntervalHistoryData } from '../types';
+import SignalPanels from './SignalPanels';
 
 const AdvancedChart = dynamic(() => import('./AdvancedChart'), { ssr: false });
 
@@ -357,6 +358,23 @@ export default function PriceChartCard({
             priceHeight={chartH}
           />
         </Box>
+
+        {/* Advanced signal sub-panels (Feature 14) — Stoch / ADX / OBV +
+            RSI/MACD divergence badges. Only on the native 2Y view, where the
+            indicator payload (latest scalars + OBV history) applies. */}
+        {isTwoYear && (
+          <SignalPanels
+            stochK={prediction.indicators?.stoch_k}
+            stochD={prediction.indicators?.stoch_d}
+            adx={prediction.indicators?.adx_14}
+            plusDi={prediction.indicators?.plus_di}
+            minusDi={prediction.indicators?.minus_di}
+            obvHistory={prediction.indicators?.obv_history}
+            divergences={prediction.indicators?.divergences}
+            isDark={isDark}
+            primaryColor={primaryColor}
+          />
+        )}
       </CardContent>
     </Card>
   );

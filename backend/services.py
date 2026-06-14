@@ -1052,6 +1052,58 @@ class YFinanceService:
             return []
 
     @newrelic.agent.function_trace()
+    def fetch_earnings_surprise(self, symbol: str) -> List[dict]:
+        """
+        Last 4 quarters of earnings surprise from yfinance (free, no API key).
+
+        Returns a list of {quarter, estimate, actual, surprise_pct} dicts,
+        most-recent first. Empty list on any failure or when unavailable
+        (logged at DEBUG, never raises).
+        """
+        if not YFINANCE_AVAILABLE:
+            return []
+        ticker = self._to_yf_symbol(symbol)
+        try:
+            hist = yf.Ticker(ticker).earnings_history
+            if hist is None or getattr(hist, "empty", True):
+                return []
+            # yfinance returns a DataFrame indexed by quarter date with columns
+            # epsEstimate / epsActual / surprisePercent (names vary by version).
+            cols = {c.lower(): c for c in hist.columns}
+            est_col = cols.get("epsestimate")
+            act_col = cols.get("epsactual")
+            sur_col = cols.get("surprisepercent")
+            result: List[dict] = []
+            for idx, row in hist.tail(4).iloc[::-1].iterrows():
+                try:
+                    quarter = (
+                        idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime")
+                        else str(idx)[:10]
+                    )
+                    est = float(row[est_col]) if est_col and pd.notna(row[est_col]) else None
+                    act = float(row[act_col]) if act_col and pd.notna(row[act_col]) else None
+                    if sur_col and pd.notna(row[sur_col]):
+                        surprise = float(row[sur_col])
+                    elif est not in (None, 0) and act is not None:
+                        surprise = (act - est) / abs(est) * 100
+                    else:
+                        surprise = None
+                    result.append({
+                        "quarter":      quarter,
+                        "estimate":     round(est, 4) if est is not None else None,
+                        "actual":       round(act, 4) if act is not None else None,
+                        "surprise_pct": round(surprise, 2) if surprise is not None else None,
+                    })
+                except Exception as _exc:
+                    logger.debug("[YFINANCE] earnings surprise row parse error: %s", _exc)
+                    continue
+            logger.info(f"[YFINANCE] ✓ fetch_earnings_surprise — {ticker}: {len(result)} quarters")
+            return result
+        except Exception as e:
+            logger.debug(f"[YFINANCE] fetch_earnings_surprise failed for {ticker}: {e}")
+            return []
+
+    @newrelic.agent.function_trace()
     def fetch_news(self, symbol: str) -> List[dict]:
         """
         Fetch recent news headlines from yfinance (free, no API key).
@@ -1623,6 +1675,8 @@ ANALYST_PERSONAS = [
             "Flag RSI extremes, negative trend slope, elevated volatility, or concerning forecast skew. "
             "Examine BB band squeeze/expansion, proximity to support/resistance, whether volume confirms "
             "or contradicts the move, and any fundamental red flags. "
+            "If a bearish RSI or MACD divergence is flagged, treat it as a warning of a potential "
+            "reversal lower and weight your risk stance accordingly. "
             "Focus on what could go wrong, not growth upside. "
             "Be specific, actionable, and advisory — not generic. "
             "Conclude with a clear rating (Strong Sell / Sell / Hold) and your recommended risk stance."
@@ -1648,6 +1702,8 @@ ANALYST_PERSONAS = [
             "Identify fundamental tailwinds, earnings momentum, product or sector catalysts, "
             "and breakout potential. Correlate positive news flow with price momentum and volume trends. "
             "Reference MACD momentum, SMA50/200 positioning, RSI strength, and forecast confidence. "
+            "If a bullish RSI or MACD divergence is flagged, treat it as confirmation that downside "
+            "momentum may be exhausting and an upside reversal is forming. "
             "Ignore macro doomsday scenarios — focus on this asset's specific growth trajectory "
             "and why it has the potential to outperform. "
             "Be specific, actionable, and advisory — not generic. "
@@ -1676,6 +1732,8 @@ ANALYST_PERSONAS = [
             "Interpret RSI regime, MACD histogram crossover state, Bollinger Band width and price position, "
             "SMA50/200 crossover proximity and % distance, annualised volatility, "
             "and volume confirmation of the trend. Cite the forecast confidence label explicitly. "
+            "When an RSI or MACD divergence is flagged, state its directional implication and factor it "
+            "into your probabilistic read. "
             "Map each signal to a clear probabilistic implication. Be precise and data-first. "
             "Conclude with a clear quantitative rating (Accumulate / Hold / Distribute) "
             "and identify specific technical entry and exit levels where applicable."

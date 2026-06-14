@@ -152,6 +152,70 @@ def test_trade_setup_groq_failure_uses_fallback_rationale() -> None:
     assert len(resp.json()["rationale"]) > 0
 
 
+def test_trade_setup_atr_stop_widens_with_volatility() -> None:
+    """A larger ATR should place the long stop further from entry (volatility-adaptive)."""
+    with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
+        low_vol = client.post(
+            "/trade-setup",
+            json=_trade_payload(rsi=50.0, trend="Bullish", atr_14=0.5),
+        ).json()
+        high_vol = client.post(
+            "/trade-setup",
+            json=_trade_payload(rsi=50.0, trend="Bullish", atr_14=4.0),
+        ).json()
+    assert low_vol["atr_14"] == 0.5 and low_vol["atr_multiplier"] == 2.0
+    assert high_vol["atr_14"] == 4.0
+    entry_low_lv  = (low_vol["entry_low"] + low_vol["entry_high"]) / 2 - low_vol["stop_loss"]
+    entry_low_hv  = (high_vol["entry_low"] + high_vol["entry_high"]) / 2 - high_vol["stop_loss"]
+    # Higher ATR → wider stop distance.
+    assert entry_low_hv > entry_low_lv
+
+
+def test_trade_setup_atr_stop_8pct_hard_cap() -> None:
+    """An enormous ATR must still keep the stop within 8% of entry."""
+    with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
+        d = client.post(
+            "/trade-setup",
+            json=_trade_payload(rsi=50.0, trend="Bullish", current_price=150.0, atr_14=50.0),
+        ).json()
+    entry_mid = (d["entry_low"] + d["entry_high"]) / 2
+    # Stop is below entry but capped at 8% away.
+    assert d["stop_loss"] < entry_mid
+    assert d["stop_loss"] >= entry_mid * 0.92 - 0.01
+
+
+def test_trade_setup_conservative_uses_2_5_multiplier() -> None:
+    with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
+        d = client.post(
+            "/trade-setup",
+            json=_trade_payload(rsi=50.0, trend="Bullish", atr_14=1.0, conservative=True),
+        ).json()
+    assert d["atr_multiplier"] == 2.5
+
+
+def test_trade_setup_no_atr_falls_back() -> None:
+    """Without ATR, the response carries null ATR fields (legacy % stop path)."""
+    with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
+        d = client.post("/trade-setup", json=_trade_payload(rsi=50.0, trend="Bullish")).json()
+    assert d["atr_14"] is None
+    assert d["atr_multiplier"] is None
+
+
+def test_trade_setup_negative_atr_rejected() -> None:
+    """A negative atr_14 must be rejected by the validator (422)."""
+    resp = client.post(
+        "/trade-setup",
+        json=_trade_payload(rsi=50.0, trend="Bullish", atr_14=-1.0),
+    )
+    assert resp.status_code == 422
+
+
+def test_trade_setup_invalid_symbol_rejected() -> None:
+    """A symbol outside the allowlist must be rejected (422)."""
+    resp = client.post("/trade-setup", json=_trade_payload(symbol="AAPL; DROP TABLE"))
+    assert resp.status_code == 422
+
+
 def test_trade_setup_invalid_price() -> None:
     resp = client.post("/trade-setup", json=_trade_payload(current_price=-5.0))
     assert resp.status_code == 422

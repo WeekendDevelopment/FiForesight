@@ -16,6 +16,7 @@
 4. [Architecture — Low-Level Design (LLD)](#4-architecture--low-level-design-lld)
 5. [Data Flow & Pipeline](#5-data-flow--pipeline)
 6. [Math & Calculations Reference](#6-math--calculations-reference)
+   - 6A. [Advanced Technical Signals (Feature 14)](#6a-advanced-technical-signals-feature-14)
 7. [ML Model Details](#7-ml-model-details)
 8. [API Reference](#8-api-reference)
 9. [Database Schema (InfluxDB)](#9-database-schema-influxdb)
@@ -842,6 +843,106 @@ These are computed in [frontend/app/page.tsx](../frontend/app/page.tsx) and are 
 | **Trending sparkline**           | 12 pseudo-random points derived deterministically from the ticker   | `trendingSparklines` memo         |
 | **Analyst jury consensus**       | First rating in the `RATING_ORDER` precedence list that has a plurality; "SPLIT" if verdicts disagree. | `AnalystJuryPanel` ([page.tsx:225](../frontend/app/page.tsx)) |
 | **Confidence badge colour**      | Green ≥ 70 %, cyan ≥ 50 %, amber < 50 %                              | `ConfidenceBadge` ([page.tsx:185](../frontend/app/page.tsx)) |
+
+---
+
+## 6A. Advanced Technical Signals (Feature 14)
+
+Five signal upgrades that sharpen the trade setup and surface reversal/strength
+cues. All indicator helpers live in [backend/models.py](../backend/models.py) and
+are computed in [backend/routers/predict.py](../backend/routers/predict.py) Step 4b#.
+Each helper is defensive: it returns `None` / all-false on insufficient data or any
+exception (logged at DEBUG), so a single bad indicator never aborts `/predict`.
+
+### 6A.1 ATR-14 (Average True Range) + adaptive stop
+
+True Range per bar and its 14-period EMA:
+
+```
+TR_t = max( high_t − low_t,  |high_t − close_{t-1}|,  |low_t − close_{t-1}| )
+ATR  = EMA_14(TR)               # ewm(span=14, adjust=False)
+```
+
+Returned as `indicators.atr_14`. The frontend forwards it to `POST /trade-setup`,
+where it replaces the flat-% stop with a **volatility-adaptive stop**:
+
+```
+long  : stop = max( entry_mid − k·ATR,  entry_mid · 0.92 )    # ≤ 8 % below
+short : stop = min( entry_mid + k·ATR,  entry_mid · 1.08 )    # ≤ 8 % above
+k = 2.0  (default)  |  2.5  (conservative:true)
+```
+
+The 8 % hard cap stops a huge ATR from suggesting a reckless stop. When `atr_14`
+is absent (anonymous/legacy callers) the endpoint falls back to the previous
+support/resistance % stop. The response echoes `atr_14` and `atr_multiplier`.
+
+### 6A.2 Stochastic oscillator (%K / %D)
+
+```
+%K = 100 · (close − lowest_low_14) / (highest_high_14 − lowest_low_14)
+%D = SMA_3(%K)
+```
+
+Returned as the latest `stoch_k` / `stoch_d`. UI renders gauges with reference
+lines at **20 / 80** (oversold / overbought).
+
+### 6A.3 ADX / +DI / −DI (Wilder, 14)
+
+Directional movement with Wilder smoothing (`ewm(alpha=1/14)`):
+
+```
++DM = up_move   if up_move > down_move and > 0 else 0
+−DM = down_move if down_move > up_move and > 0 else 0
++DI = 100 · EMA(+DM) / ATR        −DI = 100 · EMA(−DM) / ATR
+DX  = 100 · |+DI − −DI| / (+DI + −DI)
+ADX = EMA_14(DX)
+```
+
+Returned as `adx_14`, `plus_di`, `minus_di`. Reference line at **25**
+(below = ranging, above = trending).
+
+### 6A.4 OBV (On-Balance Volume)
+
+```
+OBV_t = OBV_{t-1} ± volume_t      (+ on up-close, − on down-close)
+```
+
+Returned as `obv_history` (last 30 values) and drawn as an area chart.
+
+### 6A.5 RSI / MACD-histogram divergence
+
+Uses `scipy.signal.find_peaks` over the **last 20 bars** (troughs found on the
+inverted series), peaks/troughs ≥ **5 bars apart**, comparing the two most recent
+extrema of the price series and the indicator series independently:
+
+- **Bullish**: price prints a *lower low* while the indicator prints a *higher low*.
+- **Bearish**: price prints a *higher high* while the indicator prints a *lower high*.
+
+Run for both RSI and the MACD histogram → `divergences = {rsi_bullish, rsi_bearish,
+macd_bullish, macd_bearish}`. All-false when fewer than 30 bars are available. The
+labels are injected into the analyst-jury context and each persona's system prompt,
+and surfaced as coloured badges ("RSI Div ↑/↓", "MACD Div ↑/↓") under the chart.
+
+### 6A.6 RandomForest feature importance
+
+After the RF is fit, `rf.feature_importances_` is paired with feature names
+(lagged OHLCV columns, e.g. `Close[t-1]`, `Volume[t-3]`), the **top-5** are taken
+and **normalised to sum 1.0**, sorted descending → `rf_feature_importance`.
+Rendered as a horizontal bar chart (`ModelFeatureImportanceBar`) below the
+ensemble-weights bar.
+
+### 6A.7 Earnings surprise history
+
+`YFinanceService.fetch_earnings_surprise` reads yfinance `earnings_history`
+(last 4 quarters) → `earnings_surprise = [{quarter, estimate, actual,
+surprise_pct}]` (Redis-cached 24 h, `[]` on failure). Rendered as a collapsible
+table in the fundamentals panel, chip-coloured green (beat ≥ 0 %) / red (miss).
+
+**UI surfaces** — ATR annotation in `TradeSetupCard`; earnings-surprise Accordion
+in `FundamentalsPanel`; `ModelFeatureImportanceBar` below `ModelWeightBar`;
+`SignalPanels` (Stoch/ADX gauges, OBV area chart, divergence badges) below the
+chart in `PriceChartCard`, with sub-panel visibility persisted in `localStorage`
+(`fiforesight:subpanels`, default hidden).
 
 ---
 
