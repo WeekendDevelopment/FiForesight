@@ -946,6 +946,128 @@ chart in `PriceChartCard`, with sub-panel visibility persisted in `localStorage`
 
 ---
 
+## 6B. Alternative Data Sources (Feature 15)
+
+Three free, **keyless** external feeds enrich the jury, the fundamentals panel,
+and a standalone macro dashboard. All three live in `services.py`
+(`FREDService`, `InsiderService`, `ShortInterestService`), are registered as
+singletons in `dependencies.py`, and **fail closed** (`{}` / `[]` / `None`,
+logged) so a bad fetch never blocks `/predict` or the jury.
+
+### 6B.1 FRED macro snapshot
+
+`FREDService.get_macro_snapshot()` fetches five headline series from the public
+FRED CSV endpoint `https://fred.stlouisfed.org/graph/fredgraph.csv?id=SERIES`
+(no API key required; `FRED_API_KEY` is optional and only raises the rate
+limit):
+
+| Series id  | Meaning                              |
+|------------|--------------------------------------|
+| `DGS10`    | 10-Year Treasury constant-maturity yield |
+| `CPIAUCSL` | CPI, all urban consumers             |
+| `UNRATE`   | Unemployment rate                    |
+| `FEDFUNDS` | Effective federal funds rate         |
+| `T10Y2Y`   | 10Y − 2Y spread (negative = inverted) |
+
+The five series are fetched concurrently (`asyncio.gather`, 10 s per series). For
+each, the **last 31 data points** are parsed (skipping FRED's `.` missing-value
+markers); `value` is the latest point and `delta_30d = value − first-of-31`. A
+`cosd` (≈1150-day) start-date window is sent on every request — **without it the
+daily series (DGS10, T10Y2Y) download their full multi-decade history (~16 k
+rows) and exceed the timeout**, silently dropping from the snapshot.
+
+Response shape:
+
+```json
+{
+  "dgs10":    {"value": 4.45, "delta_30d": 0.03},
+  "cpiaucsl": {"value": 333.98, "delta_30d": 26.28},
+  "unrate":   {"value": 4.30, "delta_30d": 0.40},
+  "fedfunds": {"value": 3.63, "delta_30d": -1.70},
+  "t10y2y":   {"value": 0.39, "delta_30d": -0.13},
+  "inverted": false,
+  "t10y2y_trend": [{"date": "2024-04-22", "value": -0.31}, …31 pts],
+  "fetched_at": "2026-06-14T…Z"
+}
+```
+
+`inverted` is `true` when `t10y2y.value < 0`. Redis-cached 1 h under
+`fred:snapshot` and **warmed on startup** in the `main.py` lifespan. Served at
+`GET /macro/snapshot` (60/min). Returns `{}` when FRED is unreachable.
+
+**Jury prompt enrichment** — the snapshot is rendered into a one-line
+`Macro (FRED): 10Y=… | CPI=… | Unemployment=… | FedFunds=… | 10Y-2Y curve=…`
+block injected into the shared jury context (`routers/predict.py::_run_analyst_jury`,
+param `macro=`). Each persona's system prompt also got a one-sentence macro
+directive so the three lenses read it differently: **Macro & Risk** (Llama 4
+Scout) → DGS10 / curve inversion / UNRATE; **Growth** (Llama 3.3 70B) → CPI
+30-day delta → margin pressure; **Quant** (Llama 3.1 8B) → FEDFUNDS → discount-rate
+/ valuation sensitivity. This fulfils the prior promise (the jury referenced
+macro verbally but never actually fetched it).
+
+### 6B.2 SEC EDGAR Form 4 insider transactions
+
+`InsiderService.get_insider_transactions(symbol)` queries the keyless EDGAR
+full-text search index (`https://efts.sec.gov/LATEST/search-index`, `forms=4`,
+last 30 days) and maps up to 10 filings onto:
+
+```json
+{"filer": "John Smith", "type": "Purchase", "shares": 5000,
+ "price": 132.0, "date": "2026-05-01", "sec_link": "https://www.sec.gov/…"}
+```
+
+Transaction codes map P→Purchase, S→Sale, A→Award (others → "Filing"). **Caveat:**
+the FTS index reliably carries filer name, file date, and a deep link to the
+filing, but **not** the transaction code / shares / price (those live only in the
+Form 4 XML) — so on real data `type` often falls back to `"Filing"` and
+shares/price to `null`. The UI handles this gracefully (grey chip, "—"). Redis-cached
+6 h per symbol; `[]` on any failure. Served at `GET /insider/{symbol}` (30/min)
+and also embedded in the `/predict` response as `insiderTransactions[]`.
+
+### 6B.3 FINRA short interest
+
+`ShortInterestService` downloads the most recent FINRA weekly consolidated NMS
+short-volume file
+(`https://cdn.finra.org/equity/regsho/weekly/CNMSshvol{YYYYMMDD}.txt`,
+pipe-delimited; tries the last 8 days until one is found), parses it into a
+`{symbol: {short_volume, total_volume}}` map, and caches the blob in Redis 24 h
+(`finra:short:{date}`). Per symbol it returns:
+
+```json
+{"short_volume": 1000000, "total_volume": 2000000,
+ "short_ratio": 0.5, "days_to_cover": 5.0, "report_date": "2026-06-05"}
+```
+
+with:
+
+```
+short_ratio   = short_volume / total_volume
+days_to_cover = short_volume / averageVolume    (yfinance averageVolume)
+```
+
+Returns **`null`** for symbols absent from the file (non-US / OTC). Embedded in
+`/predict` as `shortInterest`; surfaced in `FundamentalsPanel` as "SHORT % VOL"
+and "DAYS TO COVER" (coloured red when days-to-cover > 5).
+
+### 6B.4 UI surfaces
+
+- **`/macro` dashboard** (`frontend/app/(app)/macro/page.tsx`, public, "Macro"
+  sidebar item, `Globe` icon): 5 stat cards with colour-coded 30-day delta
+  arrows (rising rate/CPI/fed-funds = red, unemployment = amber, spread down =
+  red), a T10Y2Y trend `LineChart` (31 pts), a normalised 30-day-delta
+  `BarChart`, an amber inversion banner when the curve is inverted, and a
+  60-minute + `visibilitychange` auto-refresh.
+- **`InsiderTransactionsCard`** — collapsible Accordion on the analysis page,
+  default-open when any purchase exists in the window; green/red/grey type
+  chips; per-row "View on SEC" link.
+- **Short interest** rows added to `FundamentalsPanel`.
+
+All three feeds are fired concurrently inside `/predict` (via `_safe_fetch`,
+12 s bound) and resolved before the response, so EDGAR / FINRA / FRED latency
+never stalls a prediction. 21 backend tests in `test_alternative_data.py`.
+
+---
+
 ## 7. ML Model Details
 
 ### 7.1 Model 1 — Prophet (univariate, with regressors)

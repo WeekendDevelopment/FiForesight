@@ -12,7 +12,7 @@ AI-driven quantitative financial forecasting SaaS. Ticker lookup → ensemble ML
 | Frontend | Next.js 16, React 19, TypeScript 6, MUI 7, Recharts 3, Tailwind CSS 4, Axios, Lucide React |
 | Backend | Python 3.12, FastAPI, Uvicorn, LangGraph, FastMCP |
 | ML/Forecasting | Prophet, SARIMAX (statsmodels), RandomForestRegressor (scikit-learn), scipy (`signal.find_peaks` — RSI/MACD divergence) |
-| Market Data | yfinance, SerpAPI (news/trending) |
+| Market Data | yfinance, SerpAPI (news/trending), FRED (macro CSV — keyless), SEC EDGAR (Form 4 insider — keyless), FINRA (weekly short volume — keyless) |
 | Sentiment | VADER (vaderSentiment) — headline scoring, compound score + label |
 | AI / LLM Jury | Groq API — Llama 4 Scout, Llama 3.3 70B, Llama 3.1 8B (3-analyst jury via LangGraph) |
 | Time-Series DB | InfluxDB |
@@ -34,14 +34,14 @@ FiForesight/
 │   │   ├── predict.py          # /health /debug /predict /sparklines /compare
 │   │   ├── simulation.py       # /simulation/suggest /simulation/performance /simulation/state
 │   │   ├── trade.py            # /trade-setup /chat
-│   │   ├── market.py           # /dcf /options /ipo/calendar /earnings/calendar /sectors /briefing /orderbook
+│   │   ├── market.py           # /dcf /options /ipo/calendar /earnings/calendar /sectors /briefing /orderbook /macro/snapshot /insider/{symbol} (F15)
 │   │   ├── analytics.py        # /analytics/accuracy/{symbol} /analytics/sentiment/{symbol}
 │   │   ├── portfolio.py        # /portfolio/holdings (GET/POST/DELETE) /portfolio/summary (auth-gated)
 │   │   ├── alerts.py           # /alerts/rules (CRUD) /alerts/fires /alerts/subscribe /alerts/evaluate [cron] (Feature 9)
 │   │   └── watchlist.py        # /watchlist (GET/POST/DELETE) — Feature 13
-│   ├── config.py               # Env var loading (InfluxDB, Groq, SerpAPI, Supabase)
+│   ├── config.py               # Env var loading (InfluxDB, Groq, SerpAPI, FRED, Supabase)
 │   ├── models.py               # Pydantic schemas + run_monte_carlo
-│   ├── services.py             # YFinanceService, InfluxService, SerpService, SentimentService, AnalystJuryService
+│   ├── services.py             # YFinanceService, InfluxService, SerpService, SentimentService, AnalystJuryService, FREDService/InsiderService/ShortInterestService (F15)
 │   ├── supabase_rest.py        # RLS-scoped holdings + watchlist CRUD via caller's forwarded JWT
 │   ├── alerts_store.py         # Alerts/fires/push-subs storage — user-JWT (RLS) + service-role (evaluator) (Feature 9)
 │   ├── alerts_evaluator.py     # Scheduled rule evaluator + daily digest (pure evaluate_rule + orchestrator) (Feature 9)
@@ -135,6 +135,7 @@ INFLUXDB_TOKEN=
 INFLUXDB_ORG=WeekendDevelopment
 INFLUXDB_BUCKET=FiForesightBucket
 SERP_API_KEY=            # Optional — news/trending
+FRED_API_KEY=            # Optional (Feature 15) — FRED macro CSV works keyless; a key only raises the rate limit
 PORT=8000
 APP_ENV=local            # Optional — env tag on sentiment_score writes (local|preview|live)
 
@@ -190,10 +191,15 @@ User enters ticker
       → Monte Carlo: 1 000 paths, seed=42 → P10/P50/P90, VaR-95, prob_gain
       → SerpAPI: news headlines + trending symbols
       → VADER SentimentService: compound [-1,1] + label (Bullish/Bearish/Neutral)
+      → Alternative data (Feature 15) — all fired concurrently, bounded 12s, never block:
+          FREDService.get_macro_snapshot()    → macro line injected into jury ctx (NOT in /predict response)
+          InsiderService.get_insider_transactions(symbol) → insiderTransactions[] (SEC EDGAR Form 4)
+          ShortInterestService.get_short_interest(symbol) → shortInterest {short %, days-to-cover}
       → LangGraph StateGraph parallel fan-out (Groq):
           Llama 4 Scout (Macro & Risk) · Llama 3.3 70B (Growth) · Llama 3.1 8B Instant (Quant)
-          Each isolated — failures degrade to Hold/25, not 500
-      → Response: history, fundamentals, indicators, forecasts, jury verdicts, news, sentiment, monte carlo
+          Each isolated — failures degrade to Hold/25, not 500. Jury ctx now carries the live FRED macro line.
+      → Response: history, fundamentals, indicators, forecasts, jury verdicts, news, sentiment, monte carlo,
+        insiderTransactions[], shortInterest (F15)
         (indicators payload also carries: atr_14, stoch_k/stoch_d, adx_14/plus_di/minus_di, obv_history,
          divergences {rsi_bullish, rsi_bearish, macd_bullish, macd_bearish}, rf_feature_importance, earnings_surprise)
 
@@ -203,6 +209,12 @@ User enters ticker
       GET /api/dcf/{symbol}     → DCFCard (3-scenario WACC)
       GET /api/options/{symbol} → OptionsChainPanel (calls/puts)
       POST /api/trade-setup     → TradeSetupCard (entry/stop/targets + position size)
+
+Macro flow (Feature 15 — /macro tab, public, no auth):
+  GET /api/macro/snapshot → FRED snapshot {dgs10,cpiaucsl,unrate,fedfunds,t10y2y}×{value,delta_30d}
+                            + inverted bool + t10y2y_trend (31 pts) + fetched_at. Redis-cached 1h,
+                            warmed on startup. {} when FRED unreachable (frontend empty state).
+  GET /api/insider/{symbol} → last 10 SEC EDGAR Form 4 filings (also embedded in /predict). 30/min.
 
 Insights flow (/insights tab — read-only, Redis-cached 15min, samples:0 empty state):
   GET /api/analytics/accuracy/{symbol}  → model MAE ranking, ensemble MAE by horizon d1–d5,
@@ -289,6 +301,7 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 | Alerts & Notifications — rule builder + scheduled evaluator + Web Push ("Alerts" tab) | #254 |
 | Watchlist persistence + intraday sparklines + responsive design (F13) | pending |
 | Advanced Technical Signals — ATR stops, divergence, earnings surprise, RF importance, Stoch/ADX/OBV (F14) | #260 |
+| Alternative Data — FRED macro snapshot + jury injection + /macro tab, SEC EDGAR insider, FINRA short interest (F15) | pending |
 
 ---
 
@@ -327,3 +340,4 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 - **Responsive design (Feature 13)** — breakpoints: 320px (xs, mobile), 768px (sm, tablet), 1280px (md, desktop), 2560px (4K). Key fixes: PriceChart height 220/300/400px via `useMediaQuery`; DCFCard + TradeSetupCard 3-column grids stack on xs; FundamentalsPanel grid xs:6/sm:4/md:3; Earnings/IPO responsive CSS grid; sidebar `maxWidth: 280` cap at 4K; Shell content `maxWidth: 1600` for 4K; MobileNav tap targets `minHeight: 44`. MorningBriefingPanel + SectorHeatmap use `overflowX: auto` / `flexWrap: wrap` — fine at 320px. OptionsChainPanel table has `overflowX: auto` wrapper. Portfolio table hides columns on mobile via `isMobile` (`useMediaQuery`).
 - **Security model** — `dependencies.py` holds the `limiter` singleton and all auth helpers. `require_user` dependency raises HTTP 401 when no valid Bearer token is present; applied to `/trade-setup` and `/jury/reanalyze`. `/predict` uses a single rate limit keyed by user ID (authed) or IP (anon) via `_user_rate_key`. `/chat` message is capped at 500 chars with control-char sanitization on all context values. CORS is restricted to `ALLOWED_ORIGINS`. Symbol inputs are validated with `[A-Za-z0-9.\-:]{1,15}` on `/predict`, `/dcf/{symbol}`, `/options/{symbol}`, and history. JWT verification picks the verifier by the token's `alg`: **ES256/RS256** (Supabase's default signing-key tokens) are verified against the project **JWKS** (`SUPABASE_URL`, or `SUPABASE_JWKS_URL`); legacy **HS256** tokens use `SUPABASE_JWT_SECRET`. JWKS-only (ES256) is a valid secure production config — the shared secret is not required when a JWKS URL is set. The backend fails closed when **neither** a JWKS URL nor a secret is configured (or decodes unsigned only when `ALLOW_INSECURE_JWT=true`, dev-only; logged at startup). All frontend auth API routes forward the `Authorization` header.
 - **Advanced Technical Signals (Feature 14)** — five signal upgrades shipped together. Indicator helpers live in `models.py` (`calculate_atr`, `calculate_stochastic`, `calculate_adx`, `calculate_obv`, `detect_divergences`), each self-contained and returning `None`/all-false on failure so a bad indicator never aborts `/predict`. `routers/predict.py` computes them at Step 4b# and adds them to the **`indicators`** payload (`atr_14`, `stoch_k/stoch_d`, `adx_14/plus_di/minus_di`, `obv_history` = last 30, `divergences`, `rf_feature_importance` = RF top-5, `earnings_surprise` = last 4Q). **ATR-based adaptive stop** (`routers/trade.py`): when the frontend passes `atr_14`, the stop is `entry ∓ k×ATR` (k=2.0, or 2.5 when `conservative:true`) instead of a flat %, **hard-capped at 8%** from entry; falls back to the S/R % stop when ATR is absent (legacy/anon callers). Response adds `atr_14` + `atr_multiplier`. **Divergence** (`detect_divergences`, scipy `find_peaks` on price & indicator troughs/peaks ≥5 bars apart over the last 20 bars; all-false under 30 bars) is also injected into the jury context and each analyst's system prompt. **RF feature importance** is threaded out of `_rf_forecast` (now returns `(forecast_array, importances)` — `backtest.py` takes `[0]`) through `run_ensemble_forecast`. **Earnings surprise** comes from `YFinanceService.fetch_earnings_surprise` (yfinance `earnings_history`, Redis-cached 24h, `[]` on failure). Frontend: ATR annotation in `TradeSetupCard`, earnings-surprise Accordion in `FundamentalsPanel`, `ModelFeatureImportanceBar.tsx` below `ModelWeightBar`, and `SignalPanels.tsx` (Stoch/ADX gauges with ref lines, OBV area chart, divergence badges) below the chart in `PriceChartCard` — sub-panel visibility persisted in `localStorage` (`fiforesight:subpanels`), default hidden. Stoch/ADX are latest-value gauges (backend sends scalars, not per-bar series); OBV uses the 30-value history.
+- **Alternative Data Sources (Feature 15)** — three free, **keyless** feeds added as services in `services.py` (registered in `dependencies.py`). **`FREDService`** pulls 5 macro series (`DGS10`, `CPIAUCSL`, `UNRATE`, `FEDFUNDS`, `T10Y2Y`) from the public `fredgraph.csv?id=…` endpoint, concurrently (`asyncio.gather`, 10s/series). **Gotcha**: a `cosd` (≈1150-day) start-date window is REQUIRED — without it the daily series (DGS10/T10Y2Y) download their full multi-decade history (~16k rows) and time out, silently dropping from the snapshot. Returns per-series `{value, delta_30d}` (delta = last − first of the last 31 points; for monthly series that's ~31 months, not literally 30 days), plus `inverted` (t10y2y<0), `t10y2y_trend` (31 pts for the chart), and `fetched_at`. Redis-cached 1h (`fred:snapshot`), **warmed on startup** via the `main.py` lifespan. `FRED_API_KEY` is optional (CSV works keyless; a key only raises the rate limit). The macro snapshot is injected as a one-line `Macro (FRED): …` block into the jury ctx in `routers/predict.py::_run_analyst_jury` (param `macro=`), and each persona's system prompt got a one-sentence macro directive (Scout→DGS10/inversion/UNRATE, 70B→CPI→margins, 8B→FEDFUNDS→discount rate). **`InsiderService`** queries the keyless SEC EDGAR full-text index (`efts.sec.gov/LATEST/search-index`, `forms=4`, last 30d) → up to 10 `{filer, type, shares, price, date, sec_link}`. Caveat: the FTS index reliably carries filer/date/link but NOT transaction code/shares/price (those live in the Form 4 XML), so `type` often defaults to `"Filing"` and shares/price to `null` on real data — the card handles this gracefully (grey chip, "—"). Redis-cached 6h per symbol. **`ShortInterestService`** downloads the most recent FINRA weekly short-volume file (`cdn.finra.org/equity/regsho/weekly/CNMSshvol{YYYYMMDD}.txt`, pipe-delimited, tries the last 8 days), parses `{symbol:{short_volume,total_volume}}`, caches the blob in Redis 24h (`finra:short:{date}`), and per symbol returns `{short_volume, total_volume, short_ratio, days_to_cover, report_date}` where `days_to_cover = short_volume / yf averageVolume`; **`None`** for symbols absent from the file (non-US/OTC). All three are fired concurrently in `/predict` (via `_safe_fetch`, 12s bound) and resolved before the response — EDGAR/FINRA/FRED latency never blocks. Endpoints `GET /macro/snapshot` (60/min) + `GET /insider/{symbol}` (30/min) live in `routers/market.py`. Frontend: `/macro` page (`frontend/app/(app)/macro/page.tsx`, **"Macro"** sidebar nav, `Globe` icon, public) with 5 stat cards (delta arrows colour-coded: rising rate/CPI/fed-funds=red, unemployment=amber, spread down=red), a T10Y2Y trend `LineChart`, a 30d-delta `BarChart`, an inversion banner, and 60-min + `visibilitychange` auto-refresh; `InsiderTransactionsCard.tsx` (Accordion on the analysis page, default-open when any purchase exists, green/red/grey type chips, per-row SEC link); short interest ("SHORT % VOL", "DAYS TO COVER" red >5) added to the `FundamentalsPanel` grid. Types `MacroSnapshot`/`MacroSeries`/`InsiderTransaction`/`ShortInterest` in `frontend/types/index.ts`; proxies at `frontend/app/api/{macro/snapshot,insider/[symbol]}/route.ts`. 21 new backend tests in `test_alternative_data.py`.
