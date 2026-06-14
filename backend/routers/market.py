@@ -13,7 +13,7 @@ from slowapi.util import get_remote_address
 from scipy.stats import norm
 
 from config import Config
-from dependencies import yf_svc, limiter
+from dependencies import yf_svc, limiter, fred_svc, insider_svc
 
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-:]{1,15}$")
 
@@ -1044,3 +1044,35 @@ async def order_book(request: Request, symbol: str) -> Dict[str, Any]:
 
     await cache_set(cache_key, result, ttl_seconds=ORDERBOOK_TTL_SECONDS)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Alternative Data (Feature 15) — FRED macro snapshot + SEC EDGAR insider flow
+# ---------------------------------------------------------------------------
+
+@router.get("/macro/snapshot")
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def macro_snapshot(request: Request) -> Dict[str, Any]:
+    """FRED macro snapshot — 10Y yield, CPI, unemployment, fed funds, yield curve.
+
+    Each series carries ``{value, delta_30d}``; the payload also flags yield-curve
+    ``inverted`` and includes the T10Y2Y 31-point trend. Redis-cached 1h inside
+    the service; returns ``{}`` when FRED is unreachable (frontend shows an
+    empty state). 60/min.
+    """
+    return await fred_svc.get_macro_snapshot()
+
+
+@router.get("/insider/{symbol}")
+@limiter.limit(lambda: "30/minute", key_func=get_remote_address)
+async def insider_transactions(request: Request, symbol: str) -> List[Dict[str, Any]]:
+    """Recent (last 30d) SEC EDGAR Form 4 insider filings for ``symbol``.
+
+    Returns a list of ``{filer, type, shares, price, date, sec_link}``. Empty
+    list for tickers with no recent filings (crypto/foreign) or on any failure.
+    Redis-cached 6h in the service. 30/min via the read-only limiter.
+    """
+    symbol = symbol.strip().upper()
+    if not _SYMBOL_RE.match(symbol):
+        raise HTTPException(status_code=422, detail="Invalid symbol.")
+    return await insider_svc.get_insider_transactions(symbol)

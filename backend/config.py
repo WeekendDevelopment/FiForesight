@@ -12,6 +12,9 @@ class Config:
     INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "WeekendDevelopment")
     INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "FiForesightBucket")
     SERP_API_KEY = os.getenv("SERP_API_KEY")
+    # FRED macro data (Feature 15). OPTIONAL — the public fredgraph.csv endpoint
+    # works without a key; a key only raises the request rate limit.
+    FRED_API_KEY = os.getenv("FRED_API_KEY", "")
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
     FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
     ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")

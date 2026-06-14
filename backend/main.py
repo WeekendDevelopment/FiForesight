@@ -27,6 +27,21 @@ async def lifespan(app: FastAPI):
         init_redis(url)
     else:
         logger.warning("[REDIS] UPSTASH_REDIS_URL not set — caching disabled")
+
+    # Warm the FRED macro snapshot (Feature 15) so the first /macro and /predict
+    # requests hit a warm 1h cache. Non-blocking and non-fatal.
+    import asyncio as _asyncio
+    from dependencies import fred_svc
+
+    async def _warm_fred():
+        try:
+            await fred_svc.get_macro_snapshot()
+            logger.info("[STARTUP] FRED macro snapshot warmed")
+        except Exception as exc:
+            logger.warning("[STARTUP] FRED warm failed (non-fatal): %s", exc)
+
+    _asyncio.create_task(_warm_fred())
+
     yield
     await close_redis()
 

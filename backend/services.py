@@ -7,7 +7,7 @@ import httpx
 import xml.etree.ElementTree as ET
 import pandas as pd
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import newrelic.agent
 
 try:
@@ -1574,6 +1574,382 @@ class YahooRSSService:
 
 
 # ---------------------------------------------------------------------------
+# Alternative Data Sources (Feature 15)
+#   FREDService          — FRED macro snapshot (free CSV endpoint, no key needed)
+#   InsiderService       — SEC EDGAR Form 4 insider transactions (keyless)
+#   ShortInterestService — FINRA weekly short-volume file (free, keyless)
+# Each fails closed (returns {}/[]/None, logged) so a bad fetch never blocks
+# /predict or the jury. Caching TTLs: FRED 1h, insider 6h, short interest 24h.
+# ---------------------------------------------------------------------------
+
+
+def _parse_fred_csv(text: str, last_n: int = 31) -> List[tuple]:
+    """Parse a FRED ``fredgraph.csv`` body into the last ``last_n`` (date, value)
+    pairs, skipping the header and the ``.`` missing-value markers.
+
+    FRED CSVs are ``DATE,SERIES_ID`` (older) or ``observation_date,SERIES_ID``
+    (newer); either way the first column is the date and the second the value.
+    Returns oldest→newest. Empty list on any malformed input.
+    """
+    rows: List[tuple] = []
+    for line in text.strip().splitlines()[1:]:  # skip header
+        parts = line.split(",")
+        if len(parts) < 2:
+            continue
+        date_s, val_s = parts[0].strip(), parts[1].strip()
+        if not date_s or val_s in ("", "."):
+            continue
+        try:
+            rows.append((date_s, float(val_s)))
+        except ValueError:
+            continue
+    return rows[-last_n:]
+
+
+class FREDService:
+    """Free FRED macro snapshot.
+
+    Pulls a handful of headline series from the public FRED CSV endpoint
+    (``fredgraph.csv?id=SERIES``) — no API key required. ``FRED_API_KEY`` is
+    optional and only raises the rate limit; the CSV endpoint works without it.
+
+    ``get_macro_snapshot()`` returns per-series ``{value, delta_30d}`` plus a
+    yield-curve ``inverted`` flag and the T10Y2Y 31-point trend (for the macro
+    dashboard chart). Redis-cached 1h under ``fred:snapshot``.
+    """
+
+    _CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
+    # series id → snapshot key (lower-cased, stable for the frontend)
+    _SERIES = {
+        "DGS10":    "dgs10",     # 10-Year Treasury constant-maturity yield
+        "CPIAUCSL": "cpiaucsl",  # CPI, all urban consumers
+        "UNRATE":   "unrate",    # Unemployment rate
+        "FEDFUNDS": "fedfunds",  # Effective federal funds rate
+        "T10Y2Y":   "t10y2y",    # 10Y minus 2Y spread (negative = inverted)
+    }
+    _CACHE_KEY = "fred:snapshot"
+    _CACHE_TTL = 3600  # 1h
+
+    async def _fetch_series(self, client: "httpx.AsyncClient", series_id: str) -> List[tuple]:
+        """Fetch one series' last 31 (date, value) points. [] on any failure.
+
+        A ``cosd`` start-date window is sent so daily series (DGS10/T10Y2Y, whose
+        full history runs to ~16k rows) don't download decades of data and time
+        out. ~1150 days still yields ≥31 points for the monthly series too.
+        """
+        cosd = (datetime.now(timezone.utc).date() - timedelta(days=1150)).isoformat()
+        params = {"id": series_id, "cosd": cosd}
+        if Config.FRED_API_KEY:
+            params["api_key"] = Config.FRED_API_KEY
+        try:
+            resp = await asyncio.wait_for(
+                client.get(self._CSV_URL, params=params), timeout=10.0
+            )
+            resp.raise_for_status()
+            return _parse_fred_csv(resp.text)
+        except Exception as exc:
+            logger.warning("[FRED] series %s fetch failed: %s", series_id, exc)
+            return []
+
+    async def get_macro_snapshot(self) -> dict:
+        """Return the macro snapshot dict (Redis-cached 1h). {} on total failure."""
+        from redis_cache import cache_get, cache_set
+
+        cached = await cache_get(self._CACHE_KEY)
+        if cached:
+            return cached
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=10.0,
+                headers={"User-Agent": "FiForesight/1.0 research@fiforesight.dev"},
+            ) as client:
+                series_ids = list(self._SERIES.keys())
+                results = await asyncio.gather(
+                    *(self._fetch_series(client, sid) for sid in series_ids)
+                )
+        except Exception as exc:
+            logger.warning("[FRED] snapshot fetch failed: %s — returning {}", exc)
+            return {}
+
+        snapshot: dict = {}
+        t10y2y_trend: List[dict] = []
+        for sid, points in zip(series_ids, results):
+            key = self._SERIES[sid]
+            if not points:
+                continue
+            current = round(points[-1][1], 4)
+            baseline = points[0][1]
+            delta = round(current - baseline, 4)
+            snapshot[key] = {"value": current, "delta_30d": delta}
+            if key == "t10y2y":
+                t10y2y_trend = [{"date": d, "value": round(v, 4)} for d, v in points]
+
+        if not snapshot:
+            logger.warning("[FRED] all series empty — returning {}")
+            return {}
+
+        t10y2y_val = snapshot.get("t10y2y", {}).get("value")
+        snapshot["inverted"] = bool(t10y2y_val is not None and t10y2y_val < 0)
+        snapshot["t10y2y_trend"] = t10y2y_trend
+        snapshot["fetched_at"] = datetime.now(timezone.utc).isoformat()
+
+        await cache_set(self._CACHE_KEY, snapshot, ttl_seconds=self._CACHE_TTL)
+        logger.info(
+            "[FRED] ✓ macro snapshot — %d series, inverted=%s",
+            len(snapshot) - 3, snapshot["inverted"],
+        )
+        return snapshot
+
+
+# Transaction-code → (label, simple type) map for Form 4 (SEC Table I codes).
+_FORM4_CODE_LABELS = {
+    "P": "Purchase",
+    "S": "Sale",
+    "A": "Award",
+    "M": "Option Exercise",
+    "G": "Gift",
+    "F": "Tax Withholding",
+    "X": "Option Exercise",
+    "C": "Conversion",
+}
+
+
+class InsiderService:
+    """SEC EDGAR Form 4 insider transactions — keyless.
+
+    Uses the EDGAR full-text search index (``efts.sec.gov``) to find recent
+    Form 4 filings for a symbol over the last 30 days, mapping each hit onto a
+    compact ``{filer, type, shares, price, date, sec_link}`` shape. The
+    full-text index carries filing metadata reliably (filer names, date, link);
+    transaction code/shares/price are surfaced when present, else ``None``.
+
+    Redis-cached 6h per symbol. Returns ``[]`` on any failure (never raises).
+    """
+
+    _SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
+    _HEADERS = {"User-Agent": "FiForesight research@fiforesight.dev"}
+    _CACHE_TTL = 21600  # 6h
+
+    @staticmethod
+    def _map_type(code: Any) -> str:
+        """Map a Form 4 transaction code (or free-text) onto a display label."""
+        if not code:
+            return "Filing"
+        c = str(code).strip().upper()
+        if c in _FORM4_CODE_LABELS:
+            return _FORM4_CODE_LABELS[c]
+        # Already a word like "Purchase"/"Sale"/"Award"
+        for label in ("Purchase", "Sale", "Award"):
+            if label.lower() in c.lower():
+                return label
+        return "Filing"
+
+    @staticmethod
+    def _sec_link(hit: dict, src: dict) -> str:
+        """Best-effort link to the filing on sec.gov from the FTS hit."""
+        _id = hit.get("_id") or ""
+        ciks = src.get("ciks") or []
+        cik = str(ciks[0]).lstrip("0") if ciks else ""
+        if _id and ":" in _id and cik:
+            accession, _, filename = _id.partition(":")
+            acc_nodash = accession.replace("-", "")
+            return f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_nodash}/{filename}"
+        if cik:
+            return f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik}&type=4"
+        return "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=4"
+
+    @staticmethod
+    def _to_float(v: Any) -> Optional[float]:
+        try:
+            f = float(v)
+            return f if f == f else None  # filter NaN
+        except (TypeError, ValueError):
+            return None
+
+    def _map_hit(self, hit: dict) -> Optional[dict]:
+        src = hit.get("_source") or {}
+        names = src.get("display_names") or []
+        # display_names is typically ["Issuer (CIK ...)", "Reporting Owner (CIK ...)"];
+        # the reporting owner (the insider) is the filer we want.
+        filer = ""
+        if names:
+            filer = str(names[-1]).split(" (")[0].strip()
+        shares = self._to_float(src.get("shares") or src.get("transaction_shares"))
+        price = self._to_float(src.get("price") or src.get("transaction_price"))
+        return {
+            "filer":    filer or "Unknown",
+            "type":     self._map_type(src.get("transaction_code") or src.get("type")),
+            "shares":   int(shares) if shares is not None else None,
+            "price":    round(price, 2) if price is not None else None,
+            "date":     str(src.get("file_date") or src.get("date") or "")[:10],
+            "sec_link": self._sec_link(hit, src),
+        }
+
+    async def get_insider_transactions(self, symbol: str) -> List[dict]:
+        from redis_cache import cache_get, cache_set
+
+        sym = symbol.split(":")[0].upper()
+        cache_key = f"insider:{sym}"
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        today = datetime.now(timezone.utc).date()
+        startdt = (today - timedelta(days=30)).isoformat()
+        params = {
+            "q": f'"{sym}"',
+            "forms": "4",
+            "dateRange": "custom",
+            "startdt": startdt,
+            "enddt": today.isoformat(),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10.0, headers=self._HEADERS) as client:
+                resp = await asyncio.wait_for(
+                    client.get(self._SEARCH_URL, params=params), timeout=10.0
+                )
+                resp.raise_for_status()
+                raw = resp.json()
+            hits = ((raw or {}).get("hits", {}) or {}).get("hits", []) or []
+            result: List[dict] = []
+            for hit in hits[:10]:
+                try:
+                    mapped = self._map_hit(hit)
+                    if mapped:
+                        result.append(mapped)
+                except Exception as exc:
+                    logger.debug("[INSIDER] hit map error: %s", exc)
+                    continue
+            logger.info("[INSIDER] ✓ %s — %d Form 4 filings", sym, len(result))
+            # Cache real results 6h; an empty list briefly (1h) so a transient
+            # failure self-heals rather than sticking for the full window.
+            await cache_set(cache_key, result, ttl_seconds=self._CACHE_TTL if result else 3600)
+            return result
+        except Exception as exc:
+            logger.warning("[INSIDER] fetch failed for %s: %s — returning []", sym, exc)
+            return []
+
+
+class ShortInterestService:
+    """FINRA weekly short-volume — free, keyless.
+
+    FINRA publishes a consolidated NMS short-volume file each trading day at
+    ``cdn.finra.org/equity/regsho/weekly/CNMSshvol{YYYYMMDD}.txt`` (tab/pipe
+    delimited). We download the most recent available file, parse it into a
+    ``{symbol: {short_volume, total_volume}}`` map, and cache it in Redis as a
+    JSON blob (24h TTL). Per-symbol lookups derive ``short_ratio`` and
+    ``days_to_cover`` (short_volume ÷ average daily volume).
+
+    Returns ``None`` for symbols absent from the file (non-US / OTC) and on any
+    failure — never raises.
+    """
+
+    _BASE_URL = "https://cdn.finra.org/equity/regsho/weekly/CNMSshvol{date}.txt"
+    _CACHE_TTL = 86400  # 24h
+
+    async def _load_map(self) -> dict:
+        """Return ``{report_date, symbols: {sym: {short_volume, total_volume}}}``.
+
+        Tries the last ~8 calendar days (most-recent first) until a file
+        downloads. Caches the parsed blob in Redis keyed by the file's date.
+        """
+        from redis_cache import cache_get, cache_set
+
+        today = datetime.now(timezone.utc).date()
+        async with httpx.AsyncClient(
+            timeout=15.0, headers={"User-Agent": "FiForesight/1.0"}
+        ) as client:
+            for back in range(0, 8):
+                d = today - timedelta(days=back)
+                date_str = d.strftime("%Y%m%d")
+                cache_key = f"finra:short:{date_str}"
+                cached = await cache_get(cache_key)
+                if cached:
+                    return cached
+                url = self._BASE_URL.format(date=date_str)
+                try:
+                    resp = await asyncio.wait_for(client.get(url), timeout=12.0)
+                    if resp.status_code != 200 or not resp.text.strip():
+                        continue
+                    parsed = self._parse_finra(resp.text, date_str)
+                    if parsed["symbols"]:
+                        await cache_set(cache_key, parsed, ttl_seconds=self._CACHE_TTL)
+                        logger.info(
+                            "[SHORT] ✓ FINRA file %s — %d symbols",
+                            date_str, len(parsed["symbols"]),
+                        )
+                        return parsed
+                except Exception as exc:
+                    logger.debug("[SHORT] FINRA %s unavailable: %s", date_str, exc)
+                    continue
+        logger.warning("[SHORT] no recent FINRA file found in last 8 days")
+        return {"report_date": "", "symbols": {}}
+
+    @staticmethod
+    def _parse_finra(text: str, date_str: str) -> dict:
+        """Parse the pipe-delimited FINRA short-volume file.
+
+        Columns: Date|Symbol|ShortVolume|ShortExemptVolume|TotalVolume|Market.
+        """
+        symbols: dict = {}
+        lines = text.strip().splitlines()
+        for line in lines[1:]:  # skip header
+            parts = line.split("|")
+            if len(parts) < 5:
+                continue
+            sym = parts[1].strip().upper()
+            if not sym:
+                continue
+            try:
+                short_vol = float(parts[2])
+                total_vol = float(parts[4])
+            except (ValueError, IndexError):
+                continue
+            symbols[sym] = {"short_volume": short_vol, "total_volume": total_vol}
+        report_date = (
+            f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}" if len(date_str) == 8 else date_str
+        )
+        return {"report_date": report_date, "symbols": symbols}
+
+    def _avg_daily_volume(self, symbol: str) -> Optional[float]:
+        """Average daily volume from yfinance (for days-to-cover). None on failure."""
+        if not YFINANCE_AVAILABLE:
+            return None
+        try:
+            info = yf.Ticker(symbol.split(":")[0].upper()).info
+            avg = info.get("averageVolume") or info.get("averageDailyVolume10Day")
+            return float(avg) if avg else None
+        except Exception as exc:
+            logger.debug("[SHORT] avg volume fetch failed for %s: %s", symbol, exc)
+            return None
+
+    async def get_short_interest(self, symbol: str) -> Optional[dict]:
+        """Return short-interest metrics for ``symbol`` or ``None`` if absent."""
+        sym = symbol.split(":")[0].upper()
+        data = await self._load_map()
+        entry = data.get("symbols", {}).get(sym)
+        if not entry:
+            logger.info("[SHORT] %s not in FINRA file — returning None", sym)
+            return None
+
+        short_vol = entry["short_volume"]
+        total_vol = entry["total_volume"]
+        short_ratio = round(short_vol / total_vol, 4) if total_vol else None
+        avg_vol = await asyncio.to_thread(self._avg_daily_volume, sym)
+        days_to_cover = (
+            round(short_vol / avg_vol, 2) if avg_vol and avg_vol > 0 else None
+        )
+        return {
+            "short_volume":  int(short_vol),
+            "total_volume":  int(total_vol),
+            "short_ratio":   short_ratio,
+            "days_to_cover": days_to_cover,
+            "report_date":   data.get("report_date", ""),
+        }
+
+
+# ---------------------------------------------------------------------------
 # Sentiment Service  —  VADER-based news headline scoring
 # ---------------------------------------------------------------------------
 
@@ -1677,6 +2053,9 @@ ANALYST_PERSONAS = [
             "or contradicts the move, and any fundamental red flags. "
             "If a bearish RSI or MACD divergence is flagged, treat it as a warning of a potential "
             "reversal lower and weight your risk stance accordingly. "
+            "When a macro snapshot is provided, reference the 10Y Treasury yield (DGS10), "
+            "the 10Y-2Y curve inversion status, and the unemployment rate (UNRATE) in one "
+            "sentence on systemic backdrop. "
             "Focus on what could go wrong, not growth upside. "
             "Be specific, actionable, and advisory — not generic. "
             "Conclude with a clear rating (Strong Sell / Sell / Hold) and your recommended risk stance."
@@ -1704,6 +2083,8 @@ ANALYST_PERSONAS = [
             "Reference MACD momentum, SMA50/200 positioning, RSI strength, and forecast confidence. "
             "If a bullish RSI or MACD divergence is flagged, treat it as confirmation that downside "
             "momentum may be exhausting and an upside reversal is forming. "
+            "When a macro snapshot is provided, note in one sentence how the CPI 30-day delta "
+            "(inflation trend) could pressure or relieve this company's margins. "
             "Ignore macro doomsday scenarios — focus on this asset's specific growth trajectory "
             "and why it has the potential to outperform. "
             "Be specific, actionable, and advisory — not generic. "
@@ -1734,6 +2115,8 @@ ANALYST_PERSONAS = [
             "and volume confirmation of the trend. Cite the forecast confidence label explicitly. "
             "When an RSI or MACD divergence is flagged, state its directional implication and factor it "
             "into your probabilistic read. "
+            "When a macro snapshot is provided, note in one sentence how the fed funds rate "
+            "(FEDFUNDS) affects the discount rate and this asset's valuation sensitivity. "
             "Map each signal to a clear probabilistic implication. Be precise and data-first. "
             "Conclude with a clear quantitative rating (Accumulate / Hold / Distribute) "
             "and identify specific technical entry and exit levels where applicable."

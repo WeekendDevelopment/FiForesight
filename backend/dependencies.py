@@ -20,6 +20,9 @@ from services import (
     FinnhubService,
     StockTwitsService,
     YahooRSSService,
+    FREDService,
+    InsiderService,
+    ShortInterestService,
 )
 from config import Config
 
@@ -59,6 +62,10 @@ sentiment_svc    = SentimentService()
 finnhub_svc      = FinnhubService()
 stocktwits_svc   = StockTwitsService()
 yahoo_rss_svc    = YahooRSSService()
+# Alternative data sources (Feature 15)
+fred_svc         = FREDService()
+insider_svc      = InsiderService()
+short_interest_svc = ShortInterestService()
 
 
 # ---------------------------------------------------------------------------
