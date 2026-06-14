@@ -1064,7 +1064,7 @@ async def macro_snapshot(request: Request) -> Dict[str, Any]:
 
 
 @router.get("/insider/{symbol}")
-@limiter.limit(lambda: "30/minute", key_func=get_remote_address)
+@limiter.limit(lambda: Config.RATE_LIMIT_INSIDER, key_func=get_remote_address)
 async def insider_transactions(request: Request, symbol: str) -> List[Dict[str, Any]]:
     """Recent (last 30d) SEC EDGAR Form 4 insider filings for ``symbol``.
 

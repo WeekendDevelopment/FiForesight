@@ -10,23 +10,25 @@ All HTTP/yfinance calls are mocked — no network required.
 """
 import asyncio
 import importlib as _il
+from typing import Any, Coroutine
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
+from starlette.requests import Request
 
 from backend.services import (
     FREDService, InsiderService, ShortInterestService, _parse_fred_csv,
 )
 
 
-def run(coro):
+def run(coro: Coroutine[Any, Any, Any]) -> Any:
     return asyncio.run(coro)
 
 
-def _async_client(get_mock) -> MagicMock:
+def _async_client(get_mock: AsyncMock) -> MagicMock:
     """Build a mock httpx.AsyncClient whose .get is `get_mock`."""
     mock_client = AsyncMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -127,7 +129,7 @@ class TestInsiderService:
     def setup_method(self):
         self.svc = InsiderService()
 
-    def _hit(self, **src):
+    def _hit(self, **src: Any) -> dict:
         base = {
             "display_names": ["Apple Inc. (CIK 0000320193)", "John Smith (CIK 0001234567)"],
             "file_date": "2026-05-01",
@@ -249,7 +251,7 @@ _app = FastAPI()
 _app.state.limiter = limiter
 
 
-async def _rl_handler(req, exc: RateLimitExceeded) -> JSONResponse:
+async def _rl_handler(req: Request, exc: RateLimitExceeded) -> JSONResponse:
     return JSONResponse(status_code=429, content={"detail": "Too many requests."})
 
 

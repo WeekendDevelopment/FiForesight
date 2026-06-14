@@ -1644,7 +1644,7 @@ class FREDService:
             params["api_key"] = Config.FRED_API_KEY
         try:
             resp = await asyncio.wait_for(
-                client.get(self._CSV_URL, params=params), timeout=10.0
+                client.get(self._CSV_URL, params=params), timeout=12.0
             )
             resp.raise_for_status()
             return _parse_fred_csv(resp.text)
@@ -1808,7 +1808,7 @@ class InsiderService:
         try:
             async with httpx.AsyncClient(timeout=10.0, headers=self._HEADERS) as client:
                 resp = await asyncio.wait_for(
-                    client.get(self._SEARCH_URL, params=params), timeout=10.0
+                    client.get(self._SEARCH_URL, params=params), timeout=12.0
                 )
                 resp.raise_for_status()
                 raw = resp.json()
@@ -1926,28 +1926,46 @@ class ShortInterestService:
             return None
 
     async def get_short_interest(self, symbol: str) -> Optional[dict]:
-        """Return short-interest metrics for ``symbol`` or ``None`` if absent."""
+        """Return short-interest metrics for ``symbol`` or ``None`` if absent.
+
+        The computed result (incl. the yfinance-backed days-to-cover) is cached
+        per symbol for 24h so repeated lookups don't re-hit yfinance — matching
+        the documented short-interest caching contract.
+        """
+        from redis_cache import cache_get, cache_set
+
         sym = symbol.split(":")[0].upper()
+        cache_key = f"short:interest:{sym}"
+        cached = await cache_get(cache_key)
+        if cached is not None:
+            return cached
+
         data = await self._load_map()
         entry = data.get("symbols", {}).get(sym)
         if not entry:
+            # Absent symbols never reach yfinance, so there's nothing expensive
+            # to memoise (and cache_get discards a cached None anyway).
             logger.info("[SHORT] %s not in FINRA file — returning None", sym)
             return None
 
         short_vol = entry["short_volume"]
         total_vol = entry["total_volume"]
         short_ratio = round(short_vol / total_vol, 4) if total_vol else None
-        avg_vol = await asyncio.to_thread(self._avg_daily_volume, sym)
+        avg_vol = await asyncio.wait_for(
+            asyncio.to_thread(self._avg_daily_volume, sym), timeout=12.0
+        )
         days_to_cover = (
             round(short_vol / avg_vol, 2) if avg_vol and avg_vol > 0 else None
         )
-        return {
+        result = {
             "short_volume":  int(short_vol),
             "total_volume":  int(total_vol),
             "short_ratio":   short_ratio,
             "days_to_cover": days_to_cover,
             "report_date":   data.get("report_date", ""),
         }
+        await cache_set(cache_key, result, ttl_seconds=self._CACHE_TTL)
+        return result
 
 
 # ---------------------------------------------------------------------------

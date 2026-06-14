@@ -9,7 +9,7 @@ export async function GET(
 ) {
   const { symbol } = await params;
   try {
-    const { data } = await axios.get(`${BACKEND}/insider/${symbol}`);
+    const { data } = await axios.get(`${BACKEND}/insider/${symbol}`, { timeout: 10000 });
     return NextResponse.json(data);
   } catch (err: unknown) {
     const status = (err as { response?: { status?: number } })?.response?.status ?? 500;

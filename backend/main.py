@@ -33,7 +33,7 @@ async def lifespan(app: FastAPI):
     import asyncio as _asyncio
     from dependencies import fred_svc
 
-    async def _warm_fred():
+    async def _warm_fred() -> None:
         try:
             await fred_svc.get_macro_snapshot()
             logger.info("[STARTUP] FRED macro snapshot warmed")

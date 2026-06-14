@@ -92,7 +92,11 @@ export default function InsiderTransactionsCard({
               </Box>
               <Box component="tbody">
                 {transactions.map((t, i) => (
-                  <Box component="tr" key={i} sx={{ borderTop: `1px solid ${borderCol}` }}>
+                  <Box
+                    component="tr"
+                    key={`${t.sec_link}-${t.date}-${i}`}
+                    sx={{ borderTop: `1px solid ${borderCol}` }}
+                  >
                     <Box component="td" sx={{ py: 0.6, whiteSpace: 'nowrap' }}>{t.date || '—'}</Box>
                     <Box
                       component="td"

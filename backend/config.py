@@ -105,6 +105,8 @@ class Config:
     RATE_LIMIT_TRADE:        str = os.getenv("RATE_LIMIT_TRADE",        "15/minute")
     RATE_LIMIT_BACKTEST:     str = os.getenv("RATE_LIMIT_BACKTEST",     "5/minute")
     RATE_LIMIT_READONLY:     str = os.getenv("RATE_LIMIT_READONLY",     "60/minute")
+    # Alternative data (Feature 15) — SEC EDGAR insider lookup (per IP).
+    RATE_LIMIT_INSIDER:      str = os.getenv("RATE_LIMIT_INSIDER",      "30/minute")
     # Portfolio Manager (Feature 10) — holdings CRUD is cheap (Supabase only);
     # the summary fans out to yfinance per holding, so it gets a tighter limit.
     RATE_LIMIT_PORTFOLIO:         str = os.getenv("RATE_LIMIT_PORTFOLIO",         "30/minute")

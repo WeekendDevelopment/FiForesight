@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Box, Card, CardContent, Container, Grid, Skeleton, Stack, Typography,
+  Box, Card, CardContent, Container, Grid, Skeleton, Stack, Typography, useMediaQuery,
 } from '@mui/material';
 import {
   Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ReferenceLine,
@@ -38,6 +38,10 @@ const AMBER = '#f59e0b';
 
 export default function MacroPage() {
   const { isDark, primaryColor } = useAppShell();
+  // Responsive chart sizing (320/768/1280/2560 breakpoint policy).
+  const isMobile  = useMediaQuery('(max-width:768px)');
+  const is4k      = useMediaQuery('(min-width:2560px)');
+  const chartH    = isMobile ? 200 : is4k ? 320 : 260;
   const [snapshot, setSnapshot] = useState<MacroSnapshot | null>(null);
   const [loading, setLoading]   = useState(true);
   const [error,   setError]     = useState<string | null>(null);
@@ -73,25 +77,30 @@ export default function MacroPage() {
     [snapshot],
   );
 
-  // Normalised 30d deltas for the bar chart (each scaled to its own magnitude so
-  // a 0.1 yield move and an 800 CPI-index move are visually comparable).
+  // 30d deltas for the bar chart, normalised to each series' own magnitude
+  // (percent change of value) so a 0.1 yield move and a 26-pt CPI-index move are
+  // visually comparable instead of CPI dominating the axis. `delta` is kept for
+  // sign-based colouring + the tooltip.
   const deltaBars = useMemo(() => {
     if (!snapshot) return [];
-    return SERIES.map(s => {
-      const series = snapshot[s.key] as MacroSeries | undefined;
-      return {
-        label: s.label,
-        delta: series?.delta_30d ?? 0,
-        upIsBad: s.upIsBad,
-        warn: s.warn,
-      };
-    }).filter(d => snapshot[SERIES.find(s => s.label === d.label)!.key]);
+    return SERIES
+      .map(s => {
+        const series = snapshot[s.key] as MacroSeries | undefined;
+        if (!series) return null;
+        const mag = Math.abs(series.value);
+        const pct = mag > 0.01 ? (series.delta_30d / mag) * 100 : series.delta_30d;
+        return { key: s.key, label: s.label, delta: series.delta_30d, pct: Number(pct.toFixed(2)) };
+      })
+      .filter((d): d is NonNullable<typeof d> => d !== null);
   }, [snapshot]);
 
   const axisColor = isDark ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.45)';
   const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
 
-  function deltaColor(meta: SeriesMeta, delta: number): string {
+  function deltaColor(meta: SeriesMeta, delta: number, value?: number): string {
+    // An inverted yield-curve spread is always a warning — red regardless of
+    // which way the delta moved.
+    if (meta.key === 't10y2y' && value != null && value < 0) return RED(isDark);
     if (delta === 0) return axisColor;
     const rising = delta > 0;
     if (meta.warn) return rising ? AMBER : GREEN(isDark);
@@ -164,7 +173,7 @@ export default function MacroPage() {
             {SERIES.map(meta => {
               const s = snapshot![meta.key] as MacroSeries | undefined;
               if (!s) return null;
-              const col = deltaColor(meta, s.delta_30d);
+              const col = deltaColor(meta, s.delta_30d, s.value);
               const Arrow = s.delta_30d > 0 ? ArrowUp : s.delta_30d < 0 ? ArrowDown : Minus;
               return (
                 <Grid size={{ xs: 6, sm: 4, md: 2.4 }} key={meta.key}>
@@ -197,7 +206,7 @@ export default function MacroPage() {
                   10Y–2Y Spread · 30-day trend
                 </Typography>
                 <Box sx={{ mt: 2 }}>
-                  <ResponsiveContainer width="100%" height={260}>
+                  <ResponsiveContainer width="100%" height={chartH}>
                     <LineChart data={snapshot!.t10y2y_trend} margin={{ top: 8, right: 12, left: -8, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
                       <XAxis
@@ -225,31 +234,36 @@ export default function MacroPage() {
             </Card>
           )}
 
-          {/* Normalised 30-day deltas */}
+          {/* Normalised 30-day % change (each series scaled to its own value) */}
           {deltaBars.length > 0 && (
             <Card>
               <CardContent>
                 <Typography variant="overline" sx={{ opacity: 0.5 }}>
-                  30-day change by series
+                  30-day change by series (% of value)
                 </Typography>
                 <Box sx={{ mt: 2 }}>
-                  <ResponsiveContainer width="100%" height={260}>
+                  <ResponsiveContainer width="100%" height={chartH}>
                     <BarChart data={deltaBars} margin={{ top: 8, right: 12, left: -8, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
                       <XAxis dataKey="label" tick={{ fontSize: 10, fill: axisColor }} interval={0} />
-                      <YAxis tick={{ fontSize: 10, fill: axisColor }} width={44} />
+                      <YAxis tick={{ fontSize: 10, fill: axisColor }} width={44} unit="%" />
                       <Tooltip
                         cursor={{ fill: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' }}
                         contentStyle={{
                           background: isDark ? '#0d1520' : '#fff',
                           border: `1px solid ${gridColor}`, borderRadius: 8, fontSize: 12,
                         }}
+                        formatter={(v: number, _n, p) => [
+                          `${v > 0 ? '+' : ''}${v}%  (${p?.payload?.delta > 0 ? '+' : ''}${p?.payload?.delta} abs)`,
+                          '30d change',
+                        ]}
                       />
                       <ReferenceLine y={0} stroke={axisColor} />
-                      <Bar dataKey="delta" radius={[3, 3, 0, 0]}>
+                      <Bar dataKey="pct" radius={[3, 3, 0, 0]}>
                         {deltaBars.map((d, i) => {
-                          const meta = SERIES.find(s => s.label === d.label)!;
-                          return <Cell key={i} fill={deltaColor(meta, d.delta)} />;
+                          const meta = SERIES.find(s => s.key === d.key)!;
+                          const value = (snapshot![d.key] as MacroSeries).value;
+                          return <Cell key={i} fill={deltaColor(meta, d.delta, value)} />;
                         })}
                       </Bar>
                     </BarChart>
