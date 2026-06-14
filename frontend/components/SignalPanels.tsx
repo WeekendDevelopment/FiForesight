@@ -34,7 +34,7 @@ function Gauge({
   const pct = Math.max(0, Math.min(100, (value / max) * 100));
   const track = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
   return (
-    <Box sx={{ flex: 1, minWidth: 120 }}>
+    <Box sx={{ flex: '1 1 96px', minWidth: 96 }}>
       <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.3 }}>
         <Typography sx={{ fontSize: '0.6rem', opacity: 0.5, fontWeight: 700 }}>{label}</Typography>
         <Typography sx={{ fontSize: '0.6rem', fontWeight: 800, color }}>{value.toFixed(1)}</Typography>
@@ -141,7 +141,7 @@ export default function SignalPanels({
             <Typography sx={{ fontSize: '0.6rem', opacity: 0.5, fontWeight: 700, mb: 0.75, letterSpacing: 0.5 }}>
               STOCHASTIC (14, 3) — ref 20 / 80
             </Typography>
-            <Stack direction="row" spacing={2}>
+            <Stack direction="row" spacing={2} useFlexGap flexWrap="wrap">
               <Gauge label="%K" value={stochK} color="#3b82f6" refs={[20, 80]} isDark={isDark} />
               {stochD != null && <Gauge label="%D" value={stochD} color="#f97316" refs={[20, 80]} isDark={isDark} />}
             </Stack>
@@ -154,7 +154,7 @@ export default function SignalPanels({
             <Typography sx={{ fontSize: '0.6rem', opacity: 0.5, fontWeight: 700, mb: 0.75, letterSpacing: 0.5 }}>
               ADX (14) — ref 25 · {adx >= 25 ? 'trending' : 'ranging'}
             </Typography>
-            <Stack direction="row" spacing={2}>
+            <Stack direction="row" spacing={2} useFlexGap flexWrap="wrap">
               <Gauge label="ADX" value={adx} color="#a855f7" refs={[25]} isDark={isDark} />
               {plusDi  != null && <Gauge label="+DI" value={plusDi}  color={green} refs={[]} isDark={isDark} />}
               {minusDi != null && <Gauge label="−DI" value={minusDi} color={red}   refs={[]} isDark={isDark} />}
