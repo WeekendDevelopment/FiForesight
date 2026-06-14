@@ -1642,15 +1642,25 @@ class FREDService:
         params = {"id": series_id, "cosd": cosd}
         if Config.FRED_API_KEY:
             params["api_key"] = Config.FRED_API_KEY
-        try:
-            resp = await asyncio.wait_for(
-                client.get(self._CSV_URL, params=params), timeout=12.0
-            )
-            resp.raise_for_status()
-            return _parse_fred_csv(resp.text)
-        except Exception as exc:
-            logger.warning("[FRED] series %s fetch failed: %s", series_id, exc)
-            return []
+        # Under the 5-way concurrent burst FRED occasionally drops one keep-alive
+        # connection (a bare RemoteProtocolError), usually on a daily series.
+        # One retry — by then the other requests have drained — recovers it.
+        last_exc: Optional[Exception] = None
+        for attempt in (1, 2):
+            try:
+                resp = await asyncio.wait_for(
+                    client.get(self._CSV_URL, params=params), timeout=12.0
+                )
+                resp.raise_for_status()
+                return _parse_fred_csv(resp.text)
+            except Exception as exc:
+                last_exc = exc
+                if attempt == 1:
+                    await asyncio.sleep(0.25)
+        logger.warning(
+            "[FRED] series %s fetch failed after retry: %r", series_id, last_exc
+        )
+        return []
 
     async def get_macro_snapshot(self) -> dict:
         """Return the macro snapshot dict (Redis-cached 1h). {} on total failure."""
@@ -1662,13 +1672,19 @@ class FREDService:
 
         try:
             async with httpx.AsyncClient(
-                timeout=10.0,
+                timeout=httpx.Timeout(12.0, connect=8.0),
                 headers={"User-Agent": "FiForesight/1.0 research@fiforesight.dev"},
             ) as client:
                 series_ids = list(self._SERIES.keys())
-                results = await asyncio.gather(
-                    *(self._fetch_series(client, sid) for sid in series_ids)
+                # Warm the keep-alive connection with the first series, THEN fan
+                # the rest out concurrently. Firing all 5 at once on a cold pool
+                # made FRED drop a daily-series connection (ReadTimeout); reusing
+                # an established connection for the concurrent batch avoids it.
+                first = await self._fetch_series(client, series_ids[0])
+                rest = await asyncio.gather(
+                    *(self._fetch_series(client, sid) for sid in series_ids[1:])
                 )
+                results = [first, *rest]
         except Exception as exc:
             logger.warning("[FRED] snapshot fetch failed: %s — returning {}", exc)
             return {}
