@@ -16,6 +16,7 @@
 4. [Architecture — Low-Level Design (LLD)](#4-architecture--low-level-design-lld)
 5. [Data Flow & Pipeline](#5-data-flow--pipeline)
 6. [Math & Calculations Reference](#6-math--calculations-reference)
+   - 6A. [Advanced Technical Signals (Feature 14)](#6a-advanced-technical-signals-feature-14)
 7. [ML Model Details](#7-ml-model-details)
 8. [API Reference](#8-api-reference)
 9. [Database Schema (InfluxDB)](#9-database-schema-influxdb)

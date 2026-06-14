@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from backend.models import (
+    MODELS_AVAILABLE,
     calculate_atr, calculate_stochastic, calculate_adx, calculate_obv,
     detect_divergences, run_ensemble_forecast,
 )
@@ -153,6 +154,7 @@ def test_divergence_insufficient_bars_all_false():
 
 # ── RF feature importance ────────────────────────────────────────────────────
 
+@pytest.mark.skipif(not MODELS_AVAILABLE, reason="ML models unavailable in this environment")
 @pytest.mark.parametrize("seed", [0, 1])
 def test_rf_feature_importance_sorted_and_normalised(seed):
     """run_ensemble_forecast exposes top-5 RF importances, sorted, summing ~1.0."""
@@ -168,16 +170,16 @@ def test_rf_feature_importance_sorted_and_normalised(seed):
         closes, "TEST", opens=opens, highs=highs, lows=lows, volumes=vols
     )
     imp = result.get("rf_feature_importance", [])
-    # RF may not be the active model if it failed, but on this clean fixture it
-    # should fit; if present, validate the contract.
-    if imp:
-        assert len(imp) <= 5
-        importances = [d["importance"] for d in imp]
-        assert importances == sorted(importances, reverse=True)
-        # Normalised to 1.0; tolerance covers 4-decimal rounding of 5 terms.
-        assert abs(sum(importances) - 1.0) < 1e-3
-        for d in imp:
-            assert isinstance(d["feature"], str) and d["feature"]
+    # On this clean fixture with models available, RF should fit and report
+    # importances — assert non-empty so a regression can't silently pass.
+    assert imp, "Expected non-empty rf_feature_importance on clean fixture"
+    assert len(imp) <= 5
+    importances = [d["importance"] for d in imp]
+    assert importances == sorted(importances, reverse=True)
+    # Normalised to 1.0; tolerance covers 4-decimal rounding of 5 terms.
+    assert abs(sum(importances) - 1.0) < 1e-3
+    for d in imp:
+        assert isinstance(d["feature"], str) and d["feature"]
 
 
 # ── Earnings surprise (graceful degradation) ─────────────────────────────────

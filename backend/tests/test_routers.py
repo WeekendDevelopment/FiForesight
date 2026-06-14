@@ -201,6 +201,21 @@ def test_trade_setup_no_atr_falls_back() -> None:
     assert d["atr_multiplier"] is None
 
 
+def test_trade_setup_negative_atr_rejected() -> None:
+    """A negative atr_14 must be rejected by the validator (422)."""
+    resp = client.post(
+        "/trade-setup",
+        json=_trade_payload(rsi=50.0, trend="Bullish", atr_14=-1.0),
+    )
+    assert resp.status_code == 422
+
+
+def test_trade_setup_invalid_symbol_rejected() -> None:
+    """A symbol outside the allowlist must be rejected (422)."""
+    resp = client.post("/trade-setup", json=_trade_payload(symbol="AAPL; DROP TABLE"))
+    assert resp.status_code == 422
+
+
 def test_trade_setup_invalid_price() -> None:
     resp = client.post("/trade-setup", json=_trade_payload(current_price=-5.0))
     assert resp.status_code == 422

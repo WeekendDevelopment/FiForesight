@@ -51,6 +51,16 @@ class TradeSetupRequest(BaseModel):
     atr_14: Optional[float] = None
     conservative: bool = False
 
+    @field_validator("symbol")
+    @classmethod
+    def validate_symbol(cls, v: str) -> str:
+        # Symbol is interpolated into the Groq rationale prompt — validate against
+        # the same allowlist used on /predict, /dcf, etc. and normalise to upper.
+        s = (v or "").strip().upper()
+        if not _SYMBOL_RE.match(s):
+            raise ValueError("symbol must match [A-Za-z0-9.\\-:]{1,15}")
+        return s
+
     @field_validator("atr_14")
     @classmethod
     def validate_atr(cls, v: Optional[float]) -> Optional[float]:

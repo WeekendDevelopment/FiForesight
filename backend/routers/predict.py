@@ -1335,11 +1335,14 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         )
 
     earnings_task = asyncio.create_task(
-        asyncio.to_thread(yf_svc.fetch_earnings_dates, symbol)
+        asyncio.wait_for(
+            asyncio.to_thread(yf_svc.fetch_earnings_dates, symbol),
+            timeout=12.0,
+        )
     )
 
     # Earnings surprise history (last 4 quarters) — Redis-cached 24h since it
-    # only changes once per quarter. Fired concurrently, 8s timeout.
+    # only changes once per quarter. Fired concurrently, 12s timeout.
     async def _get_earnings_surprise() -> List[dict]:
         cache_key = f"earnings_surprise:{symbol.upper()}"
         cached = await cache_get(cache_key)
@@ -1353,7 +1356,10 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         except Exception as exc:
             logger.debug("[STEP-4c] earnings surprise fetch failed: %s", exc)
             data = []
-        await cache_set(cache_key, data, ttl_seconds=86400)
+        # Cache real results for 24h. An empty list means either a transient
+        # yfinance failure or genuinely no history — cache it only briefly (1h)
+        # so a transient failure self-heals instead of sticking for a full day.
+        await cache_set(cache_key, data, ttl_seconds=86400 if data else 3600)
         return data
 
     earnings_surprise_task = asyncio.create_task(_get_earnings_surprise())
