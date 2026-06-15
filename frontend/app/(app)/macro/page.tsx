@@ -96,6 +96,15 @@ export default function MacroPage() {
 
   const axisColor = isDark ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.45)';
   const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+  // Tooltip text. Recharts defaults the bar-chart item colour to black (the Bar
+  // has no `fill` — colours live on the Cells), which is unreadable on the dark
+  // tooltip surface; set label + item colours explicitly for both themes.
+  const tooltipText = isDark ? '#e2e8f0' : '#0f172a';
+  const tooltipStyle = {
+    background: isDark ? '#0d1520' : '#fff',
+    border: `1px solid ${gridColor}`, borderRadius: 8, fontSize: 12,
+    color: tooltipText,
+  };
 
   function deltaColor(meta: SeriesMeta, delta: number, value?: number): string {
     // An inverted yield-curve spread is always a warning — red regardless of
@@ -178,16 +187,16 @@ export default function MacroPage() {
               return (
                 <Grid size={{ xs: 6, sm: 4, md: 2.4 }} key={meta.key}>
                   <Card sx={{ height: '100%' }}>
-                    <CardContent sx={{ p: '14px !important' }}>
+                    <CardContent sx={{ p: { xs: '12px !important', sm: '16px !important' } }}>
                       <Typography variant="caption" sx={{ opacity: 0.5, fontWeight: 700, letterSpacing: 0.5 }}>
                         {meta.label.toUpperCase()}
                       </Typography>
-                      <Typography sx={{ fontWeight: 800, fontSize: '1.4rem', mt: 0.5, lineHeight: 1.1 }}>
+                      <Typography sx={{ fontWeight: 800, fontSize: { xs: '1.2rem', sm: '1.4rem' }, mt: 0.5, lineHeight: 1.15 }}>
                         {s.value.toFixed(2)}{meta.unit}
                       </Typography>
                       <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mt: 0.5, color: col }}>
-                        <Arrow size={14} />
-                        <Typography sx={{ fontSize: '0.78rem', fontWeight: 700 }}>
+                        <Arrow size={13} style={{ flexShrink: 0 }} />
+                        <Typography sx={{ fontSize: { xs: '0.72rem', sm: '0.78rem' }, fontWeight: 700, whiteSpace: 'nowrap' }}>
                           {s.delta_30d > 0 ? '+' : ''}{s.delta_30d.toFixed(2)} 30d
                         </Typography>
                       </Stack>
@@ -217,10 +226,9 @@ export default function MacroPage() {
                       />
                       <YAxis tick={{ fontSize: 10, fill: axisColor }} width={44} />
                       <Tooltip
-                        contentStyle={{
-                          background: isDark ? '#0d1520' : '#fff',
-                          border: `1px solid ${gridColor}`, borderRadius: 8, fontSize: 12,
-                        }}
+                        contentStyle={tooltipStyle}
+                        labelStyle={{ color: tooltipText }}
+                        itemStyle={{ color: tooltipText }}
                       />
                       <ReferenceLine y={0} stroke={AMBER} strokeDasharray="4 4" />
                       <Line
@@ -249,10 +257,9 @@ export default function MacroPage() {
                       <YAxis tick={{ fontSize: 10, fill: axisColor }} width={44} unit="%" />
                       <Tooltip
                         cursor={{ fill: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)' }}
-                        contentStyle={{
-                          background: isDark ? '#0d1520' : '#fff',
-                          border: `1px solid ${gridColor}`, borderRadius: 8, fontSize: 12,
-                        }}
+                        contentStyle={tooltipStyle}
+                        labelStyle={{ color: tooltipText }}
+                        itemStyle={{ color: tooltipText }}
                         formatter={(v: number, _n, p) => [
                           `${v > 0 ? '+' : ''}${v}%  (${p?.payload?.delta > 0 ? '+' : ''}${p?.payload?.delta} abs)`,
                           '30d change',

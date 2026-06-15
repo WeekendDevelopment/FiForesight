@@ -76,7 +76,8 @@ export default function InsiderTransactionsCard({
               No recent insider transactions found.
             </Typography>
           ) : (
-            <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.72rem' }}>
+            <Box sx={{ overflowX: 'auto', mx: -0.5, px: 0.5 }}>
+            <Box component="table" sx={{ width: '100%', minWidth: 360, borderCollapse: 'collapse', fontSize: '0.72rem' }}>
               <Box component="thead">
                 <Box component="tr" sx={{ opacity: 0.45, textAlign: 'left' }}>
                   {['Date', 'Filer', 'Type', 'Shares', 'Price', ''].map((h, i) => (
@@ -141,6 +142,7 @@ export default function InsiderTransactionsCard({
                   </Box>
                 ))}
               </Box>
+            </Box>
             </Box>
           )}
         </AccordionDetails>
