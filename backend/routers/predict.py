@@ -70,6 +70,19 @@ class JuryReanalyzeRequest(BaseModel):
     use_tools: bool = True
 
 
+class RegimeInfoResponse(BaseModel):
+    regime: str
+    confidence: float
+    state_means: Optional[Dict[str, float]] = None
+    bars_in_current_regime: Optional[int] = None
+
+
+class JuryDissentResponse(BaseModel):
+    analyst: str
+    verdict: str
+    rationale: str
+
+
 class PredictionResponse(BaseModel):
     symbol:       str
     currentPrice: str
@@ -98,8 +111,8 @@ class PredictionResponse(BaseModel):
     insiderTransactions: List[dict]    = []
     shortInterest:       Optional[dict] = None
     # Market regime intelligence (Feature 16)
-    regime:        Optional[dict] = None   # {regime, confidence, bars_in_current_regime, ...}
-    juryDissent:   Optional[dict] = None   # minority view on a 2-1 jury split, else None
+    regime:        Optional[RegimeInfoResponse]  = None   # HMM regime label + confidence
+    juryDissent:   Optional[JuryDissentResponse] = None   # minority view on a 2-1 split, else None
 
 
 # ---------------------------------------------------------------------------

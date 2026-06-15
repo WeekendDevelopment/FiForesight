@@ -47,9 +47,12 @@ export interface AnalystJuror {
   tools_used?: string[];
 }
 
+/** Supported market-regime labels (backend/UI contract, Feature 16). */
+export type MarketRegime = 'trending_up' | 'ranging' | 'trending_down' | 'unknown';
+
 /** 3-state HMM market regime for a ticker (Feature 16). */
 export interface RegimeInfo {
-  regime:     string;   // 'trending_up' | 'ranging' | 'trending_down' | 'unknown'
+  regime:     MarketRegime;
   confidence: number;   // 0..1
   state_means?:            Record<string, number>;
   bars_in_current_regime?: number;

@@ -183,7 +183,7 @@ class InfluxService:
             return []
 
     # --- Persist a market-regime label (time-series, Feature 16) -------------
-    def write_market_regime(self, symbol: str, regime: str, confidence: float):
+    def write_market_regime(self, symbol: str, regime: str, confidence: float) -> None:
         """Append one regime data point for `symbol` to the market_regime
         measurement (tags: symbol, env; fields: regime, confidence).
 
