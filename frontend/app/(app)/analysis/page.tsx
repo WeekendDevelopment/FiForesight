@@ -34,12 +34,13 @@ import OrderBookPanel    from '../../../components/OrderBookPanel';
 import StockChatPanel    from '../../../components/StockChatPanel';
 import { useIndicatorSignals } from '../../../hooks/useIndicatorSignals';
 import DCFCard               from '../../../components/DCFCard';
+import AnalystTargetsCard     from '../../../components/AnalystTargetsCard';
 import InsiderTransactionsCard from '../../../components/InsiderTransactionsCard';
 import WhyDidMoveCard        from '../../../components/WhyDidMoveCard';
 import ReversalRiskCard       from '../../../components/ReversalRiskCard';
 import DirectionForecastCard  from '../../../components/DirectionForecastCard';
 import MorningBriefingPanel   from '../../../components/MorningBriefingPanel';
-import type { PredictionData, IndicatorKey, TradeSetupResponse, DCFResult } from '../../../types';
+import type { PredictionData, IndicatorKey, TradeSetupResponse, DCFResult, AnalystTargets } from '../../../types';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -79,6 +80,8 @@ function AnalysisContent() {
   const [tradeSetup,       setTradeSetup]       = useState<TradeSetupResponse | null>(null);
   const [tradeSetupLoading, setTradeSetupLoading] = useState(false);
   const [dcfData,          setDcfData]          = useState<DCFResult | null>(null);
+  const [analystTargets,   setAnalystTargets]   = useState<AnalystTargets | null>(null);
+  const [analystTargetsLoading, setAnalystTargetsLoading] = useState(false);
   const [chatOpen,         setChatOpen]         = useState(false);
   const [authOpen,         setAuthOpen]         = useState(false);
 
@@ -131,6 +134,8 @@ function AnalysisContent() {
     setError(null);
     setTradeSetup(null);
     setDcfData(null);
+    setAnalystTargets(null);
+    setAnalystTargetsLoading(false);
     setChatOpen(false);
     try {
       const response = await axios.post('/api/predict', { data: fullSymbol }, { headers: authHeaders });
@@ -147,6 +152,13 @@ function AnalysisContent() {
       axios.get(`/api/dcf/${baseSymbol}`)
         .then(r => setDcfData(r.data))
         .catch(() => setDcfData(null));
+      // Fire-and-forget analyst price targets (non-blocking)
+      setAnalystTargetsLoading(true);
+      fetch(`/api/analyst-targets/${baseSymbol}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => setAnalystTargets(d))
+        .catch(() => setAnalystTargets(null))
+        .finally(() => setAnalystTargetsLoading(false));
     } catch (err: any) {
       setError(err.response?.data?.error || 'Analysis failed. Please try again.');
     } finally {
@@ -439,6 +451,14 @@ function AnalysisContent() {
                     dcf={dcfData}
                     isDark={isDark}
                     primaryColor={primaryColor}
+                  />
+                )}
+
+                {/* ── Wall St. Analyst Price Targets ────────────────── */}
+                {(analystTargets || analystTargetsLoading) && (
+                  <AnalystTargetsCard
+                    data={analystTargets}
+                    loading={analystTargetsLoading}
                   />
                 )}
 

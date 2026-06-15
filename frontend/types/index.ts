@@ -543,3 +543,19 @@ export interface AlertFire {
   value:    number | null;
   fired_at: string;
 }
+
+/** Wall Street analyst price targets + rating breakdown (GET /analyst-targets/{symbol}). */
+export interface AnalystTargets {
+  symbol:           string;
+  currentPrice:     number | null;
+  targetLow:        number | null;
+  targetMean:       number | null;
+  targetMedian:     number | null;
+  targetHigh:       number | null;
+  numberOfAnalysts: number | null;
+  strongBuy:        number;
+  buy:              number;
+  hold:             number;
+  sell:             number;
+  strongSell:       number;
+}
