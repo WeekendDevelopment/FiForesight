@@ -2200,7 +2200,7 @@ reasoning in a vacuum), and a 2-1 jury split now surfaces its minority view.
 `adjust_weights_for_regime(base, regime, confidence)` (in `models.py`) tilts the
 ensemble weights toward the model that suits the regime:
 
-```
+```text
 base        = {prophet: 0.30, sarima: 0.40, rf: 0.30}     # BASE_ENSEMBLE_WEIGHTS
 multipliers = trending → SARIMA ×1.4, RF ×0.7, Prophet ×1.0
               ranging  → RF ×1.4, SARIMA ×0.7, Prophet ×1.0

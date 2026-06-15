@@ -2076,7 +2076,12 @@ class RegimeService:
 
         today = datetime.now(timezone.utc).date().isoformat()
         cache_key = f"regime:{symbol.upper()}:{today}"
-        cached = await cache_get(cache_key)
+        # Isolate Redis failures so a cache blip never erases a valid HMM result.
+        try:
+            cached = await cache_get(cache_key)
+        except Exception as exc:
+            logger.warning("[REGIME] cache_get failed for %s: %s", symbol, exc)
+            cached = None
         if isinstance(cached, dict) and cached.get("regime"):
             return cached
 
@@ -2084,7 +2089,10 @@ class RegimeService:
 
         # Only cache real detections — a transient failure shouldn't stick for 4h.
         if result.get("regime") != REGIME_UNKNOWN:
-            await cache_set(cache_key, result, ttl_seconds=self._CACHE_TTL)
+            try:
+                await cache_set(cache_key, result, ttl_seconds=self._CACHE_TTL)
+            except Exception as exc:
+                logger.warning("[REGIME] cache_set failed for %s: %s", symbol, exc)
         return result
 
     def _detect(self, closes: List[float]) -> dict:
