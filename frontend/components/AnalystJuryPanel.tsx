@@ -1,11 +1,20 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Box, Button, Card, CardContent, CircularProgress, Grid, Stack, Tooltip, Typography } from '@mui/material';
+import { Alert, AlertTitle, Box, Button, Card, CardContent, CircularProgress, Grid, Stack, Tooltip, Typography } from '@mui/material';
 import { Scale, Wrench } from 'lucide-react';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
-import type { AnalystJuror } from '../types';
+import type { AnalystJuror, RegimeInfo } from '../types';
+import RegimeBadge from './RegimeBadge';
+
+// In trending regimes SARIMA is boosted; in ranging regimes RF is boosted.
+const REGIME_FAVOURED_MODEL: Record<string, string> = {
+  trending_up:   'SARIMA',
+  trending_down: 'SARIMA',
+  ranging:       'Random Forest',
+};
+const prettyRegime = (r: string) => r.replace(/_/g, ' ');
 
 const RATING_COLORS: Record<string, { bg: string; text: string }> = {
   'Strong Buy':  { bg: '#00ffa322', text: '#00ffa3' },
@@ -34,7 +43,7 @@ const formatToolsUsed = (tools?: string[]): string => {
   return labels.join(', ');
 };
 
-export default function AnalystJuryPanel({ analysts, symbol }: { analysts: AnalystJuror[]; symbol?: string }) {
+export default function AnalystJuryPanel({ analysts, symbol, regime }: { analysts: AnalystJuror[]; symbol?: string; regime?: RegimeInfo | null }) {
   const ratingColor = (r: string) => RATING_COLORS[r] ?? { bg: '#64748b22', text: '#94a3b8' };
   const { session } = useAuth();
 
@@ -123,13 +132,38 @@ export default function AnalystJuryPanel({ analysts, symbol }: { analysts: Analy
   const avgConf = Math.round(totalConf / Math.max(liveAnalysts.length, 1));
   const hasVerdicts = liveAnalysts.length > 0;
   const signedIn = Boolean(session?.access_token);
+
+  // Surface the minority opinion on a 2-1 split (sign buckets: bull/hold/bear).
+  // Computed from liveAnalysts so it stays reactive after a tool re-analysis.
+  // Mirrors the backend detect_dissent() so the API contract and UI agree.
+  const dissent: AnalystJuror | null = (() => {
+    if (liveAnalysts.length !== 3) return null;
+    if (liveAnalysts.some((a) => a.model === 'error')) return null;
+    const signs = liveAnalysts.map((a) => Math.sign(RATING_SCORE[a.rating] ?? 0));
+    const counts = signs.reduce<Record<number, number>>((m, s) => { m[s] = (m[s] ?? 0) + 1; return m; }, {});
+    const keys = Object.keys(counts);
+    if (keys.length !== 2) return null;
+    if (Object.values(counts).sort((a, b) => a - b).join(',') !== '1,2') return null;
+    const minoritySign = Number(keys.find((k) => counts[Number(k)] === 1));
+    return liveAnalysts[signs.indexOf(minoritySign)] ?? null;
+  })();
+
+  const regimeKnown = Boolean(regime && regime.regime && regime.regime !== 'unknown');
+  const favouredModel = regime ? REGIME_FAVOURED_MODEL[regime.regime] : undefined;
   return (
     <Stack spacing={1.5}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 0.5, gap: 1 }}>
         <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1, fontSize: '1rem' }}>
           <Scale size={18} /> Analyst Jury
         </Typography>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {regime && (
+            <RegimeBadge
+              regime={regime.regime}
+              confidence={regime.confidence}
+              barsInCurrentRegime={regime.bars_in_current_regime}
+            />
+          )}
           {symbol && hasVerdicts && (
             <Tooltip title={signedIn
               ? 'Re-run the jury with live tools (VIX, put/call ratio, insider flow, macro). Each analyst must consult at least one before deciding.'
@@ -178,6 +212,13 @@ export default function AnalystJuryPanel({ analysts, symbol }: { analysts: Analy
       {reanalyzeError && (
         <Typography sx={{ fontSize: '0.6rem', color: '#ff0055', opacity: 0.8, px: 0.5 }}>
           {reanalyzeError}
+        </Typography>
+      )}
+
+      {regimeKnown && favouredModel && (
+        <Typography sx={{ fontSize: '0.62rem', opacity: 0.55, px: 0.5, lineHeight: 1.4 }}>
+          In <strong>{prettyRegime(regime!.regime)}</strong> regimes, {favouredModel} weight is
+          increased to favour its strengths.
         </Typography>
       )}
 
@@ -295,6 +336,32 @@ export default function AnalystJuryPanel({ analysts, symbol }: { analysts: Analy
           );
         })}
       </Grid>
+
+      {dissent && (
+        <Alert
+          severity="warning"
+          icon={false}
+          sx={{
+            background: '#f59e0b14',
+            border: '1px solid #f59e0b44',
+            color: 'inherit',
+            py: 0.5,
+            '& .MuiAlert-message': { width: '100%' },
+          }}
+        >
+          <AlertTitle sx={{ fontSize: '0.7rem', fontWeight: 900, color: '#f59e0b', mb: 0.5, letterSpacing: '0.03em' }}>
+            Dissenting View — {dissent.title} ({dissent.rating})
+          </AlertTitle>
+          <Tooltip title={dissent.note.length > 300 ? dissent.note : ''} arrow>
+            <Typography sx={{ fontSize: '0.72rem', lineHeight: 1.55, opacity: 0.85 }}>
+              {dissent.note.length > 300 ? `${dissent.note.slice(0, 300)}… ` : dissent.note}
+              {dissent.note.length > 300 && (
+                <Box component="span" sx={{ color: '#f59e0b', fontSize: '0.62rem', cursor: 'help' }}>read more</Box>
+              )}
+            </Typography>
+          </Tooltip>
+        </Alert>
+      )}
     </Stack>
   );
 }

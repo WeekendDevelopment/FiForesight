@@ -23,6 +23,7 @@ from services import (
     FREDService,
     InsiderService,
     ShortInterestService,
+    RegimeService,
 )
 from config import Config
 
@@ -66,6 +67,8 @@ yahoo_rss_svc    = YahooRSSService()
 fred_svc         = FREDService()
 insider_svc      = InsiderService()
 short_interest_svc = ShortInterestService()
+# Market regime intelligence (Feature 16)
+regime_svc       = RegimeService()
 
 
 # ---------------------------------------------------------------------------

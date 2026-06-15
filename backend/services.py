@@ -182,6 +182,39 @@ class InfluxService:
             logger.error(f"[INFLUXDB] ✗ query_sentiment_history error for {symbol}: {e}")
             return []
 
+    # --- Persist a market-regime label (time-series, Feature 16) -------------
+    def write_market_regime(self, symbol: str, regime: str, confidence: float) -> None:
+        """Append one regime data point for `symbol` to the market_regime
+        measurement (tags: symbol, env; fields: regime, confidence).
+
+        Called fire-and-forget from /predict so a future regime-timeline chart
+        on the Insights tab can accumulate over time. Any failure is logged,
+        never raised.
+        """
+        try:
+            _validate_tag(symbol, "symbol")
+        except ValueError as e:
+            logger.error(f"[INFLUXDB] write_market_regime rejected — {e}")
+            return
+        env = Config.APP_ENV if isinstance(Config.APP_ENV, str) and Config.APP_ENV else "local"
+        try:
+            p = (
+                Point("market_regime")
+                .tag("symbol", symbol)
+                .tag("env", env)
+                .field("regime", str(regime))
+                .field("confidence", float(confidence))
+                .time(datetime.now(timezone.utc), WritePrecision.NS)
+            )
+            self.write_api.write(
+                bucket=Config.INFLUXDB_BUCKET, org=Config.INFLUXDB_ORG, record=p
+            )
+            logger.info(
+                f"[INFLUXDB] ✓ write_market_regime — {symbol} {regime} (conf={confidence:.2f})"
+            )
+        except Exception as e:
+            logger.error(f"[INFLUXDB] ✗ write_market_regime error for {symbol}: {e}")
+
     # --- Write a full OHLCV batch (from yfinance) ----------------------------
     def write_ohlcv_batch(self, symbol: str, df: pd.DataFrame):
         """
@@ -1985,6 +2018,177 @@ class ShortInterestService:
 
 
 # ---------------------------------------------------------------------------
+# Regime Service  —  3-state Gaussian HMM market-regime detection (Feature 16)
+# ---------------------------------------------------------------------------
+
+# Stable regime labels, lowest → highest mean log-return.
+REGIME_TRENDING_DOWN = "trending_down"
+REGIME_RANGING       = "ranging"
+REGIME_TRENDING_UP   = "trending_up"
+REGIME_UNKNOWN       = "unknown"
+
+_REGIME_UNKNOWN_RESULT: Dict[str, Any] = {"regime": REGIME_UNKNOWN, "confidence": 0.0}
+
+
+class RegimeService:
+    """Live 3-state market-regime detection via a Gaussian HMM.
+
+    A ``GaussianHMM(n_components=3)`` is fit per request on the last 60 bars of
+    a symbol using two features per bar — the daily log return and a 5-day
+    realised-volatility proxy (rolling std of log returns, mean-normalised),
+    both standardised. The three hidden states are mapped to stable labels by
+    sorting on mean log return: highest → ``trending_up``, lowest →
+    ``trending_down``, middle → ``ranging``.
+
+    ``get_regime()`` returns::
+
+        {
+          "regime": "trending_up",
+          "confidence": 0.83,                # predict_proba()[-1].max()
+          "state_means": {...},              # label → mean log return
+          "bars_in_current_regime": 7,       # trailing consecutive same-state bars
+        }
+
+    The fit is fully wrapped — any hmmlearn / numerical failure (or < 30 bars)
+    degrades to ``{"regime": "unknown", "confidence": 0.0}`` and is logged at
+    WARNING, so it never raises from ``/predict``. Result is Redis-cached 4h
+    under ``regime:{symbol}:{date}``.
+    """
+
+    _MIN_BARS  = 30
+    _WINDOW    = 60
+    _VOL_SPAN  = 5
+    _CACHE_TTL = 4 * 3600  # 4h
+
+    async def get_regime(self, symbol: str, closes: List[float]) -> dict:
+        """Detect the current regime for ``symbol`` from its close series.
+
+        Redis-cached 4h per symbol per UTC date. Never raises — returns the
+        unknown fallback on any failure.
+        """
+        from redis_cache import cache_get, cache_set
+
+        try:
+            _validate_tag(symbol, "symbol")
+        except ValueError as exc:
+            logger.warning("[REGIME] rejected symbol — %s", exc)
+            return dict(_REGIME_UNKNOWN_RESULT)
+
+        today = datetime.now(timezone.utc).date().isoformat()
+        cache_key = f"regime:{symbol.upper()}:{today}"
+        # Isolate Redis failures so a cache blip never erases a valid HMM result.
+        try:
+            cached = await cache_get(cache_key)
+        except Exception as exc:
+            logger.warning("[REGIME] cache_get failed for %s: %s", symbol, exc)
+            cached = None
+        if isinstance(cached, dict) and cached.get("regime"):
+            return cached
+
+        result = await asyncio.to_thread(self._detect, list(closes or []))
+
+        # Only cache real detections — a transient failure shouldn't stick for 4h.
+        if result.get("regime") != REGIME_UNKNOWN:
+            try:
+                await cache_set(cache_key, result, ttl_seconds=self._CACHE_TTL)
+            except Exception as exc:
+                logger.warning("[REGIME] cache_set failed for %s: %s", symbol, exc)
+        return result
+
+    def _detect(self, closes: List[float]) -> dict:
+        """Synchronous HMM fit + state assignment. Pure CPU; runs in a thread."""
+        if len(closes) < self._MIN_BARS:
+            logger.info(
+                "[REGIME] only %d bars (<%d) — regime unknown",
+                len(closes), self._MIN_BARS,
+            )
+            return dict(_REGIME_UNKNOWN_RESULT)
+
+        try:
+            import numpy as np
+            from hmmlearn.hmm import GaussianHMM
+            from sklearn.preprocessing import StandardScaler
+
+            arr = np.asarray(closes[-self._WINDOW:], dtype=float)
+            if np.any(arr <= 0):
+                logger.warning("[REGIME] non-positive prices in window — regime unknown")
+                return dict(_REGIME_UNKNOWN_RESULT)
+
+            # Feature 1: daily log return.
+            log_ret = np.diff(np.log(arr))
+            # Feature 2: 5-day rolling std of log returns, mean-normalised.
+            vol = pd.Series(log_ret).rolling(self._VOL_SPAN).std().to_numpy()
+            valid = ~np.isnan(vol)
+            log_ret_v = log_ret[valid]
+            vol_v = vol[valid]
+            mean_vol = float(np.mean(vol_v)) if vol_v.size else 0.0
+            if mean_vol > 0:
+                vol_v = vol_v / mean_vol
+
+            if log_ret_v.size < self._MIN_BARS - self._VOL_SPAN:
+                logger.info(
+                    "[REGIME] only %d usable feature rows — regime unknown",
+                    int(log_ret_v.size),
+                )
+                return dict(_REGIME_UNKNOWN_RESULT)
+
+            features = np.column_stack([log_ret_v, vol_v])
+            scaled = StandardScaler().fit_transform(features)
+
+            model = GaussianHMM(
+                n_components=3, covariance_type="full",
+                n_iter=100, random_state=42,
+            )
+            model.fit(scaled)
+            states = model.predict(scaled)
+            proba = model.predict_proba(scaled)
+
+            # Map states → labels by ascending mean log return. StandardScaler is
+            # monotonic per feature, so ordering on scaled means_[:, 0] matches
+            # ordering on raw log returns.
+            order = list(np.argsort(model.means_[:, 0]))  # low → high
+            label_by_state = {
+                order[0]: REGIME_TRENDING_DOWN,
+                order[1]: REGIME_RANGING,
+                order[2]: REGIME_TRENDING_UP,
+            }
+
+            current_state = int(states[-1])
+            regime = label_by_state[current_state]
+            confidence = round(float(proba[-1].max()), 4)
+
+            # Raw mean log return per labelled state (for the API / debugging).
+            state_means: Dict[str, float] = {}
+            for st, label in label_by_state.items():
+                mask = states == st
+                state_means[label] = (
+                    round(float(np.mean(log_ret_v[mask])), 6) if mask.any() else 0.0
+                )
+
+            # Trailing run length of the current state.
+            bars_in_current_regime = 0
+            for s in states[::-1]:
+                if int(s) == current_state:
+                    bars_in_current_regime += 1
+                else:
+                    break
+
+            logger.info(
+                "[REGIME] ✓ %s (conf=%.2f, %d bars in state) — state_means=%s",
+                regime, confidence, bars_in_current_regime, state_means,
+            )
+            return {
+                "regime": regime,
+                "confidence": confidence,
+                "state_means": state_means,
+                "bars_in_current_regime": bars_in_current_regime,
+            }
+        except Exception as exc:  # hmmlearn not installed, convergence error, etc.
+            logger.warning("[REGIME] detection failed (%s) — regime unknown", exc)
+            return dict(_REGIME_UNKNOWN_RESULT)
+
+
+# ---------------------------------------------------------------------------
 # Sentiment Service  —  VADER-based news headline scoring
 # ---------------------------------------------------------------------------
 
@@ -2091,6 +2295,8 @@ ANALYST_PERSONAS = [
             "When a macro snapshot is provided, reference the 10Y Treasury yield (DGS10), "
             "the 10Y-2Y curve inversion status, and the unemployment rate (UNRATE) in one "
             "sentence on systemic backdrop. "
+            "When a market regime is provided, adjust your risk assessment accordingly — "
+            "trending regimes carry trend-continuation risk, ranging regimes carry whipsaw risk. "
             "Focus on what could go wrong, not growth upside. "
             "Be specific, actionable, and advisory — not generic. "
             "Conclude with a clear rating (Strong Sell / Sell / Hold) and your recommended risk stance."
@@ -2120,6 +2326,8 @@ ANALYST_PERSONAS = [
             "momentum may be exhausting and an upside reversal is forming. "
             "When a macro snapshot is provided, note in one sentence how the CPI 30-day delta "
             "(inflation trend) could pressure or relieve this company's margins. "
+            "When a market regime is provided, note that in trending regimes momentum signals are "
+            "more reliable, so weight breakout/continuation setups higher than in a ranging regime. "
             "Ignore macro doomsday scenarios — focus on this asset's specific growth trajectory "
             "and why it has the potential to outperform. "
             "Be specific, actionable, and advisory — not generic. "
@@ -2152,6 +2360,8 @@ ANALYST_PERSONAS = [
             "into your probabilistic read. "
             "When a macro snapshot is provided, note in one sentence how the fed funds rate "
             "(FEDFUNDS) affects the discount rate and this asset's valuation sensitivity. "
+            "When a market regime is provided, note that the ensemble weights have already been "
+            "tilted to reflect it (SARIMA-favoured in trending, RF-favoured in ranging). "
             "Map each signal to a clear probabilistic implication. Be precise and data-first. "
             "Conclude with a clear quantitative rating (Accumulate / Hold / Distribute) "
             "and identify specific technical entry and exit levels where applicable."

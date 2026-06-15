@@ -12,6 +12,9 @@ scikit-learn
 # Already a transitive dep of prophet/scikit-learn — declared explicitly here
 # (unpinned, matching the rest of this manifest).
 scipy
+# 3-state Gaussian HMM for market-regime detection (Feature 16). Pure-Python
+# wheel; depends on numpy/scikit-learn which are already declared above.
+hmmlearn
 yfinance
 newrelic
 # Sentiment analysis

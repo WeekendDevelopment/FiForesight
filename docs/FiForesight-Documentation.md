@@ -2162,7 +2162,110 @@ All application tabs were audited against four breakpoints:
 
 ---
 
-## 16. Glossary
+## 16. Market Regime Intelligence (Feature 16)
+
+Static ensemble weights (Prophet 30% / SARIMAX 40% / RF 30%) are a poor fit for
+how markets actually behave: SARIMAX fits the autocorrelation of a *trending*
+market, while RandomForest — which ignores sequence — does better in a *ranging*
+one. Feature 16 detects the current regime per ticker with a Hidden Markov Model
+and lets the ensemble self-tune. The same label makes the LLM jury far more
+specific (an analyst who knows the market is ranging gives better advice than one
+reasoning in a vacuum), and a 2-1 jury split now surfaces its minority view.
+
+### 16.1 HMM design (`RegimeService`)
+
+- **Input.** The last **60 bars** of closing prices for the ticker.
+- **Features (2 per bar).** (1) daily **log return** `ln(close_t / close_{t-1})`;
+  (2) a **5-day realised-volatility proxy** — the rolling std of log returns,
+  divided by its mean. Both are standardised with `StandardScaler`.
+- **Model.** `GaussianHMM(n_components=3, covariance_type="full", n_iter=100,
+  random_state=42)`, fit on the feature matrix; `predict` gives the state
+  sequence and `predict_proba` the per-step posteriors.
+- **State → label.** The three hidden states are sorted by mean log return:
+  highest → `trending_up`, lowest → `trending_down`, middle → `ranging`.
+  (StandardScaler is monotonic per feature, so sorting on the scaled means
+  matches sorting on the raw returns.)
+- **Output.** `{regime, confidence (= proba[-1].max()), state_means,
+  bars_in_current_regime}` where `bars_in_current_regime` is the trailing run
+  length of the current state.
+- **Robustness.** `< 30` bars → `{"regime":"unknown","confidence":0.0}`. The
+  entire fit is wrapped in try/except: any `hmmlearn` / numerical failure (or
+  hmmlearn not being installed) degrades to the unknown fallback and logs a
+  WARNING — it **never** raises from `/predict`. Result is Redis-cached 4h
+  (`regime:{symbol}:{date}`); the unknown fallback is not cached, so a transient
+  failure self-heals on the next request.
+
+### 16.2 Regime-adaptive weight adjustment
+
+`adjust_weights_for_regime(base, regime, confidence)` (in `models.py`) tilts the
+ensemble weights toward the model that suits the regime:
+
+```text
+base        = {prophet: 0.30, sarima: 0.40, rf: 0.30}     # BASE_ENSEMBLE_WEIGHTS
+multipliers = trending → SARIMA ×1.4, RF ×0.7, Prophet ×1.0
+              ranging  → RF ×1.4, SARIMA ×0.7, Prophet ×1.0
+              unknown  → unchanged
+regime_weight = base × multiplier
+adjusted      = base + (regime_weight − base) × confidence   # gentler at low conf
+weights       = adjusted / Σ adjusted                        # renormalise to 1.0
+```
+
+Worked example — trending @ confidence 1.0: `regime_weight = 0.30 / 0.56 / 0.21`
+→ normalised ≈ **0.28 / 0.52 / 0.20** (SARIMA dominant). At lower confidence the
+shift shrinks toward the base. `run_ensemble_forecast` applies this as a **final
+tilt on the RL/realtime-blended weights**, so reinforcement-learning accuracy
+weighting and regime adaptation co-exist; a model the ensemble zeroed out (a
+failed fit) stays at 0 because its ×multiplier keeps it 0. The tilted weights are
+what the response returns as `modelWeights` and what `ModelWeightBar` renders
+live. The regime label is also persisted fire-and-forget to the new
+`market_regime` InfluxDB measurement (tags `symbol`, `env`; fields `regime`,
+`confidence`) for a future regime-timeline chart.
+
+### 16.3 Jury injection & dissent
+
+The live regime is injected into the shared jury context (a one-line
+`Market regime (3-state HMM): …` block) and each persona's system prompt gets a
+one-sentence regime directive (Macro & Risk → adjust risk stance; Growth →
+momentum signals are more reliable in trending regimes; Quant → ensemble weights
+already reflect the regime).
+
+`detect_dissent(verdicts)` (in `jury_graph.py`) inspects the three verdicts after
+they resolve. Each rating is mapped onto a sign bucket (bullish / hold / bearish);
+on a clean **2-1 split** it returns the lone minority's
+`{analyst, verdict, rationale}`. It returns `None` when the jury is unanimous, a
+three-way (1-1-1) split, incomplete, or when any analyst failed (its Hold/25
+fallback would be a fake dissent). The result is added to `/predict` (`juryDissent`)
+and `/jury/reanalyze` (`juryDissent`).
+
+### 16.4 Frontend
+
+- **`RegimeBadge.tsx`** — an MUI `Chip` with a lucide icon and colour per regime
+  (`TrendingUp`/green, `Minus`/amber for ranging, `TrendingDown`/red,
+  `HelpCircle`/grey for unknown) plus a confidence/bars tooltip.
+- **`AnalystJuryPanel`** renders the badge in its header, a one-line "In {regime}
+  regimes, {model} weight is increased to favour its strengths" explanation, and
+  an amber `Alert` "Dissenting View — {analyst} ({verdict})" card below the
+  analyst cards. The dissent is computed client-side from the live verdicts
+  (mirroring `detect_dissent`) so it stays reactive after a tool re-analysis.
+- **`MonteCarloFanChart`** shows a muted "Regime: {regime} ({confidence}%)"
+  subtitle. `ModelWeightBar` already consumes `modelWeights`, now regime-tilted.
+
+All components are responsive and fit the existing mobile breakpoints (the badge
+header wraps; the dissent Alert is full-width with truncation + tooltip).
+
+### 16.5 Dependencies & tests
+
+`hmmlearn` is added to `backend/requirements.txt` (depends on the already-present
+numpy/scikit-learn). On a Python build without a prebuilt wheel (e.g. 3.14) it
+needs a C++ toolchain to compile — production/Docker runs 3.12 (prebuilt wheel),
+and the graceful "unknown" fallback keeps `/predict` working even when the wheel
+is missing. `backend/tests/test_regime.py` adds 16 tests (the real-HMM detection
+test is `pytest.importorskip("hmmlearn")`-gated; the fallback, weight-adjustment,
+and dissent tests run everywhere).
+
+---
+
+## 17. Glossary
 
 **Ask the expert first** — plain-English definitions for the terms used throughout this document.
 
