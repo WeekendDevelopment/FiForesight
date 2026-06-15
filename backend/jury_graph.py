@@ -260,6 +260,52 @@ def make_tool_dispatcher(symbol: str) -> Callable[[str, dict], Awaitable[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Dissent detection (Feature 16)
+# ---------------------------------------------------------------------------
+
+# Every persona vocabulary mapped onto one bullish(+)→bearish(−) bucket so a
+# 2-1 split is detected regardless of which rating words each analyst used.
+_DISSENT_BUCKET: Dict[str, int] = {
+    "Strong Buy": 1, "Buy": 1, "Accumulate": 1, "Low Risk": 1,
+    "Hold": 0, "Medium Risk": 0,
+    "Sell": -1, "Strong Sell": -1, "Distribute": -1, "High Risk": -1,
+}
+
+
+def detect_dissent(verdicts: List[dict]) -> Optional[dict]:
+    """Surface the minority opinion on a 2-1 jury split.
+
+    Returns ``{"analyst", "verdict", "rationale"}`` for the lone dissenting
+    analyst when exactly two of three verdicts agree (by bucket) and one
+    differs. Returns ``None`` when the jury is unanimous, not a clean 2-1 split,
+    incomplete, or when any analyst failed (its Hold/25 fallback would be a fake
+    dissent, not a real contrarian view).
+    """
+    if not verdicts or len(verdicts) != 3:
+        return None
+    # Any failed analyst (error fallback) → not a genuine dissent.
+    if any(v.get("model") == "error" for v in verdicts):
+        return None
+
+    buckets = [_DISSENT_BUCKET.get(v.get("rating", "Hold"), 0) for v in verdicts]
+    counts: Dict[int, int] = {}
+    for b in buckets:
+        counts[b] = counts.get(b, 0) + 1
+
+    # Clean 2-1 split: exactly two distinct buckets, one with 2 and one with 1.
+    if len(counts) != 2 or sorted(counts.values()) != [1, 2]:
+        return None
+
+    minority_bucket = next(b for b, c in counts.items() if c == 1)
+    minority = verdicts[buckets.index(minority_bucket)]
+    return {
+        "analyst":   minority.get("title", minority.get("id", "Analyst")),
+        "verdict":   minority.get("rating", "Hold"),
+        "rationale": minority.get("note", ""),
+    }
+
+
+# ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
 

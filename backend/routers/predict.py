@@ -23,10 +23,10 @@ from services import DataCleaner, ANALYST_PERSONAS
 from dependencies import (
     influx_svc, forecast_store, serp_svc, yf_svc,
     analyst_jury_svc, sentiment_svc, finnhub_svc, stocktwits_svc, yahoo_rss_svc,
-    fred_svc, insider_svc, short_interest_svc,
+    fred_svc, insider_svc, short_interest_svc, regime_svc,
     limiter, get_user_id, _user_rate_key,
 )
-from jury_graph import run_jury_graph
+from jury_graph import run_jury_graph, detect_dissent
 from redis_cache import cache_get, cache_set
 from reversal import compute_reversal_risk
 from direction import compute_direction_forecast
@@ -97,6 +97,9 @@ class PredictionResponse(BaseModel):
     # Alternative data (Feature 15) — populated fire-and-forget, never blocking.
     insiderTransactions: List[dict]    = []
     shortInterest:       Optional[dict] = None
+    # Market regime intelligence (Feature 16)
+    regime:        Optional[dict] = None   # {regime, confidence, bars_in_current_regime, ...}
+    juryDissent:   Optional[dict] = None   # minority view on a 2-1 jury split, else None
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +231,7 @@ async def _run_analyst_jury(
     stocktwits: Optional[dict] = None,
     divergences: Optional[dict] = None,
     macro: Optional[dict] = None,
+    regime: Optional[dict] = None,
     ctx_only: bool = False,
 ) -> List[dict]:
     """
@@ -396,6 +400,16 @@ async def _run_analyst_jury(
             f"10Y-2Y curve={curve_str}{' [INVERTED]' if macro.get('inverted') else ''}\n"
         )
 
+    # Market regime (Feature 16) — live HMM label, only when detected.
+    regime_line = ""
+    if regime and regime.get("regime") and regime.get("regime") != "unknown":
+        regime_line = (
+            f"Market regime (3-state HMM): {regime['regime'].replace('_', ' ')} "
+            f"({regime.get('confidence', 0) * 100:.0f}% confidence, "
+            f"{regime.get('bars_in_current_regime', 0)} bars in current state). "
+            f"Ensemble weights have been tilted to favour the model that suits this regime.\n"
+        )
+
     ctx = (
         f"Symbol: {symbol} | Price: ${price:.2f} | RSI: {rsi:.1f} | Sector: {sec_str}\n"
         f"Fundamentals: PE={pe_str} | Cap={cap_str} | Div={div_str} | 52w={rng_str}\n"
@@ -413,6 +427,7 @@ async def _run_analyst_jury(
         f"Support: {sup_str} | Resistance: {res_str}\n"
         f"{div_line}"
         f"{macro_line}"
+        f"{regime_line}"
         f"{sentiment_line}"
         f"{news_block}"
         + (f"{track_record}\n" if track_record else "")
@@ -536,7 +551,7 @@ async def reanalyze_jury(request: Request, payload: JuryReanalyzeRequest, user: 
 
     tools_total = sum(len(v.get("tools_used", [])) for v in jury)
     logger.info(f"[JURY-REANALYZE] ✓ {symbol} — {len(jury)} verdicts, {tools_total} tool calls")
-    return {"juryAnalysts": jury}
+    return {"juryAnalysts": jury, "juryDissent": detect_dissent(jury)}
 
 
 # ---------------------------------------------------------------------------
@@ -1214,6 +1229,20 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         "with full OHLCV context ..."
         + (f" | RL blending active ({rl_sample_count} samples)" if rl_sample_count > 0 else "")
     )
+    # ── Market regime detection (Feature 16) ─────────────────────────────────
+    # 3-state Gaussian HMM on the last 60 bars → {regime, confidence, ...}.
+    # Self-contained + Redis-cached 4h; degrades to {"regime":"unknown"} on any
+    # failure (or <30 bars), so it never blocks or breaks the forecast.
+    regime_result = await _safe_fetch(
+        regime_svc.get_regime(symbol, closes),
+        empty={"regime": "unknown", "confidence": 0.0}, name="REGIME",
+    )
+    logger.info(
+        "[STEP-4a] Regime — %s (conf=%.2f, %s bars)",
+        regime_result.get("regime"), regime_result.get("confidence", 0.0),
+        regime_result.get("bars_in_current_regime", 0),
+    )
+
     forecast = await asyncio.to_thread(
         run_ensemble_forecast,
         closes, symbol,
@@ -1221,7 +1250,20 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         historical_weights=historical_weights,
         sample_count=rl_sample_count,
         ensemble_mae=ensemble_mae,
+        regime=regime_result.get("regime"),
+        regime_confidence=regime_result.get("confidence", 0.0),
     )
+
+    # Persist the regime label (fire-and-forget) for a future Insights timeline.
+    if regime_result.get("regime") and regime_result["regime"] != "unknown":
+        _safe_background(
+            asyncio.to_thread(
+                influx_svc.write_market_regime,
+                symbol, regime_result["regime"],
+                float(regime_result.get("confidence", 0.0)),
+            ),
+            name="REGIME-WRITE",
+        )
 
     # ── RL: record this forecast + resolve old ones (background) ─────────────
     fweights    = forecast.get("weights",      {"prophet": 0.0, "sarima": 0.0, "rf": 0.0})
@@ -1608,6 +1650,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
                 stocktwits=stocktwits_data,
                 divergences=divergences,
                 macro=macro_snapshot,
+                regime=regime_result,
                 ctx_only=True,
             ),
         )
@@ -1630,6 +1673,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
                 stocktwits=stocktwits_data,
                 divergences=divergences,
                 macro=macro_snapshot,
+                regime=regime_result,
             ),
         )
 
@@ -1814,6 +1858,8 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         directionForecast  = direction_forecast,
         insiderTransactions = insider_transactions,
         shortInterest       = short_interest,
+        regime             = regime_result,
+        juryDissent        = detect_dissent(jury),
     )
 
 

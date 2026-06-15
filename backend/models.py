@@ -1023,6 +1023,60 @@ def _skill_to_weights(
 
 
 # ---------------------------------------------------------------------------
+# Regime-adaptive ensemble weights (Feature 16)
+# ---------------------------------------------------------------------------
+
+# Documented static base — SARIMA-leaning because it fits autocorrelation.
+BASE_ENSEMBLE_WEIGHTS: Dict[str, float] = {"prophet": 0.30, "sarima": 0.40, "rf": 0.30}
+
+# Per-regime multipliers applied to the base weights:
+#   - Trending markets: SARIMA fits the autocorrelation → boosted; RF (which
+#     ignores sequence) → trimmed.
+#   - Ranging markets: RF (pattern/level fitter) → boosted; SARIMA → trimmed.
+#   - Unknown: no change.
+REGIME_WEIGHT_MULTIPLIERS: Dict[str, Dict[str, float]] = {
+    "trending_up":   {"prophet": 1.0, "sarima": 1.4, "rf": 0.7},
+    "trending_down": {"prophet": 1.0, "sarima": 1.4, "rf": 0.7},
+    "ranging":       {"prophet": 1.0, "sarima": 0.7, "rf": 1.4},
+}
+
+
+def adjust_weights_for_regime(
+    base: Dict[str, float],
+    regime: Optional[str],
+    confidence: float,
+) -> Dict[str, float]:
+    """Tilt ensemble weights toward the model that suits the detected regime.
+
+    ``regime_weight = base × multiplier``. The shift is scaled by detection
+    ``confidence`` so a low-confidence regime gives only a gentle tilt::
+
+        adjusted = base + (regime_weight − base) × confidence
+
+    The result is renormalised to sum 1.0. ``unknown`` / unmapped regimes or
+    ``confidence <= 0`` return the base unchanged. Models the caller has zeroed
+    out (e.g. a failed model) stay at 0 — the multiplier of 0 keeps them 0.
+
+    Worked example (base 0.30/0.40/0.30, trending, confidence=1.0):
+    regime_weight = 0.30/0.56/0.21 → normalised ≈ 0.28 / 0.52 / 0.20.
+    """
+    mult = REGIME_WEIGHT_MULTIPLIERS.get(regime or "")
+    conf = max(0.0, min(1.0, float(confidence)))
+    if not mult or conf <= 0:
+        return dict(base)
+
+    adjusted: Dict[str, float] = {}
+    for key, b in base.items():
+        regime_w = b * mult.get(key, 1.0)
+        adjusted[key] = b + (regime_w - b) * conf
+
+    total = sum(adjusted.values())
+    if total <= 0:
+        return dict(base)
+    return {k: v / total for k, v in adjusted.items()}
+
+
+# ---------------------------------------------------------------------------
 # Main ensemble entry point
 # ---------------------------------------------------------------------------
 
@@ -1036,6 +1090,8 @@ def run_ensemble_forecast(
     historical_weights: Optional[List[float]] = None,
     sample_count: int = 0,
     ensemble_mae: Optional[Dict] = None,
+    regime: Optional[str] = None,
+    regime_confidence: float = 0.0,
 ) -> Dict:
     """
     Ensemble of Prophet + SARIMAX + RandomForest forecasting closing price.
@@ -1269,6 +1325,22 @@ def run_ensemble_forecast(
             "[ENSEMBLE] Realtime inverse-error weighting — "
             "w = 1/(|day1_pred - last_price| + 1e-6), normalised"
             + (" | RL blending SKIPPED (no historical samples yet)" if not historical_weights else "")
+        )
+
+    # ── Regime-adaptive tilt (Feature 16) ────────────────────────────────────
+    # Tilt the blended weights toward the model that suits the detected regime
+    # (SARIMA in trending, RF in ranging), scaled by detection confidence.
+    # Failed models stay at 0 (×multiplier of 0 keeps them 0). Skipped when the
+    # regime is unknown/unmapped or confidence is 0 → weights unchanged.
+    if regime and regime_confidence > 0:
+        tilted = adjust_weights_for_regime(
+            {"prophet": w[0], "sarima": w[1], "rf": w[2]},
+            regime, regime_confidence,
+        )
+        w = [tilted["prophet"], tilted["sarima"], tilted["rf"]]
+        logger.info(
+            f"[ENSEMBLE] Regime tilt — regime={regime} conf={regime_confidence:.2f} | "
+            f"weights → prophet={w[0]:.3f} sarima={w[1]:.3f} rf={w[2]:.3f}"
         )
 
     for label, fc, wi, rw in zip(
