@@ -7,6 +7,7 @@ import {
 } from 'recharts';
 import { Box, Button, Chip, Collapse, IconButton, Paper, Stack, Tooltip as MuiTooltip, Typography } from '@mui/material';
 import { HelpCircle } from 'lucide-react';
+import type { RegimeInfo } from '../types';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -32,6 +33,7 @@ interface Props {
   monteCarlo: MonteCarloResult;
   currentPrice: number;
   symbol: string;
+  regime?: RegimeInfo | null;
 }
 
 type FanPoint = {
@@ -144,7 +146,7 @@ function EndLabels({ p10, p50, p90, yMin, yMax, chartH }: {
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
-export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol }: Props) {
+export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol, regime }: Props) {
   const [visible, setVisible] = useState(false);
   const [guideOpen, setGuideOpen] = useState(true);
 
@@ -193,6 +195,9 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol }:
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.75 }}>
         <Typography variant="caption" sx={{ fontSize: 10, opacity: 0.45, fontStyle: 'italic' }}>
           Monte Carlo: 1,000 &quot;what if?&quot; scenarios for this stock&apos;s price over the next 5 days
+          {regime && regime.regime !== 'unknown' && (
+            <>  ·  Regime: {regime.regime.replace(/_/g, ' ')} ({Math.round((regime.confidence ?? 0) * 100)}%)</>
+          )}
         </Typography>
         <MuiTooltip title="Show/hide guide" arrow>
           <IconButton size="small" aria-label="Toggle Monte Carlo guide" onClick={() => setGuideOpen(o => !o)} sx={{ p: 0.25, color: guideOpen ? '#7c4dff' : 'rgba(124,77,255,0.4)' }}>

@@ -338,7 +338,7 @@ function AnalysisContent() {
 
                 {/* ── Analyst Jury (on-demand — panel shows a Run button
                      when the prediction ships without verdicts) ───────── */}
-                <AnalystJuryPanel analysts={prediction.juryAnalysts ?? []} symbol={prediction.symbol} />
+                <AnalystJuryPanel analysts={prediction.juryAnalysts ?? []} symbol={prediction.symbol} regime={prediction.regime} />
 
                 {/* ── Trade Setup ──────────────────────────────────── */}
                 {user ? (
@@ -427,6 +427,7 @@ function AnalysisContent() {
                         monteCarlo={prediction.monteCarlo}
                         currentPrice={parseFloat(prediction.currentPrice)}
                         symbol={prediction.symbol}
+                        regime={prediction.regime}
                       />
                     </CardContent>
                   </Card>

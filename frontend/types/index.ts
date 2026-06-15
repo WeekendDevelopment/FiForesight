@@ -47,6 +47,21 @@ export interface AnalystJuror {
   tools_used?: string[];
 }
 
+/** 3-state HMM market regime for a ticker (Feature 16). */
+export interface RegimeInfo {
+  regime:     string;   // 'trending_up' | 'ranging' | 'trending_down' | 'unknown'
+  confidence: number;   // 0..1
+  state_means?:            Record<string, number>;
+  bars_in_current_regime?: number;
+}
+
+/** Minority view surfaced on a 2-1 analyst-jury split (Feature 16). */
+export interface JuryDissent {
+  analyst:   string;
+  verdict:   string;
+  rationale: string;
+}
+
 export interface MonteCarloPriceRangeDay {
   day:  number;
   p10:  number;
@@ -130,6 +145,9 @@ export interface PredictionData {
   // Alternative data (Feature 15)
   insiderTransactions?: InsiderTransaction[];
   shortInterest?:       ShortInterest | null;
+  // Market regime intelligence (Feature 16)
+  regime?:      RegimeInfo | null;
+  juryDissent?: JuryDissent | null;
   lastUpdated: string;
 }
 
