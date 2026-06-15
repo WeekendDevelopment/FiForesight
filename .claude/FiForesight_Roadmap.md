@@ -43,6 +43,8 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 
 - Alternative Data Sources (Feature 15): three free, keyless feeds. **FRED macro** (`FREDService`) — DGS10/CPIAUCSL/UNRATE/FEDFUNDS/T10Y2Y value+30d-delta snapshot, injected into all 3 jury prompts + new `/macro` dashboard tab (`GET /macro/snapshot`, 1h cache). **SEC EDGAR Form 4 insider** (`InsiderService`) — last 10 filings per ticker, `InsiderTransactionsCard` + `GET /insider/{symbol}` + `insiderTransactions` on `/predict`. **FINRA short interest** (`ShortInterestService`) — weekly short-volume → short % / days-to-cover in `FundamentalsPanel` + `shortInterest` on `/predict`. `FRED_API_KEY` optional. 21 new backend tests. (#pending-F15)
 
+- Market Regime Intelligence (Feature 16): per-ticker **3-state Gaussian HMM** (`RegimeService`, `hmmlearn`) on the last 60 bars (features: daily log return + 5-day realised-vol proxy, standardised) → `trending_up` / `ranging` / `trending_down` (+ `unknown` fallback), Redis-cached 4h. **Regime-adaptive ensemble weights** (`adjust_weights_for_regime` in `models.py`): SARIMA boosted in trending, RF in ranging, scaled by confidence — wired into `run_ensemble_forecast`; live weights flow to `ModelWeightBar`. Regime injected into jury context + all 3 persona prompts; persisted to new `market_regime` InfluxDB measurement. **`RegimeBadge`** on the jury panel + Monte-Carlo subtitle, and **jury dissent surfacing** (`detect_dissent`) — amber Alert on a 2-1 split. `regime` + `juryDissent` added to `/predict`; `juryDissent` to `/jury/reanalyze`. 16 new backend tests. (#pending-F16)
+
 ### Data & UX
 - SerpAPI news + trending sparklines
 - Candlestick / line / TradingView toggle
@@ -163,9 +165,9 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Fibonacci retracement levels — auto-calculated from swing high/low; overlay on price chart · `[Value: Med]` `[Effort: Med]`
 
 ### Intelligence & AI
-- Jury dissent surfacing — when split 2-1, extract minority rationale → amber "Dissenting View" card in AnalystJuryPanel · `[Value: Med]` `[Effort: Low]`
-- Regime detection (HMM via `hmmlearn`) — 3-state Gaussian HMM on returns + vol; trending_up / ranging / trending_down badge on jury panel · `[Value: High]` `[Effort: Med]`
-- Market regime → model weight adjustment — in trending regime favour SARIMAX; in ranging favour RF; surface recommendation · `[Value: High]` `[Effort: Med]`
+- ~~Jury dissent surfacing~~ ✅ SHIPPED (Feature 16) — `detect_dissent` (2-1 split → minority rationale), amber "Dissenting View" Alert in `AnalystJuryPanel`
+- ~~Regime detection (HMM via `hmmlearn`)~~ ✅ SHIPPED (Feature 16) — `RegimeService` 3-state Gaussian HMM, `RegimeBadge` on jury panel + Monte-Carlo subtitle
+- ~~Market regime → model weight adjustment~~ ✅ SHIPPED (Feature 16) — `adjust_weights_for_regime` (SARIMA in trending, RF in ranging, confidence-scaled), live weights in `ModelWeightBar`
 
 ### New Data Sources
 - ~~Insider transactions (SEC EDGAR Form 4)~~ ✅ SHIPPED (Feature 15) — `InsiderService`, `InsiderTransactionsCard`, `GET /insider/{symbol}`
