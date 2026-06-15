@@ -23,6 +23,7 @@ from services import DataCleaner, ANALYST_PERSONAS
 from dependencies import (
     influx_svc, forecast_store, serp_svc, yf_svc,
     analyst_jury_svc, sentiment_svc, finnhub_svc, stocktwits_svc, yahoo_rss_svc,
+    fred_svc, insider_svc, short_interest_svc,
     limiter, get_user_id, _user_rate_key,
 )
 from jury_graph import run_jury_graph
@@ -93,6 +94,9 @@ class PredictionResponse(BaseModel):
     moveExplanation: Optional[str]  = None
     reversalRisk:       Optional[dict] = None
     directionForecast:  Optional[dict] = None
+    # Alternative data (Feature 15) — populated fire-and-forget, never blocking.
+    insiderTransactions: List[dict]    = []
+    shortInterest:       Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +227,7 @@ async def _run_analyst_jury(
     sentiment: Optional[dict] = None,
     stocktwits: Optional[dict] = None,
     divergences: Optional[dict] = None,
+    macro: Optional[dict] = None,
     ctx_only: bool = False,
 ) -> List[dict]:
     """
@@ -373,6 +378,24 @@ async def _run_analyst_jury(
         if active:
             div_line = f"Divergence signals: {', '.join(active)}\n"
 
+    # Macro backdrop (Feature 15) — live FRED snapshot, only when available.
+    macro_line = ""
+    if macro:
+        def _m(key: str) -> str:
+            d = macro.get(key)
+            if not isinstance(d, dict) or d.get("value") is None:
+                return "N/A"
+            return f"{d['value']:.2f} ({d['delta_30d']:+.2f} 30d)"
+        curve = macro.get("t10y2y", {})
+        curve_str = (
+            f"{curve.get('value'):+.2f}" if isinstance(curve, dict) and curve.get("value") is not None else "N/A"
+        )
+        macro_line = (
+            f"Macro (FRED): 10Y={_m('dgs10')} | CPI={_m('cpiaucsl')} | "
+            f"Unemployment={_m('unrate')} | FedFunds={_m('fedfunds')} | "
+            f"10Y-2Y curve={curve_str}{' [INVERTED]' if macro.get('inverted') else ''}\n"
+        )
+
     ctx = (
         f"Symbol: {symbol} | Price: ${price:.2f} | RSI: {rsi:.1f} | Sector: {sec_str}\n"
         f"Fundamentals: PE={pe_str} | Cap={cap_str} | Div={div_str} | 52w={rng_str}\n"
@@ -389,6 +412,7 @@ async def _run_analyst_jury(
         f"Volume: {vol_line}\n"
         f"Support: {sup_str} | Resistance: {res_str}\n"
         f"{div_line}"
+        f"{macro_line}"
         f"{sentiment_line}"
         f"{news_block}"
         + (f"{track_record}\n" if track_record else "")
@@ -1364,6 +1388,23 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
 
     earnings_surprise_task = asyncio.create_task(_get_earnings_surprise())
 
+    # ── Alternative data (Feature 15) — macro / insider / short interest ──────
+    # All fired concurrently and resolved later with short timeouts so EDGAR /
+    # FINRA / FRED latency never blocks /predict. Each degrades to {}/[]/None.
+    macro_task = asyncio.create_task(
+        _safe_fetch(fred_svc.get_macro_snapshot(), empty={}, name="FRED-MACRO")
+    )
+    insider_task = asyncio.create_task(
+        _safe_fetch(
+            insider_svc.get_insider_transactions(symbol), empty=[], name="INSIDER"
+        )
+    )
+    short_interest_task = asyncio.create_task(
+        _safe_fetch(
+            short_interest_svc.get_short_interest(symbol), empty=None, name="SHORT-INT"
+        )
+    )
+
     # ── Support/resistance — now uses intraday highs/lows ────────────────────
     logger.debug(
         "[STEP-4d] Computing support/resistance levels "
@@ -1539,6 +1580,10 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         f"forecast_high=${forecast['high']:.2f}, forecast_low=${forecast['low']:.2f}, "
         f"conf={forecast['conf']}, ann_vol={forecast.get('stats', {}).get('ann_volatility_pct', 'N/A')}%"
     )
+    # Resolve the FRED macro snapshot before the jury so its context (cached for
+    # /jury/reanalyze) carries the live macro backdrop. Cheap — 1h Redis cache.
+    macro_snapshot: dict = await macro_task
+
     _jury_fp = hashlib.md5(
         f"{rsi:.1f}|{forecast['high']:.2f}|{forecast['low']:.2f}|{closes[-1]:.2f}|{sentiment.get('label', '')}".encode()
     ).hexdigest()[:12]
@@ -1562,6 +1607,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
                 sentiment=sentiment,
                 stocktwits=stocktwits_data,
                 divergences=divergences,
+                macro=macro_snapshot,
                 ctx_only=True,
             ),
         )
@@ -1583,6 +1629,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
                 sentiment=sentiment,
                 stocktwits=stocktwits_data,
                 divergences=divergences,
+                macro=macro_snapshot,
             ),
         )
 
@@ -1701,6 +1748,17 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         f"RSI series: {len(rsi_series)} points"
     )
 
+    # ── Alternative data resolution (Feature 15) ─────────────────────────────
+    # Fired at Step 4c; resolved here. _safe_fetch already bounds each to 12s and
+    # falls back to []/None, so a slow EDGAR/FINRA call can't stall the response.
+    insider_transactions: List[dict] = await insider_task
+    short_interest: Optional[dict]   = await short_interest_task
+    logger.info(
+        "[STEP-7b] Alt-data — insider=%d filings, short_interest=%s, macro=%s",
+        len(insider_transactions), "yes" if short_interest else "none",
+        "yes" if macro_snapshot else "none",
+    )
+
     # ── Response summary ──────────────────────────────────────────────────────
     logger.info(
         f"[RESPONSE] {symbol} — price=${live_price:.2f}, RSI={rsi:.2f} | "
@@ -1754,6 +1812,8 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         moveExplanation = move_explanation,
         reversalRisk       = reversal_risk,
         directionForecast  = direction_forecast,
+        insiderTransactions = insider_transactions,
+        shortInterest       = short_interest,
     )
 
 

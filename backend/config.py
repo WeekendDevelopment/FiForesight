@@ -12,6 +12,9 @@ class Config:
     INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "WeekendDevelopment")
     INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "FiForesightBucket")
     SERP_API_KEY = os.getenv("SERP_API_KEY")
+    # FRED macro data (Feature 15). OPTIONAL — the public fredgraph.csv endpoint
+    # works without a key; a key only raises the request rate limit.
+    FRED_API_KEY: str = os.getenv("FRED_API_KEY", "")
     GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
     FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
     ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
@@ -102,6 +105,8 @@ class Config:
     RATE_LIMIT_TRADE:        str = os.getenv("RATE_LIMIT_TRADE",        "15/minute")
     RATE_LIMIT_BACKTEST:     str = os.getenv("RATE_LIMIT_BACKTEST",     "5/minute")
     RATE_LIMIT_READONLY:     str = os.getenv("RATE_LIMIT_READONLY",     "60/minute")
+    # Alternative data (Feature 15) — SEC EDGAR insider lookup (per IP).
+    RATE_LIMIT_INSIDER:      str = os.getenv("RATE_LIMIT_INSIDER",      "30/minute")
     # Portfolio Manager (Feature 10) — holdings CRUD is cheap (Supabase only);
     # the summary fans out to yfinance per holding, so it gets a tighter limit.
     RATE_LIMIT_PORTFOLIO:         str = os.getenv("RATE_LIMIT_PORTFOLIO",         "30/minute")

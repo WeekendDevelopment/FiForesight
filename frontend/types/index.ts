@@ -127,7 +127,49 @@ export interface PredictionData {
   moveExplanation?: string | null;
   reversalRisk?:      ReversalRisk | null;
   directionForecast?: DirectionForecast | null;
+  // Alternative data (Feature 15)
+  insiderTransactions?: InsiderTransaction[];
+  shortInterest?:       ShortInterest | null;
   lastUpdated: string;
+}
+
+// ── Alternative data (Feature 15) ────────────────────────────────────────────
+
+/** One FRED series value + its 30-day change. */
+export interface MacroSeries {
+  value:     number;
+  delta_30d: number;
+}
+
+/** FRED macro snapshot returned by GET /api/macro/snapshot. */
+export interface MacroSnapshot {
+  dgs10?:    MacroSeries;   // 10Y Treasury yield
+  cpiaucsl?: MacroSeries;   // CPI (all urban consumers)
+  unrate?:   MacroSeries;   // Unemployment rate
+  fedfunds?: MacroSeries;   // Effective federal funds rate
+  t10y2y?:   MacroSeries;   // 10Y-2Y spread (negative = inverted)
+  inverted?: boolean;       // true when t10y2y < 0
+  t10y2y_trend?: { date: string; value: number }[];  // 31-point trend
+  fetched_at?: string;
+}
+
+/** One SEC EDGAR Form 4 insider filing. */
+export interface InsiderTransaction {
+  filer:    string;
+  type:     string;          // "Purchase" | "Sale" | "Award" | "Filing" | …
+  shares:   number | null;
+  price:    number | null;
+  date:     string;
+  sec_link: string;
+}
+
+/** FINRA short-interest metrics for a symbol. */
+export interface ShortInterest {
+  short_volume:  number;
+  total_volume:  number;
+  short_ratio:   number | null;
+  days_to_cover: number | null;
+  report_date:   string;
 }
 
 export interface DirectionForecast {

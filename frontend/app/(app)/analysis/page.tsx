@@ -34,6 +34,7 @@ import OrderBookPanel    from '../../../components/OrderBookPanel';
 import StockChatPanel    from '../../../components/StockChatPanel';
 import { useIndicatorSignals } from '../../../hooks/useIndicatorSignals';
 import DCFCard               from '../../../components/DCFCard';
+import InsiderTransactionsCard from '../../../components/InsiderTransactionsCard';
 import WhyDidMoveCard        from '../../../components/WhyDidMoveCard';
 import ReversalRiskCard       from '../../../components/ReversalRiskCard';
 import DirectionForecastCard  from '../../../components/DirectionForecastCard';
@@ -439,6 +440,13 @@ function AnalysisContent() {
                     primaryColor={primaryColor}
                   />
                 )}
+
+                {/* ── Insider Transactions (SEC EDGAR Form 4) ───────── */}
+                <InsiderTransactionsCard
+                  transactions={prediction.insiderTransactions ?? []}
+                  isDark={isDark}
+                  primaryColor={primaryColor}
+                />
 
               </Stack>
             ) : (

@@ -41,6 +41,8 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 
 - Watchlist persistence + intraday sparklines + responsive design (Feature 13): `watchlists` Supabase table, `/watchlist` CRUD, intraday 5m bars on `/sparklines`, `WatchlistContext`, sidebar watchlist panel, mobile bottom chip bar, full responsive audit across all tabs (320px–4K). 13 new backend tests. (#pending-F13)
 
+- Alternative Data Sources (Feature 15): three free, keyless feeds. **FRED macro** (`FREDService`) — DGS10/CPIAUCSL/UNRATE/FEDFUNDS/T10Y2Y value+30d-delta snapshot, injected into all 3 jury prompts + new `/macro` dashboard tab (`GET /macro/snapshot`, 1h cache). **SEC EDGAR Form 4 insider** (`InsiderService`) — last 10 filings per ticker, `InsiderTransactionsCard` + `GET /insider/{symbol}` + `insiderTransactions` on `/predict`. **FINRA short interest** (`ShortInterestService`) — weekly short-volume → short % / days-to-cover in `FundamentalsPanel` + `shortInterest` on `/predict`. `FRED_API_KEY` optional. 21 new backend tests. (#pending-F15)
+
 ### Data & UX
 - SerpAPI news + trending sparklines
 - Candlestick / line / TradingView toggle
@@ -166,16 +168,16 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Market regime → model weight adjustment — in trending regime favour SARIMAX; in ranging favour RF; surface recommendation · `[Value: High]` `[Effort: Med]`
 
 ### New Data Sources
-- Insider transactions (SEC EDGAR Form 4) — free, no key; `efts.sec.gov`; last 10 Form 4 filings per ticker; buy/sell colour-coded table · `[Value: High]` `[Effort: Med]`
-- FRED macro context → jury prompts — `DGS10`, `CPIAUCSL`, `UNRATE`, `FEDFUNDS`, `T10Y2Y`; inject current values + 30d delta into each analyst system prompt · `[Value: High]` `[Effort: Med]`
+- ~~Insider transactions (SEC EDGAR Form 4)~~ ✅ SHIPPED (Feature 15) — `InsiderService`, `InsiderTransactionsCard`, `GET /insider/{symbol}`
+- ~~FRED macro context → jury prompts~~ ✅ SHIPPED (Feature 15) — `FREDService`, value+30d-delta injected into all 3 analyst prompts
 - Reddit sentiment (PRAW) — `r/wallstreetbets` + `r/stocks` mention count + VADER delta; needs Reddit API account · `[Value: Med]` `[Effort: High]` `[Needs: Reddit dev account]`
 - Google Trends signal (`pytrends`) — relative search interest for `"{symbol} stock"`; sparkline + trend direction; fragile but free · `[Value: Med]` `[Effort: Med]`
-- Short interest tracker — FINRA ATS transparency data (free, weekly); days-to-cover ratio · `[Value: Med]` `[Effort: Med]`
+- ~~Short interest tracker~~ ✅ SHIPPED (Feature 15) — `ShortInterestService` (FINRA weekly), short % / days-to-cover in FundamentalsPanel
 - Earnings call transcript sentiment — SEC EDGAR free; NLP on 10-Q/8-K filings · `[Value: Med]` `[Effort: High]`
 
 ### UX & Data Display
 - Multi-ticker overlay comparison — ratio chart (stock vs SPY); rolling 30d correlation line · `[Value: Med]` `[Effort: Low]`
-- Macro dashboard (`/macro` tab) — standalone FRED tab: GDP, CPI, rates, yield curve, fed dot plot · `[Value: Med]` `[Effort: Med]`
+- ~~Macro dashboard (`/macro` tab)~~ ✅ SHIPPED (Feature 15) — standalone FRED tab: 5 stat cards, T10Y2Y trend line, 30d-delta bar chart, inversion banner
 - International markets — yfinance supports non-US tickers; exchange detection already exists · `[Value: Med]` `[Effort: Med]`
 - Analyst price target range — `yf.Ticker().analyst_price_targets` → low/mean/high bar in FundamentalsPanel · `[Value: Med]` `[Effort: Low]`
 

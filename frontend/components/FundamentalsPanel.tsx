@@ -86,6 +86,25 @@ export default function FundamentalsPanel({ prediction, rsiInfo, isDark, primary
                      : undefined,
               },
               { label: 'DIVIDEND', val: prediction.metrics.yield },
+              // ── Short interest (Feature 15) — FINRA weekly short volume ──
+              {
+                label: 'SHORT % VOL',
+                val: prediction.shortInterest?.short_ratio != null
+                  ? `${(prediction.shortInterest.short_ratio * 100).toFixed(1)}%`
+                  : 'N/A',
+              },
+              {
+                label: 'DAYS TO COVER',
+                val: prediction.shortInterest?.days_to_cover != null
+                  ? prediction.shortInterest.days_to_cover.toFixed(1)
+                  : 'N/A',
+                // Elevated short squeeze risk when it would take >5 days of
+                // average volume to cover the short position.
+                color: prediction.shortInterest?.days_to_cover != null
+                  && prediction.shortInterest.days_to_cover > 5
+                  ? (isDark ? '#ff0055' : '#dc2626')
+                  : undefined,
+              },
             ].map(item => (
               <Grid size={{ xs: 6, sm: 4, md: 3 }} key={item.label}>
                 <Typography variant="caption" sx={{ opacity: 0.4 }}>{item.label}</Typography>
