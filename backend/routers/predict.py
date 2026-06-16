@@ -118,7 +118,6 @@ class PredictionResponse(BaseModel):
     stocktwits:      dict           = {}
     monteCarlo:      Optional[dict] = None
     earningsDates:   List[str]      = []
-    moveExplanation: Optional[str]  = None
     reversalRisk:       Optional[dict] = None
     directionForecast:  Optional[dict] = None
     # Alternative data (Feature 15) — populated fire-and-forget, never blocking.
@@ -1668,46 +1667,8 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         logger.warning(f"[STEP-4e] earnings_surprise_task failed: {e}")
         earnings_surprise = []
 
-    # ── Step 4f. "Why did this move?" explainer (async, runs concurrently) ─────
-    try:
-        _cur_f = float(live_price)
-    except (TypeError, ValueError):
-        _cur_f = 0.0
-    _prev  = info.get("prev_close", 0)
-    try:
-        _prev_f = float(_prev) if _prev not in (None, "N/A") else 0.0
-    except (ValueError, TypeError):
-        _prev_f = 0.0
-    # Fall back to closes[-2] (yesterday's bar) when fetch_info prev_close is unavailable
-    if _prev_f <= 0 and len(closes) >= 2:
-        _prev_f = float(closes[-2])
-    price_change_pct = ((_cur_f - _prev_f) / _prev_f * 100) if _prev_f else 0.0
-
-    move_explanation_task = None
-    if abs(price_change_pct) >= 3.0:
-        news_headlines_str = " | ".join(
-            n["title"] for n in news[:3] if n.get("title")
-        )
-        _move_system = "You are a concise financial analyst. Reply in 2 sentences max."
-        _move_user   = (
-            f"{symbol} moved {price_change_pct:+.1f}% today "
-            f"(from ${_prev_f:.2f} to ${_cur_f:.2f}). "
-            f"Top headlines: {news_headlines_str}. "
-            f"What is the most likely catalyst?"
-        )
-        move_explanation_task = asyncio.create_task(
-            analyst_jury_svc.call_groq(
-                "llama-3.1-8b-instant",
-                _move_system,
-                _move_user,
-                max_tokens=120,
-            )
-        )
-        logger.info(
-            f"[STEP-4f] Move explainer task launched — {symbol} {price_change_pct:+.1f}%"
-        )
-
-    # ── Step 4f-2. Gap Explainer (F22) — structured >=3% move alert ───────────
+    # ── Step 4f. Gap Explainer (F22) — structured >=3% move alert ─────────────
+    # The single "why did this move?" surface (superseded the old WhyDidMoveCard).
     # Reuses the cleaned 2y history `df` (yesterday vs latest close) + top
     # headlines. Fired concurrently with the jury; resolved before the response.
     gap_alert_task = asyncio.create_task(
@@ -1814,25 +1775,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             f"confidence={v['confidence']}%, model={v['model']}"
         )
 
-    # ── Step 5b. Await move explainer if running ─────────────────────────────
-    move_explanation: Optional[str] = None
-    if move_explanation_task is not None:
-        try:
-            move_explanation = await asyncio.wait_for(move_explanation_task, timeout=12.0)
-            logger.info(f"[STEP-5b] Move explanation received ({len(move_explanation)} chars)")
-        except Exception as _me:
-            logger.warning(f"[STEP-5b] Move explanation failed: {_me}")
-        # Guaranteed fallback: card always shows on big moves even if Groq fails
-        if not move_explanation:
-            direction = "up" if price_change_pct > 0 else "down"
-            top_headline = news[0]["title"] if news else "no headlines available"
-            move_explanation = (
-                f"{symbol} is {direction} {abs(price_change_pct):.1f}% today. "
-                f"Top story: {top_headline}"
-            )
-            logger.info("[STEP-5b] Using fallback move explanation")
-
-    # ── Step 5c. Resolve gap explainer (F22) ─────────────────────────────────
+    # ── Step 5b. Resolve gap explainer (F22) ─────────────────────────────────
     gap_alert: Optional[dict] = None
     try:
         gap_alert = await asyncio.wait_for(gap_alert_task, timeout=10.0)
@@ -1971,7 +1914,6 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         stocktwits   = stocktwits_data,
         monteCarlo      = forecast.get("monte_carlo"),
         earningsDates   = earnings_dates,
-        moveExplanation = move_explanation,
         reversalRisk       = reversal_risk,
         directionForecast  = direction_forecast,
         insiderTransactions = insider_transactions,

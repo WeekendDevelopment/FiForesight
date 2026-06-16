@@ -150,7 +150,6 @@ export interface PredictionData {
   stocktwits?:   { bullish: number; bearish: number; sentiment: number };
   monteCarlo?:      MonteCarloResult | null;
   earningsDates?:   string[];
-  moveExplanation?: string | null;
   reversalRisk?:      ReversalRisk | null;
   directionForecast?: DirectionForecast | null;
   // Alternative data (Feature 15)
