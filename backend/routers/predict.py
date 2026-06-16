@@ -4,7 +4,12 @@ import hashlib
 import logging
 import re
 from datetime import datetime, timedelta, timezone, date
-from typing import Any, Dict, List, Optional, Tuple
+from typing import (
+    Any, Awaitable, Callable, Dict, List, Literal, Optional, Tuple, TYPE_CHECKING,
+)
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from slowapi.util import get_remote_address
@@ -84,8 +89,10 @@ class JuryDissentResponse(BaseModel):
 
 
 class GapAlertResponse(BaseModel):
+    # camelCase mirrors the rest of PredictionResponse — these are the JSON wire
+    # contract consumed by the TS `GapAlert` interface, not internal backend names.
     gapPct:      float
-    direction:   str          # "up" | "down"
+    direction:   Literal["up", "down"]
     explanation: str
     headlines:   List[str]
 
@@ -190,9 +197,9 @@ def _safe_background(coro_or_future, *, name: str = "background"):
 
 async def _compute_gap_alert(
     symbol: str,
-    hist_df,
+    hist_df: "Optional[pd.DataFrame]",
     news_headlines: List[str],
-    groq_call=None,
+    groq_call: Optional[Callable[[str, str, str, int], Awaitable[str]]] = None,
 ) -> Optional[dict]:
     """Return a gap-alert dict when the latest daily move is >= 3% (abs), else None.
 

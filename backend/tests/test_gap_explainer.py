@@ -6,7 +6,7 @@ The Groq call is never exercised here (groq_call=None), so these run with no
 network and no native deps — only the pure gap-detection logic is under test.
 """
 import asyncio
-from typing import Any, Coroutine
+from typing import Any, Coroutine, List
 
 import pandas as pd
 
@@ -14,10 +14,11 @@ from backend.routers.predict import _compute_gap_alert
 
 
 def run(coro: "Coroutine[Any, Any, Any]") -> Any:
+    """Run an async coroutine to completion in a fresh event loop."""
     return asyncio.run(coro)
 
 
-def _df(closes: list) -> pd.DataFrame:
+def _df(closes: List[float]) -> pd.DataFrame:
     """Build a minimal OHLCV frame carrying just the Close column the helper reads."""
     return pd.DataFrame({"Close": closes})
 
