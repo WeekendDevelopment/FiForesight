@@ -95,6 +95,23 @@ class TestAnalystTargetsEndpoint:
             resp = client.get("/analyst-targets/AAPL")
         assert resp.status_code == 502
 
+    def test_analyst_targets_sanitizes_non_finite(self):
+        # yfinance can return NaN/inf — these must become null (Starlette serializes
+        # with allow_nan=False, so an unsanitized NaN would 500 the response).
+        targets = {
+            "current": float("nan"), "low": float("inf"), "mean": 255.0,
+            "median": 250.0, "high": float("-inf"),
+        }
+        with patch.object(market.yf, "Ticker",
+                          MagicMock(return_value=_mock_ticker(targets, None, {}))):
+            resp = client.get("/analyst-targets/AAPL")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["currentPrice"] is None
+        assert body["targetLow"] is None
+        assert body["targetHigh"] is None
+        assert body["targetMean"] == 255.0
+
     def test_analyst_targets_rejects_bad_symbol(self):
         resp = client.get("/analyst-targets/!!bad!!")
         assert resp.status_code == 422

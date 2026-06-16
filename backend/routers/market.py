@@ -1119,6 +1119,22 @@ async def analyst_targets(request: Request, symbol: str) -> Dict[str, Any]:
                     return v
             return None
 
+        def _num_or_none(v: Any) -> Optional[float]:
+            """Coerce to a finite number, mapping None/NaN/inf/garbage to None.
+
+            yfinance can hand back NaN/inf; Starlette's JSONResponse serializes
+            with ``allow_nan=False``, so an unsanitized NaN would 500 the whole
+            response instead of degrading to a null field."""
+            try:
+                if v is None:
+                    return None
+                n = float(v)
+                if not math.isfinite(n):
+                    return None
+                return int(n) if n.is_integer() else n
+            except (TypeError, ValueError):
+                return None
+
         recs = {"strongBuy": 0, "buy": 0, "hold": 0, "sell": 0, "strongSell": 0}
         rec_df = t.recommendations_summary
         if rec_df is not None and not rec_df.empty:
@@ -1128,19 +1144,19 @@ async def analyst_targets(request: Request, symbol: str) -> Dict[str, Any]:
 
         return {
             "symbol": sym,
-            "currentPrice": _pick(targets.get("currentPrice"), targets.get("current"),
-                                  info.get("currentPrice")),
-            "targetLow": _pick(targets.get("low"), info.get("targetLowPrice")),
-            "targetMean": _pick(targets.get("mean"), info.get("targetMeanPrice")),
-            "targetMedian": _pick(targets.get("median"), info.get("targetMedianPrice")),
-            "targetHigh": _pick(targets.get("high"), info.get("targetHighPrice")),
-            "numberOfAnalysts": _pick(targets.get("numberOfAnalysts"),
-                                      info.get("numberOfAnalystOpinions")),
+            "currentPrice": _num_or_none(_pick(targets.get("currentPrice"),
+                                               targets.get("current"), info.get("currentPrice"))),
+            "targetLow": _num_or_none(_pick(targets.get("low"), info.get("targetLowPrice"))),
+            "targetMean": _num_or_none(_pick(targets.get("mean"), info.get("targetMeanPrice"))),
+            "targetMedian": _num_or_none(_pick(targets.get("median"), info.get("targetMedianPrice"))),
+            "targetHigh": _num_or_none(_pick(targets.get("high"), info.get("targetHighPrice"))),
+            "numberOfAnalysts": _num_or_none(_pick(targets.get("numberOfAnalysts"),
+                                                   info.get("numberOfAnalystOpinions"))),
             **recs,
         }
 
     try:
-        result = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=10.0)
+        result = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=12.0)
     except Exception as e:
         logger.error(f"analyst_targets {sym}: {e}")
         raise HTTPException(status_code=502, detail="Could not fetch analyst targets")

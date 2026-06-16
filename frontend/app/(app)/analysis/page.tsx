@@ -152,13 +152,15 @@ function AnalysisContent() {
       axios.get(`/api/dcf/${baseSymbol}`)
         .then(r => setDcfData(r.data))
         .catch(() => setDcfData(null));
-      // Fire-and-forget analyst price targets (non-blocking)
+      // Fire-and-forget analyst price targets (non-blocking). Guard every state
+      // write on lastLoadedRef so a slow response for a previous symbol can't
+      // clobber the current one when the user switches tickers quickly.
       setAnalystTargetsLoading(true);
       fetch(`/api/analyst-targets/${baseSymbol}`)
         .then(r => r.ok ? r.json() : null)
-        .then(d => setAnalystTargets(d))
-        .catch(() => setAnalystTargets(null))
-        .finally(() => setAnalystTargetsLoading(false));
+        .then(d => { if (lastLoadedRef.current === baseSymbol) setAnalystTargets(d); })
+        .catch(() => { if (lastLoadedRef.current === baseSymbol) setAnalystTargets(null); })
+        .finally(() => { if (lastLoadedRef.current === baseSymbol) setAnalystTargetsLoading(false); });
     } catch (err: any) {
       setError(err.response?.data?.error || 'Analysis failed. Please try again.');
     } finally {
@@ -455,12 +457,12 @@ function AnalysisContent() {
                 )}
 
                 {/* ── Wall St. Analyst Price Targets ────────────────── */}
-                {(analystTargets || analystTargetsLoading) && (
-                  <AnalystTargetsCard
-                    data={analystTargets}
-                    loading={analystTargetsLoading}
-                  />
-                )}
+                {/* Always rendered (like InsiderTransactionsCard) so the card's
+                    own loading/empty states are reachable on a slow/failed fetch. */}
+                <AnalystTargetsCard
+                  data={analystTargets}
+                  loading={analystTargetsLoading}
+                />
 
                 {/* ── Insider Transactions (SEC EDGAR Form 4) ───────── */}
                 <InsiderTransactionsCard
