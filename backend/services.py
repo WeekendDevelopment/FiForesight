@@ -1846,8 +1846,9 @@ class InsiderService:
             for nm, ck in zip(names, ciks or []):
                 if str(ck).lstrip("0") != str(issuer_cik):
                     return str(nm).split(" (")[0].strip()
-        except Exception:
-            pass
+        except Exception as exc:
+            # Malformed display_names/ciks — fall through to the positional fallback.
+            logger.debug("[INSIDER] owner inference failed: %s", exc)
         if names:
             return str(names[0]).split(" (")[0].strip()
         return "Unknown"
