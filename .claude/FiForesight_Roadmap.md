@@ -39,6 +39,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Forecast Accuracy & Sentiment Analytics Dashboard — `/insights` tab + `GET /analytics/{accuracy,sentiment}/{symbol}`; persists VADER compound to new `sentiment_score` measurement (Feature 12, PR #244)
 - Portfolio Manager — real holdings + live P&L ("My Portfolio" tab) + `GET/POST/DELETE /portfolio/holdings` + `GET /portfolio/summary` (Supabase `holdings` + RLS); existing race sim renamed "Simulator" (Feature 10, PR #249)
 - Analyst price targets card — Wall St. mean/low/high range bar + rating breakdown (Feature 21, PR #267)
+- Gap Explainer — auto-detects ≥3% daily moves, surfaces top headlines + Groq one-sentence explanation in a banner above the chart (F22)
 
 - Watchlist persistence + intraday sparklines + responsive design (Feature 13): `watchlists` Supabase table, `/watchlist` CRUD, intraday 5m bars on `/sparklines`, `WatchlistContext`, sidebar watchlist panel, mobile bottom chip bar, full responsive audit across all tabs (320px–4K). 13 new backend tests. (#pending-F13)
 

@@ -65,6 +65,14 @@ export interface JuryDissent {
   rationale: string;
 }
 
+/** Auto-generated explainer for a >=3% daily move (Feature 22). */
+export interface GapAlert {
+  gapPct:      number;            // signed daily move %
+  direction:   'up' | 'down';
+  explanation: string;           // one-sentence Groq cause ("" if unavailable)
+  headlines:   string[];         // up to 3 top headlines used for context
+}
+
 export interface MonteCarloPriceRangeDay {
   day:  number;
   p10:  number;
@@ -151,6 +159,8 @@ export interface PredictionData {
   // Market regime intelligence (Feature 16)
   regime?:      RegimeInfo | null;
   juryDissent?: JuryDissent | null;
+  // Gap Explainer (Feature 22) — present only on a >=3% daily move
+  gap_alert?:   GapAlert | null;
   lastUpdated: string;
 }
 

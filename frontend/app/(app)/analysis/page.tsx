@@ -37,6 +37,7 @@ import DCFCard               from '../../../components/DCFCard';
 import AnalystTargetsCard     from '../../../components/AnalystTargetsCard';
 import InsiderTransactionsCard from '../../../components/InsiderTransactionsCard';
 import WhyDidMoveCard        from '../../../components/WhyDidMoveCard';
+import GapExplainerBanner    from '../../../components/GapExplainerBanner';
 import ReversalRiskCard       from '../../../components/ReversalRiskCard';
 import DirectionForecastCard  from '../../../components/DirectionForecastCard';
 import MorningBriefingPanel   from '../../../components/MorningBriefingPanel';
@@ -308,6 +309,9 @@ function AnalysisContent() {
               </Stack>
             ) : prediction ? (
               <Stack spacing={3}>
+
+                {/* ── Gap Explainer banner (>=3% daily move, F22) ──── */}
+                <GapExplainerBanner alert={prediction.gap_alert ?? null} symbol={prediction.symbol} />
 
                 {/* Price chart card */}
                 <PriceChartCard
