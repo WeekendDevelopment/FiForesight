@@ -1255,12 +1255,17 @@ class DataCleaner:
             logger.warning("[CLEANER] DataFrame empty after NaN/zero drop — returning empty")
             return df
 
-        # 2. Remove outliers: Close values > 4σ from rolling 30-day median
+        # 2. Remove outliers: Close values > 4σ from rolling 30-day median.
+        #    Rows where the band can't be computed (fewer than min_periods in the
+        #    window → NaN bounds) are KEPT, not dropped: a NaN comparison is False,
+        #    so without this guard a short history (e.g. a just-listed ticker with
+        #    <5 bars) would mask out every row → empty df → spurious 404.
         rolling_med = df["Close"].rolling(30, min_periods=5, center=True).median()
         rolling_std = df["Close"].rolling(30, min_periods=5, center=True).std()
         upper = rolling_med + 4 * rolling_std
         lower = rolling_med - 4 * rolling_std
-        mask  = (df["Close"] >= lower) & (df["Close"] <= upper)
+        band_unknown = upper.isna() | lower.isna()
+        mask  = band_unknown | ((df["Close"] >= lower) & (df["Close"] <= upper))
         removed = int((~mask).sum())
         if removed:
             logger.debug(
