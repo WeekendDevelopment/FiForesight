@@ -324,6 +324,7 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 
 ## Key Decisions & Gotchas
 
+- **Navigation is route-based, NOT tabbed.** The app shell (`frontend/app/(app)/layout.tsx`) renders a collapsible desktop sidebar + a mobile bottom nav from a single `NAV_ITEMS` array. Every top-level view is its own page under `frontend/app/(app)/<name>/page.tsx` (e.g. `/macro`, `/insights`, `/sectors`). **To add a new view:** create the page + add a `NAV_ITEMS` entry (`mobile: true` surfaces it in the mobile bottom bar; otherwise it lives in the "More" drawer). There is **no** MUI `Tabs` component for top-level nav — older specs that say "add a tab" mean "add a sidebar nav item + page." This is deliberate for cross-device support (sidebar ↔ bottom nav).
 - InfluxDB is primary store; yfinance is fallback only.
 - LLM jury runs via **LangGraph** (`jury_graph.py`) — parallel StateGraph fan-out. Each analyst node isolated so failures → Hold/25, not 500.
 - **Llama 4 Scout** (`meta-llama/llama-4-scout-17b-16e-instruct`) is the Macro & Risk analyst. Kimi K2 was deprecated; GPT-OSS-20B was replaced (reasoning model with 1K RPD burned out).
