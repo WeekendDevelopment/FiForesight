@@ -125,28 +125,98 @@ class TestFREDService:
 # InsiderService
 # ---------------------------------------------------------------------------
 
+# A minimal but realistic Form 4 ownership XML (issuer files for the insider).
+_FORM4_XML = b"""<?xml version="1.0"?>
+<ownershipDocument>
+  <reportingOwner>
+    <reportingOwnerId><rptOwnerName>John Smith</rptOwnerName></reportingOwnerId>
+  </reportingOwner>
+  <nonDerivativeTable>
+    <nonDerivativeTransaction>
+      <transactionCoding><transactionCode>P</transactionCode></transactionCoding>
+      <transactionAmounts>
+        <transactionShares><value>5000</value></transactionShares>
+        <transactionPricePerShare><value>132.00</value></transactionPricePerShare>
+        <transactionAcquiredDisposedCode><value>A</value></transactionAcquiredDisposedCode>
+      </transactionAmounts>
+    </nonDerivativeTransaction>
+  </nonDerivativeTable>
+</ownershipDocument>"""
+
+
 class TestInsiderService:
     def setup_method(self):
         self.svc = InsiderService()
 
     def _hit(self, **src: Any) -> dict:
+        # Real EDGAR FTS shape: display_names = [reporting owner, issuer], with an
+        # aligned ciks array; the accession prefix is the issuer's CIK (0000320193).
         base = {
-            "display_names": ["Apple Inc. (CIK 0000320193)", "John Smith (CIK 0001234567)"],
+            "display_names": ["John Smith (CIK 0007654321)", "Apple Inc. (CIK 0000320193)"],
+            "ciks": ["0007654321", "0000320193"],
             "file_date": "2026-05-01",
-            "ciks": ["0001234567"],
-            "transaction_code": "P",
-            "shares": 5000,
-            "price": 132.0,
         }
         base.update(src)
-        return {"_id": "0001234567-26-000001:wf-form4.xml", "_source": base}
+        return {"_id": "0000320193-26-000001:wf-form4.xml", "_source": base}
 
-    def test_maps_filing(self):
-        resp = MagicMock()
-        resp.raise_for_status = MagicMock()
-        resp.json.return_value = {"hits": {"hits": [self._hit()]}}
+    def _routed_get(self, fts_hits: list, xml_bytes: bytes = _FORM4_XML, xml_status: int = 200):
+        """AsyncMock .get that routes FTS-search vs Form 4 XML requests by URL."""
+        fts = MagicMock()
+        fts.raise_for_status = MagicMock()
+        fts.json.return_value = {"hits": {"hits": fts_hits}}
+
+        def _get(url, **kwargs):
+            if str(url).endswith(".xml"):
+                xml = MagicMock()
+                xml.status_code = xml_status
+                xml.content = xml_bytes
+                return xml
+            return fts
+
+        return AsyncMock(side_effect=_get)
+
+    # ── Pure XML parser ────────────────────────────────────────────────────
+    def test_parse_form4_extracts_txn(self):
+        out = self.svc._parse_form4(_FORM4_XML)
+        assert out["owner"] == "John Smith"
+        assert out["type"] == "Purchase"
+        assert out["shares"] == 5000
+        assert out["price"] == 132.0
+
+    def test_parse_form4_picks_largest_txn(self):
+        xml = b"""<ownershipDocument><nonDerivativeTable>
+          <nonDerivativeTransaction>
+            <transactionCoding><transactionCode>M</transactionCode></transactionCoding>
+            <transactionAmounts><transactionShares><value>100</value></transactionShares>
+              <transactionPricePerShare><value>10</value></transactionPricePerShare></transactionAmounts>
+          </nonDerivativeTransaction>
+          <nonDerivativeTransaction>
+            <transactionCoding><transactionCode>S</transactionCode></transactionCoding>
+            <transactionAmounts><transactionShares><value>900</value></transactionShares>
+              <transactionPricePerShare><value>50</value></transactionPricePerShare></transactionAmounts>
+          </nonDerivativeTransaction>
+        </nonDerivativeTable></ownershipDocument>"""
+        out = self.svc._parse_form4(xml)
+        assert out["type"] == "Sale"
+        assert out["shares"] == 900
+        assert out["price"] == 50.0
+
+    def test_parse_form4_bad_xml(self):
+        out = self.svc._parse_form4(b"not xml <<<")
+        assert out == {"owner": None, "type": None, "shares": None, "price": None}
+
+    def test_owner_from_names_skips_issuer(self):
+        # issuer CIK 320193 → the owner is the other entry
+        owner = self.svc._owner_from_names(
+            ["John Smith (CIK 0007654321)", "Apple Inc. (CIK 0000320193)"],
+            ["0007654321", "0000320193"], "320193",
+        )
+        assert owner == "John Smith"
+
+    # ── Full path with enrichment ──────────────────────────────────────────
+    def test_enriches_filing_from_xml(self):
         with patch("backend.services.httpx.AsyncClient",
-                   return_value=_async_client(AsyncMock(return_value=resp))):
+                   return_value=_async_client(self._routed_get([self._hit()]))):
             result = run(self.svc.get_insider_transactions("AAPL"))
         assert len(result) == 1
         f = result[0]
@@ -156,6 +226,20 @@ class TestInsiderService:
         assert f["price"] == 132.0
         assert f["date"] == "2026-05-01"
         assert f["sec_link"].startswith("https://www.sec.gov/")
+        # private enrichment keys must not leak into the response
+        assert not any(k.startswith("_") for k in f)
+
+    def test_metadata_only_when_xml_unavailable(self):
+        # XML 404 → row keeps its metadata-only fallback, still renders.
+        with patch("backend.services.httpx.AsyncClient",
+                   return_value=_async_client(self._routed_get([self._hit()], xml_status=404))):
+            result = run(self.svc.get_insider_transactions("AAPL"))
+        assert len(result) == 1
+        f = result[0]
+        assert f["filer"] == "John Smith"   # from display_names (issuer skipped)
+        assert f["type"] == "Filing"
+        assert f["shares"] is None
+        assert f["price"] is None
 
     def test_type_code_mapping(self):
         assert self.svc._map_type("P") == "Purchase"
@@ -167,11 +251,8 @@ class TestInsiderService:
 
     def test_caps_to_10_filings(self):
         hits = [self._hit() for _ in range(15)]
-        resp = MagicMock()
-        resp.raise_for_status = MagicMock()
-        resp.json.return_value = {"hits": {"hits": hits}}
         with patch("backend.services.httpx.AsyncClient",
-                   return_value=_async_client(AsyncMock(return_value=resp))):
+                   return_value=_async_client(self._routed_get(hits))):
             result = run(self.svc.get_insider_transactions("AAPL"))
         assert len(result) == 10
 
@@ -182,11 +263,8 @@ class TestInsiderService:
         assert result == []
 
     def test_empty_hits_returns_empty(self):
-        resp = MagicMock()
-        resp.raise_for_status = MagicMock()
-        resp.json.return_value = {"hits": {"hits": []}}
         with patch("backend.services.httpx.AsyncClient",
-                   return_value=_async_client(AsyncMock(return_value=resp))):
+                   return_value=_async_client(self._routed_get([]))):
             result = run(self.svc.get_insider_transactions("CRYPTO"))
         assert result == []
 
