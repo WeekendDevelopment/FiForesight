@@ -105,6 +105,7 @@ class TradeSetupResponse(BaseModel):
     target_3: float
     risk_reward: str
     setup_type: str
+    direction: str          # "Long" | "Short" — trade side
     rationale: str
     risk_per_share: float
     risk_pct: float
@@ -209,6 +210,10 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
         reward      = max(target_2 - entry_mid, 0.01)
         risk_reward = f"1:{reward / risk:.1f}"
 
+    # Trade side: a Bearish trend builds a short (stop above entry, targets
+    # below); anything else is a long. Mirrors the entry/stop/target geometry above.
+    direction = "Short" if req.trend == "Bearish" else "Long"
+
     # Setup type derived from trend + RSI
     rsi = req.rsi
     if req.trend == "Bullish" and rsi <= 40:
@@ -237,9 +242,9 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
         user = (
             f"Symbol: {req.symbol} | Price: ${p:.2f} | RSI: {rsi:.1f} | "
             f"Trend: {req.trend} | Sentiment: {req.sentiment_label}\n"
-            f"Entry: ${entry_low:.2f}–${entry_high:.2f} | Stop: ${stop_loss:.2f} | "
-            f"Targets: ${target_1:.2f} / ${target_2:.2f} / ${target_3:.2f}\n"
-            f"Write one sentence explaining why this {setup_type} trade setup makes sense."
+            f"Side: {direction} | Entry: ${entry_low:.2f}–${entry_high:.2f} | "
+            f"Stop: ${stop_loss:.2f} | Targets: ${target_1:.2f} / ${target_2:.2f} / ${target_3:.2f}\n"
+            f"Write one sentence explaining why this {direction} {setup_type} trade setup makes sense."
         )
         raw = await analyst_jury_svc._call_groq("llama-3.3-70b-versatile", system, user)
         rationale = raw.strip()
@@ -263,6 +268,7 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
         target_3=target_3,
         risk_reward=risk_reward,
         setup_type=setup_type,
+        direction=direction,
         rationale=rationale,
         risk_per_share=risk_ps,
         risk_pct=risk_pct_val,

@@ -263,6 +263,7 @@ export interface TradeSetupResponse {
   target_3:                number;
   risk_reward:             string;
   setup_type:              string;
+  direction?:              'Long' | 'Short';   // trade side
   rationale:               string;
   risk_per_share:          number;
   risk_pct:                number;
