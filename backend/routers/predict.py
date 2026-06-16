@@ -4,7 +4,12 @@ import hashlib
 import logging
 import re
 from datetime import datetime, timedelta, timezone, date
-from typing import Any, Dict, List, Optional, Tuple
+from typing import (
+    Any, Awaitable, Callable, Dict, List, Literal, Optional, Tuple, TYPE_CHECKING,
+)
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from slowapi.util import get_remote_address
@@ -83,6 +88,15 @@ class JuryDissentResponse(BaseModel):
     rationale: str
 
 
+class GapAlertResponse(BaseModel):
+    # camelCase mirrors the rest of PredictionResponse — these are the JSON wire
+    # contract consumed by the TS `GapAlert` interface, not internal backend names.
+    gapPct:      float
+    direction:   Literal["up", "down"]
+    explanation: str
+    headlines:   List[str]
+
+
 class PredictionResponse(BaseModel):
     symbol:       str
     currentPrice: str
@@ -104,7 +118,6 @@ class PredictionResponse(BaseModel):
     stocktwits:      dict           = {}
     monteCarlo:      Optional[dict] = None
     earningsDates:   List[str]      = []
-    moveExplanation: Optional[str]  = None
     reversalRisk:       Optional[dict] = None
     directionForecast:  Optional[dict] = None
     # Alternative data (Feature 15) — populated fire-and-forget, never blocking.
@@ -113,6 +126,8 @@ class PredictionResponse(BaseModel):
     # Market regime intelligence (Feature 16)
     regime:        Optional[RegimeInfoResponse]  = None   # HMM regime label + confidence
     juryDissent:   Optional[JuryDissentResponse] = None   # minority view on a 2-1 split, else None
+    # Gap Explainer (Feature 22) — populated only on a >=3% daily move, else None
+    gap_alert:     Optional[GapAlertResponse]    = None
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +192,72 @@ def _safe_background(coro_or_future, *, name: str = "background"):
         except Exception as e:
             logger.error(f"[{name}] Background task failed: {e}", exc_info=True)
     return asyncio.create_task(_wrapper())
+
+
+async def _compute_gap_alert(
+    symbol: str,
+    hist_df: "Optional[pd.DataFrame]",
+    news_headlines: List[str],
+    groq_call: Optional[Callable[[str, str, str, int], Awaitable[str]]] = None,
+) -> Optional[dict]:
+    """Return a gap-alert dict when the latest daily move is >= 3% (abs), else None.
+
+    `hist_df` is the cleaned OHLCV DataFrame (needs a ``Close`` column); the gap is
+    yesterday's close (``iloc[-2]``) vs the most recent close (``iloc[-1]``).
+    `groq_call` is an async callable ``(model, system, user, max_tokens) -> str``
+    — i.e. ``AnalystJuryService.call_groq``. When it's None or there are no
+    headlines the alert is still returned, just with an empty explanation. Any
+    failure (data or Groq) degrades to ``None``/empty explanation — never raises
+    into /predict (Feature 22).
+    """
+    try:
+        if hist_df is None or len(hist_df) < 2:
+            return None
+        prev_close = float(hist_df["Close"].iloc[-2])
+        # Use the last available close (today's close or most recent price).
+        last_close = float(hist_df["Close"].iloc[-1])
+        if prev_close == 0:
+            return None
+        gap_pct = (last_close - prev_close) / prev_close * 100
+        if abs(gap_pct) < 3.0:
+            return None
+
+        direction = "up" if gap_pct > 0 else "down"
+        top_headlines = [h for h in news_headlines if h][:3]
+        explanation = ""
+        if groq_call and top_headlines:
+            headlines_text = "; ".join(top_headlines)
+            system = (
+                "You are a concise financial analyst. "
+                "Reply in one sentence only, max 20 words — no markdown."
+            )
+            user = (
+                f"{symbol} moved {gap_pct:+.1f}% today. "
+                f"Headlines: {headlines_text}. "
+                "In one sentence (max 20 words), explain the most likely cause."
+            )
+            try:
+                raw = await asyncio.wait_for(
+                    groq_call(
+                        "meta-llama/llama-4-scout-17b-16e-instruct",
+                        system, user, 60,
+                    ),
+                    timeout=8.0,
+                )
+                explanation = (raw or "").strip()
+            except Exception as e:
+                logger.warning(f"[GAP] gap explainer groq failed for {symbol}: {e}")
+                explanation = ""
+
+        return {
+            "gapPct": round(gap_pct, 2),
+            "direction": direction,
+            "explanation": explanation,
+            "headlines": top_headlines,
+        }
+    except Exception as e:
+        logger.warning(f"[GAP] _compute_gap_alert {symbol}: {e}")
+        return None
 
 
 async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict) -> str:
@@ -1586,44 +1667,17 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         logger.warning(f"[STEP-4e] earnings_surprise_task failed: {e}")
         earnings_surprise = []
 
-    # ── Step 4f. "Why did this move?" explainer (async, runs concurrently) ─────
-    try:
-        _cur_f = float(live_price)
-    except (TypeError, ValueError):
-        _cur_f = 0.0
-    _prev  = info.get("prev_close", 0)
-    try:
-        _prev_f = float(_prev) if _prev not in (None, "N/A") else 0.0
-    except (ValueError, TypeError):
-        _prev_f = 0.0
-    # Fall back to closes[-2] (yesterday's bar) when fetch_info prev_close is unavailable
-    if _prev_f <= 0 and len(closes) >= 2:
-        _prev_f = float(closes[-2])
-    price_change_pct = ((_cur_f - _prev_f) / _prev_f * 100) if _prev_f else 0.0
-
-    move_explanation_task = None
-    if abs(price_change_pct) >= 3.0:
-        news_headlines_str = " | ".join(
-            n["title"] for n in news[:3] if n.get("title")
+    # ── Step 4f. Gap Explainer (F22) — structured >=3% move alert ─────────────
+    # The single "why did this move?" surface (superseded the old WhyDidMoveCard).
+    # Reuses the cleaned 2y history `df` (yesterday vs latest close) + top
+    # headlines. Fired concurrently with the jury; resolved before the response.
+    gap_alert_task = asyncio.create_task(
+        _compute_gap_alert(
+            symbol, df,
+            [n["title"] for n in news[:3] if n.get("title")],
+            analyst_jury_svc.call_groq,
         )
-        _move_system = "You are a concise financial analyst. Reply in 2 sentences max."
-        _move_user   = (
-            f"{symbol} moved {price_change_pct:+.1f}% today "
-            f"(from ${_prev_f:.2f} to ${_cur_f:.2f}). "
-            f"Top headlines: {news_headlines_str}. "
-            f"What is the most likely catalyst?"
-        )
-        move_explanation_task = asyncio.create_task(
-            analyst_jury_svc.call_groq(
-                "llama-3.1-8b-instant",
-                _move_system,
-                _move_user,
-                max_tokens=120,
-            )
-        )
-        logger.info(
-            f"[STEP-4f] Move explainer task launched — {symbol} {price_change_pct:+.1f}%"
-        )
+    )
 
     # ── Step 5. AI analyst note + jury (concurrent) ──────────────────────────
     logger.info(
@@ -1721,23 +1775,17 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             f"confidence={v['confidence']}%, model={v['model']}"
         )
 
-    # ── Step 5b. Await move explainer if running ─────────────────────────────
-    move_explanation: Optional[str] = None
-    if move_explanation_task is not None:
-        try:
-            move_explanation = await asyncio.wait_for(move_explanation_task, timeout=12.0)
-            logger.info(f"[STEP-5b] Move explanation received ({len(move_explanation)} chars)")
-        except Exception as _me:
-            logger.warning(f"[STEP-5b] Move explanation failed: {_me}")
-        # Guaranteed fallback: card always shows on big moves even if Groq fails
-        if not move_explanation:
-            direction = "up" if price_change_pct > 0 else "down"
-            top_headline = news[0]["title"] if news else "no headlines available"
-            move_explanation = (
-                f"{symbol} is {direction} {abs(price_change_pct):.1f}% today. "
-                f"Top story: {top_headline}"
-            )
-            logger.info("[STEP-5b] Using fallback move explanation")
+    # ── Step 5b. Resolve gap explainer (F22) ─────────────────────────────────
+    gap_alert: Optional[dict] = None
+    try:
+        gap_alert = await asyncio.wait_for(gap_alert_task, timeout=10.0)
+    except Exception as _ge:
+        logger.warning(f"[STEP-5c] Gap alert failed: {_ge}")
+    if gap_alert:
+        logger.info(
+            f"[STEP-5c] ✓ Gap alert — {symbol} {gap_alert['gapPct']:+.2f}% "
+            f"{gap_alert['direction']} ({len(gap_alert['explanation'])} char note)"
+        )
 
     # ── Step 6. (News/trending already resolved at 4e — nothing to await) ────
     logger.debug(
@@ -1866,13 +1914,13 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         stocktwits   = stocktwits_data,
         monteCarlo      = forecast.get("monte_carlo"),
         earningsDates   = earnings_dates,
-        moveExplanation = move_explanation,
         reversalRisk       = reversal_risk,
         directionForecast  = direction_forecast,
         insiderTransactions = insider_transactions,
         shortInterest       = short_interest,
         regime             = regime_result,
         juryDissent        = detect_dissent(jury),
+        gap_alert          = gap_alert,
     )
 
 

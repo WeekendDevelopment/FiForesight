@@ -36,7 +36,7 @@ import { useIndicatorSignals } from '../../../hooks/useIndicatorSignals';
 import DCFCard               from '../../../components/DCFCard';
 import AnalystTargetsCard     from '../../../components/AnalystTargetsCard';
 import InsiderTransactionsCard from '../../../components/InsiderTransactionsCard';
-import WhyDidMoveCard        from '../../../components/WhyDidMoveCard';
+import GapExplainerBanner    from '../../../components/GapExplainerBanner';
 import ReversalRiskCard       from '../../../components/ReversalRiskCard';
 import DirectionForecastCard  from '../../../components/DirectionForecastCard';
 import MorningBriefingPanel   from '../../../components/MorningBriefingPanel';
@@ -223,13 +223,6 @@ function AnalysisContent() {
 
   const indicatorSignals = useIndicatorSignals(prediction, isDark, chartStats);
 
-  const priceChangePct = useMemo(() => {
-    if (!prediction) return 0;
-    const cur  = parseFloat(prediction.currentPrice) || 0;
-    const prev = parseFloat(prediction.metrics?.prev_close ?? '') || 0;
-    return prev > 0 ? ((cur - prev) / prev) * 100 : 0;
-  }, [prediction]);
-
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <Box>
@@ -309,6 +302,9 @@ function AnalysisContent() {
             ) : prediction ? (
               <Stack spacing={3}>
 
+                {/* ── Gap Explainer banner (>=3% daily move, F22) ──── */}
+                <GapExplainerBanner alert={prediction.gap_alert ?? null} symbol={prediction.symbol} />
+
                 {/* Price chart card */}
                 <PriceChartCard
                   prediction={prediction}
@@ -323,17 +319,6 @@ function AnalysisContent() {
                   chartStats={chartStats}
                   indicatorSignals={indicatorSignals}
                 />
-
-                {/* ── Why did this move? ───────────────────────────── */}
-                {prediction.moveExplanation && (
-                  <WhyDidMoveCard
-                    symbol={prediction.symbol}
-                    explanation={prediction.moveExplanation}
-                    priceChange={priceChangePct}
-                    isDark={isDark}
-                    primaryColor={primaryColor}
-                  />
-                )}
 
                 {/* ── Ensemble model weights + RF feature importance ─── */}
                 {prediction.modelWeights && (
