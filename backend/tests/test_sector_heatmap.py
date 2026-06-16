@@ -1,0 +1,64 @@
+"""
+Sector heatmap endpoint tests (F23) — GET /sectors/heatmap.
+yf.download is mocked; no network required.
+"""
+from unittest.mock import patch
+
+import pandas as pd
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
+
+from backend.routers import market
+from backend.routers.market import SECTOR_ETF_MAP
+
+_FIELDS = ["Open", "High", "Low", "Close", "Volume"]
+
+
+def _build_app() -> TestClient:
+    app = FastAPI()
+    app.state.limiter = market.limiter
+
+    async def _handler(req, exc: RateLimitExceeded) -> JSONResponse:
+        return JSONResponse(status_code=429, content={"detail": "rate limited"})
+
+    app.add_exception_handler(RateLimitExceeded, _handler)
+    app.include_router(market.router)
+    return TestClient(app)
+
+
+client = _build_app()
+
+
+def _grouped_frame(empty_etf: str | None = None) -> pd.DataFrame:
+    """A 6-row yfinance-style frame with MultiIndex (ticker, field) columns."""
+    etfs = list(SECTOR_ETF_MAP.values())
+    cols = pd.MultiIndex.from_product([etfs, _FIELDS])
+    frame = pd.DataFrame(index=range(6), columns=cols, dtype="float64")
+    for etf in etfs:
+        closes = [None] * 6 if etf == empty_etf else [100.0, 101.0, 102.0, 103.0, 104.0, 105.0]
+        for field in _FIELDS:
+            frame[(etf, field)] = closes
+    return frame
+
+
+def test_sector_heatmap_returns_11_sectors() -> None:
+    with patch("backend.routers.market.yf.download", return_value=_grouped_frame()):
+        resp = client.get("/sectors/heatmap")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 11
+    for row in rows:
+        assert "sector" in row and "etf" in row and "return1d" in row
+        assert isinstance(row["return1d"], (int, float))
+
+
+def test_sector_heatmap_skips_bad_ticker() -> None:
+    bad = SECTOR_ETF_MAP["Technology"]  # XLK returns all-NaN closes
+    with patch("backend.routers.market.yf.download", return_value=_grouped_frame(empty_etf=bad)):
+        resp = client.get("/sectors/heatmap")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 10
+    assert all(row["etf"] != bad for row in rows)

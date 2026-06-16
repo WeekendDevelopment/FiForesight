@@ -10,7 +10,7 @@ import {
 import {
   BrainCircuit, Home, Search, BarChart2, Calendar, Rocket, LineChart,
   Activity, Wallet, Bell, ChevronLeft, ChevronRight, Sun, Moon, LogIn, LogOut,
-  Star, ChevronDown, ChevronUp, MoreHorizontal, Globe,
+  Star, ChevronDown, ChevronUp, MoreHorizontal, Globe, Grid2X2,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AppShellProvider, useAppShell } from '../../contexts/AppShellContext';
@@ -37,6 +37,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Earnings',     href: '/earnings',   icon: Calendar,  mobile: true  },
   { label: 'IPO Tracker',  href: '/ipo',        icon: Rocket,    mobile: false },
   { label: 'Macro',        href: '/macro',      icon: Globe,     mobile: false },
+  { label: 'Sectors',      href: '/sectors',    icon: Grid2X2,   mobile: false },
   { label: 'Watchlist',    href: '/watchlist',  icon: Star,      mobile: false },
   { label: 'Insights',     href: '/insights',   icon: Activity,  mobile: false },
   { label: 'Simulator',    href: '/simulation', icon: LineChart, mobile: false },

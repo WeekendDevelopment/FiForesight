@@ -746,6 +746,72 @@ async def sector_heatmap(request: Request):
 
 
 # ---------------------------------------------------------------------------
+# Sector Heatmap — interactive grid (F23)
+# ---------------------------------------------------------------------------
+# Richer shape than /sectors (1D + 5D return, full GICS sector names) feeding the
+# dedicated "Sectors" tab. Kept separate from the legacy /sectors overview panel.
+
+SECTOR_ETF_MAP = {
+    "Technology": "XLK",
+    "Healthcare": "XLV",
+    "Financials": "XLF",
+    "Energy": "XLE",
+    "Consumer Discretionary": "XLY",
+    "Consumer Staples": "XLP",
+    "Industrials": "XLI",
+    "Materials": "XLB",
+    "Utilities": "XLU",
+    "Real Estate": "XLRE",
+    "Communication Services": "XLC",
+}
+
+
+@router.get("/sectors/heatmap")
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def get_sector_heatmap(request: Request):
+    """11 GICS sector ETFs with 1D + 5D % returns. Cached 15 min."""
+    from redis_cache import cache_get, cache_set
+    CACHE_KEY = "sectors:heatmap:f23"
+    cached = await cache_get(CACHE_KEY)
+    if cached:
+        return cached
+
+    def _fetch():
+        tickers_str = " ".join(SECTOR_ETF_MAP.values())
+        raw = yf.download(
+            tickers_str, period="6d", auto_adjust=True,
+            progress=False, group_by="ticker",
+        )
+        results = []
+        for sector, etf in SECTOR_ETF_MAP.items():
+            try:
+                closes = raw[etf]["Close"].dropna()
+                if len(closes) < 2:
+                    continue
+                ret_1d = (closes.iloc[-1] / closes.iloc[-2] - 1) * 100
+                ret_5d = (closes.iloc[-1] / closes.iloc[0] - 1) * 100 if len(closes) >= 5 else None
+                results.append({
+                    "sector": sector,
+                    "etf": etf,
+                    "price": round(float(closes.iloc[-1]), 2),
+                    "return1d": round(float(ret_1d), 2),
+                    "return5d": round(float(ret_5d), 2) if ret_5d is not None else None,
+                })
+            except Exception as e:
+                logger.warning(f"sector heatmap {etf}: {e}")
+        return results
+
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=20.0)
+    except Exception as e:
+        logger.error(f"sector heatmap: {e}")
+        raise HTTPException(status_code=502, detail="Could not fetch sector data")
+
+    await cache_set(CACHE_KEY, result, ttl_seconds=900)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Morning Briefing
 # ---------------------------------------------------------------------------
 
