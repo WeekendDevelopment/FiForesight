@@ -1076,3 +1076,90 @@ async def insider_transactions(request: Request, symbol: str) -> List[Dict[str, 
     if not _SYMBOL_RE.match(symbol):
         raise HTTPException(status_code=422, detail="Invalid symbol.")
     return await insider_svc.get_insider_transactions(symbol)
+
+
+@router.get("/analyst-targets/{symbol}")
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def analyst_targets(request: Request, symbol: str) -> Dict[str, Any]:
+    """Wall Street analyst price targets + rating breakdown for ``symbol``.
+
+    Returns target low/mean/median/high, the current price, the number of
+    covering analysts, and the strongBuy/buy/hold/sell/strongSell recommendation
+    counts. yfinance's ``analyst_price_targets`` carries the price band but not
+    the analyst count, so ``.info`` fills the gaps. Redis-cached 6h; 502 when the
+    upstream fetch fails so the frontend can fall back to its empty state. 60/min.
+    """
+    from redis_cache import cache_get, cache_set
+
+    sym = symbol.strip().upper()
+    if not _SYMBOL_RE.match(sym):
+        raise HTTPException(status_code=422, detail="Invalid symbol.")
+
+    cache_key = f"analyst_targets:{sym}"
+    cached = await cache_get(cache_key)
+    if cached:
+        return cached
+
+    def _fetch() -> Dict[str, Any]:
+        t = yf.Ticker(sym)
+        targets = t.analyst_price_targets or {}
+
+        # numberOfAnalysts / current price aren't part of analyst_price_targets in
+        # current yfinance builds — read .info as a fallback so the card has the
+        # full picture on real data (info uses targetMeanPrice-style key names).
+        info: Dict[str, Any] = {}
+        try:
+            info = t.info or {}
+        except Exception:
+            info = {}
+
+        def _pick(*vals: Any) -> Any:
+            for v in vals:
+                if v is not None:
+                    return v
+            return None
+
+        def _num_or_none(v: Any) -> Optional[float]:
+            """Coerce to a finite number, mapping None/NaN/inf/garbage to None.
+
+            yfinance can hand back NaN/inf; Starlette's JSONResponse serializes
+            with ``allow_nan=False``, so an unsanitized NaN would 500 the whole
+            response instead of degrading to a null field."""
+            try:
+                if v is None:
+                    return None
+                n = float(v)
+                if not math.isfinite(n):
+                    return None
+                return int(n) if n.is_integer() else n
+            except (TypeError, ValueError):
+                return None
+
+        recs = {"strongBuy": 0, "buy": 0, "hold": 0, "sell": 0, "strongSell": 0}
+        rec_df = t.recommendations_summary
+        if rec_df is not None and not rec_df.empty:
+            row = rec_df.iloc[0]
+            for k in recs:
+                recs[k] = _safe_int(row.get(k, 0))
+
+        return {
+            "symbol": sym,
+            "currentPrice": _num_or_none(_pick(targets.get("currentPrice"),
+                                               targets.get("current"), info.get("currentPrice"))),
+            "targetLow": _num_or_none(_pick(targets.get("low"), info.get("targetLowPrice"))),
+            "targetMean": _num_or_none(_pick(targets.get("mean"), info.get("targetMeanPrice"))),
+            "targetMedian": _num_or_none(_pick(targets.get("median"), info.get("targetMedianPrice"))),
+            "targetHigh": _num_or_none(_pick(targets.get("high"), info.get("targetHighPrice"))),
+            "numberOfAnalysts": _num_or_none(_pick(targets.get("numberOfAnalysts"),
+                                                   info.get("numberOfAnalystOpinions"))),
+            **recs,
+        }
+
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=12.0)
+    except Exception as e:
+        logger.error(f"analyst_targets {sym}: {e}")
+        raise HTTPException(status_code=502, detail="Could not fetch analyst targets")
+
+    await cache_set(cache_key, result, ttl_seconds=21600)  # 6h TTL
+    return result

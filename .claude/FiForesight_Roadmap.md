@@ -38,6 +38,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Jury quant lens swapped to `openai/gpt-oss-20b`; verdict parsing hardened; malformed output tracked (#226)
 - Forecast Accuracy & Sentiment Analytics Dashboard — `/insights` tab + `GET /analytics/{accuracy,sentiment}/{symbol}`; persists VADER compound to new `sentiment_score` measurement (Feature 12, PR #244)
 - Portfolio Manager — real holdings + live P&L ("My Portfolio" tab) + `GET/POST/DELETE /portfolio/holdings` + `GET /portfolio/summary` (Supabase `holdings` + RLS); existing race sim renamed "Simulator" (Feature 10, PR #249)
+- Analyst price targets card — Wall St. mean/low/high range bar + rating breakdown (Feature 21, PR #267)
 
 - Watchlist persistence + intraday sparklines + responsive design (Feature 13): `watchlists` Supabase table, `/watchlist` CRUD, intraday 5m bars on `/sparklines`, `WatchlistContext`, sidebar watchlist panel, mobile bottom chip bar, full responsive audit across all tabs (320px–4K). 13 new backend tests. (#pending-F13)
 
@@ -181,7 +182,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Multi-ticker overlay comparison — ratio chart (stock vs SPY); rolling 30d correlation line · `[Value: Med]` `[Effort: Low]`
 - ~~Macro dashboard (`/macro` tab)~~ ✅ SHIPPED (Feature 15) — standalone FRED tab: 5 stat cards, T10Y2Y trend line, 30d-delta bar chart, inversion banner
 - International markets — yfinance supports non-US tickers; exchange detection already exists · `[Value: Med]` `[Effort: Med]`
-- Analyst price target range — `yf.Ticker().analyst_price_targets` → low/mean/high bar in FundamentalsPanel · `[Value: Med]` `[Effort: Low]`
+- ~~Analyst price target range~~ ✅ SHIPPED (Feature 21, PR #267) — `GET /analyst-targets/{symbol}`, `AnalystTargetsCard` (low/mean/high range bar + current marker + rating breakdown) below `DCFCard`
 
 ### Architecture & Infra
 - Custom alert rule builder — price cross, RSI threshold, % move triggers; needs auth + background worker + notification channel · `[Value: High]` `[Effort: High]`
