@@ -59,8 +59,8 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Options chain panel — calls/puts table, ITM highlight, expiry selector (#194)
 - Morning briefing (Market Pulse strip) — `MorningBriefingPanel`, `GET /briefing` (#205)
 - "Why did this move?" explainer — `WhyDidMoveCard`, >3% trigger, fallback to top headline (#205)
-- Sector heatmap — `SectorHeatmap`, `GET /sectors`, 11 SPDR ETFs (#205)
-- Sector heatmap tab — 11 GICS sector ETFs, color-coded 1D/5D performance grid, click-to-load ticker (F23)
+- Sector heatmap — `SectorHeatmap`, `GET /sectors`, 11 SPDR ETFs (#205) — _superseded by F23_
+- Sector heatmap (F23) — single `GET /sectors/heatmap` + one `SectorHeatmapPanel` (full `/sectors` tab with 1D/5D toggle + compact interactive landing overview); click-to-load ticker. Legacy `/sectors` endpoint/component removed.
 - Level 2 order book — `OrderBookPanel`, Alpaca Markets (US equities) + Coinbase (crypto) (#209)
 - URL-persistent analysis tab — `?symbol=` param, `router.replace` after predict, watchlist quick-launch (#228)
 - VWAP intraday overlay — dashed line + ±1σ bands on 1D/5D intervals (#228)

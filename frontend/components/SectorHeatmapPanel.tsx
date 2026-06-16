@@ -2,15 +2,19 @@
 
 import React, { useEffect, useState } from 'react';
 import {
-  Alert, Box, Card, CardContent, Grid, Skeleton, Stack, ToggleButton,
+  Alert, Box, Card, CardContent, Grid, Link, Skeleton, Stack, ToggleButton,
   ToggleButtonGroup, Tooltip, Typography, useTheme,
 } from '@mui/material';
 import type { Theme } from '@mui/material/styles';
-import { Grid2X2 } from 'lucide-react';
+import { ArrowRight, Grid2X2 } from 'lucide-react';
 import type { SectorRow } from '../types';
 
 interface Props {
   onSelectTicker: (ticker: string) => void;
+  /** 'full' (default) = dedicated tab with 1D/5D toggle. 'overview' = compact landing strip. */
+  variant?: 'full' | 'overview';
+  /** Shown as a "View all →" link in the overview variant header. */
+  onViewAll?: () => void;
 }
 
 type Mode = '1d' | '5d';
@@ -32,8 +36,9 @@ function formatPct(value: number | null): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
 }
 
-export default function SectorHeatmapPanel({ onSelectTicker }: Props) {
+export default function SectorHeatmapPanel({ onSelectTicker, variant = 'full', onViewAll }: Props) {
   const theme = useTheme();
+  const isOverview = variant === 'overview';
   const [rows, setRows] = useState<SectorRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -66,8 +71,12 @@ export default function SectorHeatmapPanel({ onSelectTicker }: Props) {
     return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
-  // Responsive: 2/row on phones, 3 on tablet, 4 on laptop, 6 on desktop.
-  const cellSize = { xs: 6, sm: 4, md: 3, lg: 2 } as const;
+  // Overview is denser (1D only); full view offers the 1D/5D toggle.
+  const cellSize = isOverview
+    ? ({ xs: 4, sm: 3, md: 2 } as const)        // 3 → 4 → 6 per row
+    : ({ xs: 6, sm: 4, md: 3, lg: 2 } as const); // 2 → 3 → 4 → 6 per row
+  const skeletonH = isOverview ? 56 : 72;
+  const activeMode: Mode = isOverview ? '1d' : mode;
 
   return (
     <Box>
@@ -77,38 +86,59 @@ export default function SectorHeatmapPanel({ onSelectTicker }: Props) {
         justifyContent="space-between"
         flexWrap="wrap"
         gap={1}
-        sx={{ mb: 2 }}
+        sx={{ mb: isOverview ? 1.5 : 2 }}
       >
         <Stack direction="row" alignItems="center" spacing={1}>
-          <Grid2X2 size={20} color={theme.palette.primary.main} />
-          <Typography variant="h6" sx={{ fontWeight: 800, letterSpacing: '-0.02em' }}>
-            Sector Performance
-          </Typography>
+          <Grid2X2 size={isOverview ? 14 : 20} color={theme.palette.primary.main} />
+          {isOverview ? (
+            <Typography variant="overline" sx={{ opacity: 0.6, lineHeight: 1, fontSize: '0.65rem', letterSpacing: 1.5 }}>
+              Sector Overview
+            </Typography>
+          ) : (
+            <Typography variant="h6" sx={{ fontWeight: 800, letterSpacing: '-0.02em' }}>
+              Sector Performance
+            </Typography>
+          )}
         </Stack>
-        <ToggleButtonGroup
-          size="small"
-          exclusive
-          value={mode}
-          onChange={(_, v: Mode | null) => { if (v) setMode(v); }}
-          aria-label="Return window"
-        >
-          <ToggleButton value="1d" aria-label="1 day">1D</ToggleButton>
-          <ToggleButton value="5d" aria-label="5 day">5D</ToggleButton>
-        </ToggleButtonGroup>
+
+        {isOverview ? (
+          onViewAll && (
+            <Link
+              component="button"
+              type="button"
+              onClick={onViewAll}
+              underline="hover"
+              sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.25, fontSize: '0.72rem', fontWeight: 700 }}
+            >
+              View all <ArrowRight size={13} />
+            </Link>
+          )
+        ) : (
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            value={mode}
+            onChange={(_, v: Mode | null) => { if (v) setMode(v); }}
+            aria-label="Return window"
+          >
+            <ToggleButton value="1d" aria-label="1 day">1D</ToggleButton>
+            <ToggleButton value="5d" aria-label="5 day">5D</ToggleButton>
+          </ToggleButtonGroup>
+        )}
       </Stack>
 
       {error && !loading && rows.length === 0 ? (
         <Alert severity="warning">Sector data unavailable</Alert>
       ) : (
-        <Grid container spacing={1.5}>
+        <Grid container spacing={isOverview ? 1 : 1.5}>
           {loading
             ? Array.from({ length: 11 }).map((_, i) => (
                 <Grid size={cellSize} key={i}>
-                  <Skeleton variant="rounded" height={72} />
+                  <Skeleton variant="rounded" height={skeletonH} />
                 </Grid>
               ))
             : rows.map(row => {
-                const value = mode === '1d' ? row.return1d : row.return5d;
+                const value = activeMode === '1d' ? row.return1d : row.return5d;
                 const bg = returnColor(value, theme);
                 return (
                   <Grid size={cellSize} key={row.etf}>
@@ -125,24 +155,26 @@ export default function SectorHeatmapPanel({ onSelectTicker }: Props) {
                           },
                         }}
                       >
-                        <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                        <CardContent sx={{ p: isOverview ? 1 : 1.5, '&:last-child': { pb: isOverview ? 1 : 1.5 } }}>
                           <Typography
                             variant="caption"
                             noWrap
                             title={row.sector}
-                            sx={{ fontWeight: 700, color: '#fff', display: 'block' }}
+                            sx={{ fontWeight: 700, color: '#fff', display: 'block', fontSize: isOverview ? '0.65rem' : undefined }}
                           >
-                            {row.sector}
+                            {isOverview ? row.etf : row.sector}
                           </Typography>
                           <Typography
                             variant="caption"
-                            sx={{ color: 'rgba(255,255,255,0.7)', display: 'block', lineHeight: 1.4 }}
+                            noWrap
+                            title={row.sector}
+                            sx={{ color: 'rgba(255,255,255,0.7)', display: 'block', lineHeight: 1.4, fontSize: isOverview ? '0.6rem' : undefined }}
                           >
-                            {row.etf}
+                            {isOverview ? row.sector : row.etf}
                           </Typography>
                           <Typography
-                            variant="body2"
-                            sx={{ fontWeight: 800, color: '#fff', mt: 0.5 }}
+                            variant={isOverview ? 'caption' : 'body2'}
+                            sx={{ fontWeight: 800, color: '#fff', mt: 0.5, display: 'block' }}
                           >
                             {formatPct(value)}
                           </Typography>
