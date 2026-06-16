@@ -1775,9 +1775,15 @@ class InsiderService:
 
     Uses the EDGAR full-text search index (``efts.sec.gov``) to find recent
     Form 4 filings for a symbol over the last 30 days, mapping each hit onto a
-    compact ``{filer, type, shares, price, date, sec_link}`` shape. The
-    full-text index carries filing metadata reliably (filer names, date, link);
-    transaction code/shares/price are surfaced when present, else ``None``.
+    compact ``{filer, type, shares, price, date, sec_link}`` shape.
+
+    The FTS index carries only filing *metadata* (filer, date, link) — the
+    transaction code/shares/price live in each filing's Form 4 *XML*. So each
+    filing is enriched in a second pass that fetches and parses its ownership
+    XML (``_enrich_rows`` → ``_parse_form4``), pulling the most-material
+    transaction's code/shares/price and the reporting owner's name. A filing
+    whose XML is missing/holdings-only keeps its metadata-only fallback
+    (type ``"Filing"``, shares/price ``None``) so the card still renders.
 
     Redis-cached 6h per symbol. Returns ``[]`` on any failure (never raises).
     """
@@ -1801,15 +1807,19 @@ class InsiderService:
         return "Filing"
 
     @staticmethod
-    def _sec_link(hit: dict, src: dict) -> str:
-        """Best-effort link to the filing on sec.gov from the FTS hit."""
-        _id = hit.get("_id") or ""
-        ciks = src.get("ciks") or []
-        cik = str(ciks[0]).lstrip("0") if ciks else ""
-        if _id and ":" in _id and cik:
-            accession, _, filename = _id.partition(":")
-            acc_nodash = accession.replace("-", "")
-            return f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_nodash}/{filename}"
+    def _issuer_cik(accession: str) -> str:
+        """The Form 4 filer-of-record CIK = the leading 10 digits of the accession
+        number (the issuer files on the insider's behalf). Used for the archive
+        path. Returns the un-padded CIK, or "" if the accession is malformed."""
+        head = (accession or "").split("-")[0]
+        return head.lstrip("0") if head.isdigit() else ""
+
+    @classmethod
+    def _sec_link(cls, accession: str, cik: str) -> str:
+        """Canonical human-readable filing-index page on sec.gov."""
+        acc_nodash = (accession or "").replace("-", "")
+        if cik and acc_nodash and accession:
+            return f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_nodash}/{accession}-index.htm"
         if cik:
             return f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik}&type=4"
         return "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=4"
@@ -1822,24 +1832,128 @@ class InsiderService:
         except (TypeError, ValueError):
             return None
 
-    def _map_hit(self, hit: dict) -> Optional[dict]:
-        src = hit.get("_source") or {}
-        names = src.get("display_names") or []
-        # display_names is typically ["Issuer (CIK ...)", "Reporting Owner (CIK ...)"];
-        # the reporting owner (the insider) is the filer we want.
-        filer = ""
+    @classmethod
+    def _owner_from_names(cls, display_names: list, ciks: list, issuer_cik: str) -> str:
+        """Pick the reporting owner from the FTS display_names.
+
+        EDGAR lists ``display_names`` as ``[reporting owner, issuer]`` but the
+        order isn't guaranteed, so identify the owner as the first entry whose
+        CIK differs from the issuer's (the filer-of-record). Falls back to the
+        first name, then "Unknown".
+        """
+        names = display_names or []
+        try:
+            for nm, ck in zip(names, ciks or []):
+                if str(ck).lstrip("0") != str(issuer_cik):
+                    return str(nm).split(" (")[0].strip()
+        except Exception as exc:
+            # Malformed display_names/ciks — fall through to the positional fallback.
+            logger.debug("[INSIDER] owner inference failed: %s", exc)
         if names:
-            filer = str(names[-1]).split(" (")[0].strip()
-        shares = self._to_float(src.get("shares") or src.get("transaction_shares"))
-        price = self._to_float(src.get("price") or src.get("transaction_price"))
+            return str(names[0]).split(" (")[0].strip()
+        return "Unknown"
+
+    @classmethod
+    def _parse_form4(cls, content: bytes) -> dict:
+        """Parse a Form 4 ownership XML → the single most-material transaction.
+
+        Returns ``{owner, type, shares, price}`` (each ``None`` when absent).
+        Picks the transaction with the largest absolute share count across both
+        the non-derivative and derivative tables. Never raises — bad/partial XML
+        degrades to all-``None``.
+        """
+        out: dict = {"owner": None, "type": None, "shares": None, "price": None}
+        try:
+            root = ET.fromstring(content)
+        except Exception:
+            return out
+        owner = (root.findtext(".//reportingOwner/reportingOwnerId/rptOwnerName") or "").strip()
+        out["owner"] = owner or None
+        best = None  # (abs_shares, code, shares, price)
+        for tag in (".//nonDerivativeTransaction", ".//derivativeTransaction"):
+            for t in root.findall(tag):
+                code = t.findtext(".//transactionCoding/transactionCode")
+                shares = cls._to_float(t.findtext(".//transactionAmounts/transactionShares/value"))
+                price = cls._to_float(t.findtext(".//transactionAmounts/transactionPricePerShare/value"))
+                if shares is None:
+                    continue
+                if best is None or abs(shares) > best[0]:
+                    best = (abs(shares), code, shares, price)
+        if best is not None:
+            _, code, shares, price = best
+            out["type"] = cls._map_type(code)
+            out["shares"] = int(shares)
+            out["price"] = round(price, 2) if price is not None else None
+        return out
+
+    def _base_row(self, hit: dict) -> Optional[dict]:
+        """Metadata-only row from an FTS hit (the guaranteed fallback).
+
+        Carries private ``_accession``/``_filename``/``_cik`` keys consumed by the
+        XML-enrichment pass; these are stripped before the row is returned.
+        """
+        src = hit.get("_source") or {}
+        _id = hit.get("_id") or ""
+        accession, _, filename = _id.partition(":")
+        cik = self._issuer_cik(accession)
+        filer = self._owner_from_names(src.get("display_names"), src.get("ciks"), cik)
         return {
             "filer":    filer or "Unknown",
-            "type":     self._map_type(src.get("transaction_code") or src.get("type")),
-            "shares":   int(shares) if shares is not None else None,
-            "price":    round(price, 2) if price is not None else None,
+            "type":     "Filing",
+            "shares":   None,
+            "price":    None,
             "date":     str(src.get("file_date") or src.get("date") or "")[:10],
-            "sec_link": self._sec_link(hit, src),
+            "sec_link": self._sec_link(accession, cik),
+            "_accession": accession,
+            "_filename":  filename,
+            "_cik":       cik,
         }
+
+    _ARCHIVE_BASE = "https://www.sec.gov/Archives/edgar/data"
+    # Overall wall-clock cap on the XML-enrichment pass. Kept well inside the 12s
+    # _safe_fetch envelope /predict wraps this call in, so a slow SEC degrades to
+    # metadata-only rows rather than dropping the whole card.
+    _ENRICH_BUDGET = 7.0
+
+    async def _enrich_rows(self, client: "httpx.AsyncClient", rows: List[dict]) -> None:
+        """Fetch + parse each row's Form 4 XML to fill in type/shares/price/filer.
+
+        Concurrent (semaphore-bounded) with a per-fetch timeout and an overall
+        budget, so a slow/unreachable SEC can't blow the /predict deadline — rows
+        that don't enrich in time simply keep their metadata-only fallback.
+        """
+        sem = asyncio.Semaphore(5)
+
+        async def _one(row: dict) -> None:
+            accession, filename, cik = row["_accession"], row["_filename"], row["_cik"]
+            if not (accession and filename.endswith(".xml") and cik):
+                return
+            url = f"{self._ARCHIVE_BASE}/{cik}/{accession.replace('-', '')}/{filename}"
+            async with sem:
+                try:
+                    r = await asyncio.wait_for(client.get(url), timeout=6.0)
+                    if r.status_code != 200:
+                        return
+                    parsed = self._parse_form4(r.content)
+                except Exception as exc:
+                    logger.debug("[INSIDER] enrich %s failed: %s", filename, exc)
+                    return
+            if parsed.get("owner"):
+                row["filer"] = parsed["owner"]
+            if parsed.get("type"):
+                row["type"] = parsed["type"]
+            if parsed.get("shares") is not None:
+                row["shares"] = parsed["shares"]
+            if parsed.get("price") is not None:
+                row["price"] = parsed["price"]
+
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*(_one(r) for r in rows)), timeout=self._ENRICH_BUDGET
+            )
+        except asyncio.TimeoutError:
+            logger.warning("[INSIDER] XML enrichment exceeded %.0fs — returning partial",
+                           self._ENRICH_BUDGET)
 
     async def get_insider_transactions(self, symbol: str) -> List[dict]:
         from redis_cache import cache_get, cache_set
@@ -1866,21 +1980,33 @@ class InsiderService:
                 )
                 resp.raise_for_status()
                 raw = resp.json()
-            hits = ((raw or {}).get("hits", {}) or {}).get("hits", []) or []
-            result: List[dict] = []
-            for hit in hits[:10]:
-                try:
-                    mapped = self._map_hit(hit)
-                    if mapped:
-                        result.append(mapped)
-                except Exception as exc:
-                    logger.debug("[INSIDER] hit map error: %s", exc)
-                    continue
-            logger.info("[INSIDER] ✓ %s — %d Form 4 filings", sym, len(result))
+                hits = ((raw or {}).get("hits", {}) or {}).get("hits", []) or []
+                rows: List[dict] = []
+                for hit in hits[:10]:
+                    try:
+                        base = self._base_row(hit)
+                        if base:
+                            rows.append(base)
+                    except Exception as exc:
+                        logger.debug("[INSIDER] hit map error: %s", exc)
+                        continue
+                # Enrich each filing with the transaction details from its Form 4
+                # XML (the FTS index carries metadata only — no shares/price/code).
+                if rows:
+                    await self._enrich_rows(client, rows)
+
+            # Strip the private enrichment keys before returning/caching.
+            for row in rows:
+                for k in ("_accession", "_filename", "_cik"):
+                    row.pop(k, None)
+
+            enriched = sum(1 for r in rows if r["shares"] is not None)
+            logger.info("[INSIDER] ✓ %s — %d Form 4 filings (%d with txn detail)",
+                        sym, len(rows), enriched)
             # Cache real results 6h; an empty list briefly (1h) so a transient
             # failure self-heals rather than sticking for the full window.
-            await cache_set(cache_key, result, ttl_seconds=self._CACHE_TTL if result else 3600)
-            return result
+            await cache_set(cache_key, rows, ttl_seconds=self._CACHE_TTL if rows else 3600)
+            return rows
         except Exception as exc:
             logger.warning("[INSIDER] fetch failed for %s: %s — returning []", sym, exc)
             return []
