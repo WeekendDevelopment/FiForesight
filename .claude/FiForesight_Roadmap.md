@@ -61,6 +61,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - "Why did this move?" explainer — `WhyDidMoveCard`, >3% trigger, fallback to top headline (#205)
 - Sector heatmap — `SectorHeatmap`, `GET /sectors`, 11 SPDR ETFs (#205) — _superseded by F23_
 - Sector heatmap (F23) — single `GET /sectors/heatmap` + one `SectorHeatmapPanel` (full `/sectors` tab with 1D/5D toggle + compact interactive landing overview); click-to-load ticker. Legacy `/sectors` endpoint/component removed.
+- Interactive dashboard widgets — Market Pulse + Trending tiles are click-to-analyze (indices like `^VIX` stay static); `SectorContextChip` on the analysis page links each stock to its sector ETF's move (yfinance sector → ETF).
 - Level 2 order book — `OrderBookPanel`, Alpaca Markets (US equities) + Coinbase (crypto) (#209)
 - URL-persistent analysis tab — `?symbol=` param, `router.replace` after predict, watchlist quick-launch (#228)
 - VWAP intraday overlay — dashed line + ±1σ bands on 1D/5D intervals (#228)

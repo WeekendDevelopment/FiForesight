@@ -103,7 +103,11 @@ export default function LandingPage() {
 
       {/* ── Morning briefing (self-fetching) ───────────────────────────── */}
       <Box sx={{ mb: 3 }}>
-        <MorningBriefingPanel isDark={isDark} primaryColor={primaryColor} />
+        <MorningBriefingPanel
+          isDark={isDark}
+          primaryColor={primaryColor}
+          onSelect={(t) => router.push(`/analysis?symbol=${encodeURIComponent(t)}`)}
+        />
       </Box>
 
       <Grid container spacing={3}>
@@ -181,6 +185,7 @@ export default function LandingPage() {
               tickers={TRENDING}
               isDark={isDark}
               extraSymbols={watchlist.map(w => w.symbol)}
+              onSelect={(s) => router.push(`/analysis?symbol=${encodeURIComponent(s)}`)}
             />
           </Paper>
         </Grid>
