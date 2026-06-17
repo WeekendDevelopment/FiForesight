@@ -307,7 +307,7 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 | Watchlist persistence + intraday sparklines + responsive design (F13) | pending |
 | Advanced Technical Signals — ATR stops, divergence, earnings surprise, RF importance, Stoch/ADX/OBV (F14) | #260 |
 | Alternative Data — FRED macro snapshot + jury injection + /macro tab, SEC EDGAR insider, FINRA short interest (F15) | pending |
-| Sector Heatmap tab — 11 GICS sector ETFs, 1D/5D color-coded grid, click-to-load (F23) | pending |
+| Sector Heatmap tab — 11 GICS sector ETFs, 1D/5D color-coded grid, click-to-load (F23) | #272 |
 
 ---
 
