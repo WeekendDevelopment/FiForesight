@@ -32,6 +32,18 @@ export default function TradeSetupCard({ setup, loading, isDark, primaryColor }:
             </Typography>
           </Stack>
           <Stack direction="row" spacing={1}>
+            {setup.direction && (
+              <Chip
+                label={setup.direction.toUpperCase()}
+                size="small"
+                sx={{
+                  fontSize: '0.65rem', fontWeight: 800, letterSpacing: '0.04em',
+                  background: `${setup.direction === 'Short' ? red : green}22`,
+                  color: setup.direction === 'Short' ? red : green,
+                  border: `1px solid ${setup.direction === 'Short' ? red : green}66`,
+                }}
+              />
+            )}
             <Chip
               label={setup.setup_type}
               size="small"
