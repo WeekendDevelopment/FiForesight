@@ -712,7 +712,7 @@ SECTOR_ETF_MAP = {
 
 @router.get("/sectors/heatmap")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def get_sector_heatmap(request: Request):
+async def get_sector_heatmap(request: Request) -> List[Dict[str, Any]]:
     """11 GICS sector ETFs with 1D + 5D % returns. Cached 15 min."""
     from redis_cache import cache_get, cache_set
     CACHE_KEY = "sectors:heatmap:f23"
@@ -720,7 +720,7 @@ async def get_sector_heatmap(request: Request):
     if cached:
         return cached
 
-    def _fetch():
+    def _fetch() -> List[Dict[str, Any]]:
         tickers_str = " ".join(SECTOR_ETF_MAP.values())
         raw = yf.download(
             tickers_str, period="6d", auto_adjust=True,
@@ -746,9 +746,15 @@ async def get_sector_heatmap(request: Request):
         return results
 
     try:
-        result = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=20.0)
+        result = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=12.0)
     except Exception as e:
         logger.error(f"sector heatmap: {e}")
+        raise HTTPException(status_code=502, detail="Could not fetch sector data")
+
+    # No usable rows for any ETF => treat as an upstream failure (provider outage),
+    # not an empty-but-OK response, so the UI can show its error state.
+    if not result:
+        logger.warning("sector heatmap returned no usable ETF rows")
         raise HTTPException(status_code=502, detail="Could not fetch sector data")
 
     await cache_set(CACHE_KEY, result, ttl_seconds=900)

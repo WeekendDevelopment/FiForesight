@@ -145,6 +145,12 @@ export default function SectorHeatmapPanel({ onSelectTicker, variant = 'full', o
                     <Tooltip title={`Click to load ${row.etf} in the main chart`} arrow>
                       <Card
                         onClick={() => onSelectTicker(row.etf)}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Load ${row.etf} (${row.sector}) in the main chart`}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectTicker(row.etf); }
+                        }}
                         sx={{
                           cursor: 'pointer',
                           background: bg,
@@ -152,6 +158,10 @@ export default function SectorHeatmapPanel({ onSelectTicker, variant = 'full', o
                           '&:hover': {
                             transform: 'translateY(-2px)',
                             boxShadow: `0 6px 18px ${bg}66`,
+                          },
+                          '&:focus-visible': {
+                            outline: `2px solid ${theme.palette.primary.main}`,
+                            outlineOffset: 2,
                           },
                         }}
                       >
