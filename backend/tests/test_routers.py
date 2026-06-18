@@ -85,6 +85,7 @@ def test_trade_setup_bullish_oversold() -> None:
     assert resp.status_code == 200
     d = resp.json()
     assert d["setup_type"] == "Oversold Reversal"
+    assert d["direction"] == "Long"
     assert d["entry_low"] < d["entry_high"]
     assert d["stop_loss"] < d["entry_low"]
     assert d["target_1"] < d["target_2"] < d["target_3"]
@@ -111,6 +112,7 @@ def test_trade_setup_bearish_overbought() -> None:
     assert resp.status_code == 200
     d = resp.json()
     assert d["setup_type"] == "Overbought Fade"
+    assert d["direction"] == "Short"
     # Bearish: stop is above entry, targets descend
     assert d["stop_loss"] > d["entry_high"]
     assert d["target_1"] > d["target_2"]
