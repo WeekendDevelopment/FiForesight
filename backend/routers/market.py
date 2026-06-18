@@ -740,6 +740,7 @@ async def get_sector_heatmap(request: Request) -> List[Dict[str, Any]]:
                     "price": round(float(closes.iloc[-1]), 2),
                     "return1d": round(float(ret_1d), 2),
                     "return5d": round(float(ret_5d), 2) if ret_5d is not None else None,
+                    "source": "yfinance",
                 })
             except Exception as e:
                 logger.warning(f"sector heatmap {etf}: {e}")

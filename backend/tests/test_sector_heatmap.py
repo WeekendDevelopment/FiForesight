@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pandas as pd
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
@@ -30,7 +30,7 @@ def _build_app() -> TestClient:
     app = FastAPI()
     app.state.limiter = market.limiter
 
-    async def _handler(req, exc: RateLimitExceeded) -> JSONResponse:
+    async def _handler(req: Request, exc: RateLimitExceeded) -> JSONResponse:
         return JSONResponse(status_code=429, content={"detail": "rate limited"})
 
     app.add_exception_handler(RateLimitExceeded, _handler)
@@ -63,6 +63,7 @@ def test_sector_heatmap_returns_11_sectors() -> None:
     for row in rows:
         assert "sector" in row and "etf" in row and "return1d" in row
         assert isinstance(row["return1d"], (int, float))
+        assert row["source"] == "yfinance"
 
 
 def test_sector_heatmap_skips_bad_ticker() -> None:
