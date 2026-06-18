@@ -690,59 +690,75 @@ async def ipo_calendar(request: Request, refresh: bool = False) -> Dict[str, Any
 
 
 # ---------------------------------------------------------------------------
-# Sector Heatmap
+# Sector Heatmap (F23)
 # ---------------------------------------------------------------------------
+# Single source of truth for sector data: per-ETF 1D + 5D return with full GICS
+# names. Feeds both the dedicated "Sectors" tab and the compact landing overview.
 
-SECTOR_ETFS = [
-    ("XLK",  "Technology"),
-    ("XLF",  "Financials"),
-    ("XLE",  "Energy"),
-    ("XLV",  "Health Care"),
-    ("XLY",  "Cons. Discret."),
-    ("XLP",  "Cons. Staples"),
-    ("XLI",  "Industrials"),
-    ("XLB",  "Materials"),
-    ("XLRE", "Real Estate"),
-    ("XLU",  "Utilities"),
-    ("XLC",  "Comm. Services"),
-]
+SECTOR_ETF_MAP = {
+    "Technology": "XLK",
+    "Healthcare": "XLV",
+    "Financials": "XLF",
+    "Energy": "XLE",
+    "Consumer Discretionary": "XLY",
+    "Consumer Staples": "XLP",
+    "Industrials": "XLI",
+    "Materials": "XLB",
+    "Utilities": "XLU",
+    "Real Estate": "XLRE",
+    "Communication Services": "XLC",
+}
 
 
-@router.get("/sectors")
+@router.get("/sectors/heatmap")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def sector_heatmap(request: Request):
-    """Returns 1-day % change for 11 SPDR sector ETFs. Cached 15 min."""
+async def get_sector_heatmap(request: Request) -> List[Dict[str, Any]]:
+    """11 GICS sector ETFs with 1D + 5D % returns. Cached 15 min."""
     from redis_cache import cache_get, cache_set
-    CACHE_KEY = "sectors:heatmap"
+    CACHE_KEY = "sectors:heatmap:f23"
     cached = await cache_get(CACHE_KEY)
     if cached:
         return cached
 
-    def _fetch_sectors():
+    def _fetch() -> List[Dict[str, Any]]:
+        tickers_str = " ".join(SECTOR_ETF_MAP.values())
+        raw = yf.download(
+            tickers_str, period="6d", auto_adjust=True,
+            progress=False, group_by="ticker",
+        )
         results = []
-        for ticker, label in SECTOR_ETFS:
+        for sector, etf in SECTOR_ETF_MAP.items():
             try:
-                hist = yf.Ticker(ticker).history(period="5d", interval="1d")
-                if hist is None or len(hist) < 2:
-                    results.append({"ticker": ticker, "label": label, "change_pct": None, "price": None})
+                closes = raw[etf]["Close"].dropna()
+                if len(closes) < 2:
                     continue
-                prev_close = float(hist["Close"].iloc[-2])
-                last_close = float(hist["Close"].iloc[-1])
-                change_pct = round((last_close - prev_close) / prev_close * 100, 2) if prev_close else None
-                results.append({"ticker": ticker, "label": label, "change_pct": change_pct, "price": round(last_close, 2)})
-            except Exception as _exc:
-                logger.debug("[SECTORS] fetch failed for %s: %s", ticker, _exc)
-                results.append({"ticker": ticker, "label": label, "change_pct": None, "price": None})
+                ret_1d = (closes.iloc[-1] / closes.iloc[-2] - 1) * 100
+                ret_5d = (closes.iloc[-1] / closes.iloc[0] - 1) * 100 if len(closes) >= 5 else None
+                results.append({
+                    "sector": sector,
+                    "etf": etf,
+                    "price": round(float(closes.iloc[-1]), 2),
+                    "return1d": round(float(ret_1d), 2),
+                    "return5d": round(float(ret_5d), 2) if ret_5d is not None else None,
+                })
+            except Exception as e:
+                logger.warning(f"sector heatmap {etf}: {e}")
         return results
 
     try:
-        data = await asyncio.wait_for(asyncio.to_thread(_fetch_sectors), timeout=12.0)
-    except asyncio.TimeoutError:
-        logger.warning("[SECTORS] upstream fetch timed out")
-        raise HTTPException(status_code=504, detail="Market data temporarily unavailable")
-    payload = {"sectors": data}
-    await cache_set(CACHE_KEY, payload, ttl_seconds=900)
-    return payload
+        result = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=12.0)
+    except Exception as e:
+        logger.error(f"sector heatmap: {e}")
+        raise HTTPException(status_code=502, detail="Could not fetch sector data")
+
+    # No usable rows for any ETF => treat as an upstream failure (provider outage),
+    # not an empty-but-OK response, so the UI can show its error state.
+    if not result:
+        logger.warning("sector heatmap returned no usable ETF rows")
+        raise HTTPException(status_code=502, detail="Could not fetch sector data")
+
+    await cache_set(CACHE_KEY, result, ttl_seconds=900)
+    return result
 
 
 # ---------------------------------------------------------------------------

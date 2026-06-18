@@ -202,6 +202,15 @@ export interface ShortInterest {
   report_date:   string;
 }
 
+/** One sector ETF row from GET /api/sectors/heatmap (F23). */
+export interface SectorRow {
+  sector: string;
+  etf: string;
+  price: number;
+  return1d: number;
+  return5d: number | null;
+}
+
 export interface DirectionForecast {
   /** "up" | "down" — predicted next-day direction. */
   direction:      'up' | 'down';
