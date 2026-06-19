@@ -2,6 +2,7 @@
 Sector heatmap endpoint tests (F23) — GET /sectors/heatmap.
 yf.download is mocked; no network required.
 """
+from collections.abc import Generator
 from unittest.mock import patch
 
 import pandas as pd
@@ -18,7 +19,7 @@ _FIELDS = ["Open", "High", "Low", "Close", "Volume"]
 
 
 @pytest.fixture(autouse=True)
-def _no_cache():
+def _no_cache() -> Generator[None, None, None]:
     """Force the Redis cache inert so the endpoint's cache (sectors:heatmap:f23)
     can't leak between tests and skip the patched yf.download. The endpoint imports
     cache_get/cache_set from redis_cache, which short-circuit when get_redis() is None."""
