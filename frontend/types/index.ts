@@ -209,6 +209,7 @@ export interface SectorRow {
   price: number;
   return1d: number;
   return5d: number | null;
+  source?: string;   // data provider, e.g. "yfinance"
 }
 
 export interface DirectionForecast {

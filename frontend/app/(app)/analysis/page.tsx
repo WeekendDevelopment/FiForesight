@@ -36,6 +36,7 @@ import { useIndicatorSignals } from '../../../hooks/useIndicatorSignals';
 import DCFCard               from '../../../components/DCFCard';
 import AnalystTargetsCard     from '../../../components/AnalystTargetsCard';
 import InsiderTransactionsCard from '../../../components/InsiderTransactionsCard';
+import SectorContextChip       from '../../../components/SectorContextChip';
 import GapExplainerBanner    from '../../../components/GapExplainerBanner';
 import ReversalRiskCard       from '../../../components/ReversalRiskCard';
 import DirectionForecastCard  from '../../../components/DirectionForecastCard';
@@ -286,7 +287,11 @@ function AnalysisContent() {
         </Stack>
 
         {/* ── Market Pulse (always visible) ───────────────────────── */}
-        <MorningBriefingPanel isDark={isDark} primaryColor={primaryColor} />
+        <MorningBriefingPanel
+          isDark={isDark}
+          primaryColor={primaryColor}
+          onSelect={(t) => handlePredict(t)}
+        />
 
         {error && <Alert severity="error" sx={{ mb: 4, borderRadius: 3 }}>{error}</Alert>}
 
@@ -304,6 +309,13 @@ function AnalysisContent() {
 
                 {/* ── Gap Explainer banner (>=3% daily move, F22) ──── */}
                 <GapExplainerBanner alert={prediction.gap_alert ?? null} symbol={prediction.symbol} />
+
+                {/* ── Sector context — links the stock to its sector ETF ── */}
+                <SectorContextChip
+                  sector={prediction.metrics?.sector}
+                  onSelectTicker={(etf) => handlePredict(etf)}
+                  isDark={isDark}
+                />
 
                 {/* Price chart card */}
                 <PriceChartCard
@@ -621,6 +633,7 @@ function AnalysisContent() {
                     tickers={prediction.trending.map(t => t.symbol).filter(Boolean)}
                     isDark={isDark}
                     extraSymbols={watchlist.map(item => item.symbol)}
+                    onSelect={(s) => handlePredict(s)}
                   />
                 )}
 

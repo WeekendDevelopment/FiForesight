@@ -2,11 +2,12 @@
 Sector heatmap endpoint tests (F23) — GET /sectors/heatmap.
 yf.download is mocked; no network required.
 """
+from collections.abc import Generator
 from unittest.mock import patch
 
 import pandas as pd
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
@@ -18,7 +19,7 @@ _FIELDS = ["Open", "High", "Low", "Close", "Volume"]
 
 
 @pytest.fixture(autouse=True)
-def _no_cache():
+def _no_cache() -> Generator[None, None, None]:
     """Force the Redis cache inert so the endpoint's cache (sectors:heatmap:f23)
     can't leak between tests and skip the patched yf.download. The endpoint imports
     cache_get/cache_set from redis_cache, which short-circuit when get_redis() is None."""
@@ -30,7 +31,7 @@ def _build_app() -> TestClient:
     app = FastAPI()
     app.state.limiter = market.limiter
 
-    async def _handler(req, exc: RateLimitExceeded) -> JSONResponse:
+    async def _handler(req: Request, exc: RateLimitExceeded) -> JSONResponse:
         return JSONResponse(status_code=429, content={"detail": "rate limited"})
 
     app.add_exception_handler(RateLimitExceeded, _handler)
@@ -63,6 +64,7 @@ def test_sector_heatmap_returns_11_sectors() -> None:
     for row in rows:
         assert "sector" in row and "etf" in row and "return1d" in row
         assert isinstance(row["return1d"], (int, float))
+        assert row["source"] == "yfinance"
 
 
 def test_sector_heatmap_skips_bad_ticker() -> None:
@@ -73,6 +75,18 @@ def test_sector_heatmap_skips_bad_ticker() -> None:
     rows = resp.json()
     assert len(rows) == 10
     assert all(row["etf"] != bad for row in rows)
+
+
+def test_sector_heatmap_retries_dropped_ticker() -> None:
+    # yfinance drops XLI from the first grouped batch; the one-shot retry recovers it.
+    bad = SECTOR_ETF_MAP["Industrials"]
+    frames = [_grouped_frame(empty_etf=bad), _grouped_frame()]
+    with patch("backend.routers.market.yf.download", side_effect=frames):
+        resp = client.get("/sectors/heatmap")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 11
+    assert any(r["etf"] == bad for r in rows)
 
 
 def test_sector_heatmap_all_empty_returns_502() -> None:
