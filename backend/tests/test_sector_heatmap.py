@@ -76,6 +76,18 @@ def test_sector_heatmap_skips_bad_ticker() -> None:
     assert all(row["etf"] != bad for row in rows)
 
 
+def test_sector_heatmap_retries_dropped_ticker() -> None:
+    # yfinance drops XLI from the first grouped batch; the one-shot retry recovers it.
+    bad = SECTOR_ETF_MAP["Industrials"]
+    frames = [_grouped_frame(empty_etf=bad), _grouped_frame()]
+    with patch("backend.routers.market.yf.download", side_effect=frames):
+        resp = client.get("/sectors/heatmap")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 11
+    assert any(r["etf"] == bad for r in rows)
+
+
 def test_sector_heatmap_all_empty_returns_502() -> None:
     # Structurally-valid download but no usable rows for any ETF => upstream failure.
     with patch("backend.routers.market.yf.download", return_value=_grouped_frame(all_empty=True)):

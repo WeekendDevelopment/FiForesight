@@ -720,31 +720,55 @@ async def get_sector_heatmap(request: Request) -> List[Dict[str, Any]]:
     if cached:
         return cached
 
-    def _fetch() -> List[Dict[str, Any]]:
-        tickers_str = " ".join(SECTOR_ETF_MAP.values())
+    def _closes_for(raw, etf):
+        """Close series for one ETF from a yf.download frame. Handles the grouped
+        (multi-ticker) and flat (single-ticker retry) column layouts; raises
+        KeyError when the ticker was dropped from a grouped batch."""
+        try:
+            return raw[etf]["Close"].dropna()
+        except KeyError:
+            # A single-ticker download isn't grouped by ticker.
+            return raw["Close"].dropna()
+
+    def _download_rows(etfs: List[str]) -> Dict[str, Dict[str, Any]]:
         raw = yf.download(
-            tickers_str, period="6d", auto_adjust=True,
+            " ".join(etfs), period="6d", auto_adjust=True,
             progress=False, group_by="ticker",
         )
-        results = []
+        out: Dict[str, Dict[str, Any]] = {}
+        # iterate the canonical map so each row keeps its full sector name
         for sector, etf in SECTOR_ETF_MAP.items():
+            if etf not in etfs:
+                continue
             try:
-                closes = raw[etf]["Close"].dropna()
+                closes = _closes_for(raw, etf)
                 if len(closes) < 2:
                     continue
                 ret_1d = (closes.iloc[-1] / closes.iloc[-2] - 1) * 100
                 ret_5d = (closes.iloc[-1] / closes.iloc[0] - 1) * 100 if len(closes) >= 5 else None
-                results.append({
+                out[etf] = {
                     "sector": sector,
                     "etf": etf,
                     "price": round(float(closes.iloc[-1]), 2),
                     "return1d": round(float(ret_1d), 2),
                     "return5d": round(float(ret_5d), 2) if ret_5d is not None else None,
                     "source": "yfinance",
-                })
+                }
             except Exception as e:
                 logger.warning(f"sector heatmap {etf}: {e}")
-        return results
+        return out
+
+    def _fetch() -> List[Dict[str, Any]]:
+        all_etfs = list(SECTOR_ETF_MAP.values())
+        rows = _download_rows(all_etfs)
+        # yfinance intermittently drops a ticker from a grouped batch (transient).
+        # Retry just the missing ones once so a sector doesn't silently vanish.
+        missing = [etf for etf in all_etfs if etf not in rows]
+        if missing:
+            logger.info("sector heatmap retrying %d missing ETFs: %s", len(missing), missing)
+            rows.update(_download_rows(missing))
+        # Emit in canonical sector order.
+        return [rows[etf] for etf in all_etfs if etf in rows]
 
     try:
         result = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=12.0)
