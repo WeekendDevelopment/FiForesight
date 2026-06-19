@@ -17,14 +17,6 @@ function fmtNum(v: number | null | undefined, digits = 2): string {
   return v.toFixed(digits);
 }
 
-function fmtMarketCap(v: number | null | undefined): string {
-  if (v === null || v === undefined || Number.isNaN(v)) return '—';
-  if (v >= 1e12) return `$${(v / 1e12).toFixed(2)}T`;
-  if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
-  if (v >= 1e6) return `$${(v / 1e6).toFixed(0)}M`;
-  return `$${v.toFixed(0)}`;
-}
-
 function fmtPct(v: number | null | undefined): string {
   if (v === null || v === undefined || Number.isNaN(v)) return '—';
   return `${v.toFixed(1)}%`;
