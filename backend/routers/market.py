@@ -9,11 +9,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import yfinance as yf
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 from slowapi.util import get_remote_address
 from scipy.stats import norm
 
 from config import Config
 from dependencies import yf_svc, limiter, fred_svc, insider_svc
+from redis_cache import cache_get, cache_set
+from screener_service import build_universe_snapshot
 
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-:]{1,15}$")
 
@@ -1204,3 +1207,68 @@ async def analyst_targets(request: Request, symbol: str) -> Dict[str, Any]:
 
     await cache_set(cache_key, result, ttl_seconds=21600)  # 6h TTL
     return result
+
+
+# ---------------------------------------------------------------------------
+# Equity Screener (Light Edition, F24)
+# ---------------------------------------------------------------------------
+class ScreenerFilter(BaseModel):
+    """Filter/sort criteria for the curated-universe screener. All bounds optional."""
+    sector: Optional[str] = None          # e.g. "Technology"
+    minPE: Optional[float] = None
+    maxPE: Optional[float] = None
+    minRSI: Optional[float] = None
+    maxRSI: Optional[float] = None
+    minBeta: Optional[float] = None
+    maxBeta: Optional[float] = None
+    minDividendYield: Optional[float] = None
+    sortBy: str = "marketCap"             # marketCap | peRatio | rsi | dividendYield
+    sortDir: str = "desc"                 # asc | desc
+    limit: int = 25
+
+
+_SCREENER_SORT_KEYS = {"marketCap", "peRatio", "forwardPE", "beta", "rsi", "dividendYield", "revenueGrowth"}
+
+
+@router.post("/screener")
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def run_screener(request: Request, filters: ScreenerFilter) -> Dict[str, Any]:
+    """Filter & sort the curated ~50-stock universe (F24).
+
+    Builds the universe snapshot on-demand (one yfinance row per ticker), caches
+    it in Redis for 1h, then applies the requested numeric/sector filters and sort
+    in-memory. Returns ``{results, total}`` where ``total`` is the post-filter count
+    and ``results`` is capped at ``limit``. 60/min via the read-only limiter.
+    """
+    cache_key = "screener:universe"
+    snapshot = await cache_get(cache_key)
+    if not isinstance(snapshot, list) or not snapshot:
+        snapshot = await build_universe_snapshot()
+        if snapshot:
+            await cache_set(cache_key, snapshot, ttl_seconds=3600)  # 1h TTL
+
+    rows = snapshot or []
+    if filters.sector:
+        rows = [r for r in rows if r.get("sector") == filters.sector]
+    if filters.minPE is not None:
+        rows = [r for r in rows if r.get("peRatio") is not None and r["peRatio"] >= filters.minPE]
+    if filters.maxPE is not None:
+        rows = [r for r in rows if r.get("peRatio") is not None and r["peRatio"] <= filters.maxPE]
+    if filters.minRSI is not None:
+        rows = [r for r in rows if r.get("rsi") is not None and r["rsi"] >= filters.minRSI]
+    if filters.maxRSI is not None:
+        rows = [r for r in rows if r.get("rsi") is not None and r["rsi"] <= filters.maxRSI]
+    if filters.minBeta is not None:
+        rows = [r for r in rows if r.get("beta") is not None and r["beta"] >= filters.minBeta]
+    if filters.maxBeta is not None:
+        rows = [r for r in rows if r.get("beta") is not None and r["beta"] <= filters.maxBeta]
+    if filters.minDividendYield is not None:
+        rows = [r for r in rows
+                if r.get("dividendYield") is not None and r["dividendYield"] >= filters.minDividendYield]
+
+    sort_key = filters.sortBy if filters.sortBy in _SCREENER_SORT_KEYS else "marketCap"
+    reverse = filters.sortDir == "desc"
+    rows = sorted(rows, key=lambda x: (x.get(sort_key) or 0), reverse=reverse)
+
+    limit = max(1, min(filters.limit, 50))
+    return {"results": rows[:limit], "total": len(rows)}
