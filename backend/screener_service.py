@@ -16,7 +16,7 @@ from universe import SCREENER_UNIVERSE
 logger = logging.getLogger(__name__)
 
 _SEM = asyncio.Semaphore(8)   # cap concurrent yfinance calls
-_TIMEOUT = 8.0
+_TIMEOUT = 12.0               # match the backend external-fetch standard
 
 
 async def _fetch_row(symbol: str) -> dict | None:
@@ -44,10 +44,10 @@ async def _fetch_row(symbol: str) -> dict | None:
                 "peRatio": info.get("trailingPE"),
                 "forwardPE": info.get("forwardPE"),
                 "beta": info.get("beta"),
-                "dividendYield": round(info.get("dividendYield", 0) * 100, 2)
-                    if info.get("dividendYield") else None,
-                "revenueGrowth": round(info.get("revenueGrowth", 0) * 100, 1)
-                    if info.get("revenueGrowth") else None,
+                "dividendYield": round(info["dividendYield"] * 100, 2)
+                    if info.get("dividendYield") is not None else None,
+                "revenueGrowth": round(info["revenueGrowth"] * 100, 1)
+                    if info.get("revenueGrowth") is not None else None,
                 "rsi": rsi,
                 "price": info.get("currentPrice") or info.get("regularMarketPrice"),
             }
