@@ -579,3 +579,37 @@ export interface AnalystTargets {
   sell:             number;
   strongSell:       number;
 }
+
+// ── Equity Screener (F24) ────────────────────────────────────────────────────
+export interface ScreenerFilter {
+  sector?: string;
+  minPE?: number;
+  maxPE?: number;
+  minRSI?: number;
+  maxRSI?: number;
+  minBeta?: number;
+  maxBeta?: number;
+  minDividendYield?: number;
+  sortBy?: string;
+  sortDir?: 'asc' | 'desc';
+  limit?: number;
+}
+
+export interface ScreenerRow {
+  symbol:        string;
+  name:          string;
+  sector:        string;
+  marketCap:     number | null;
+  peRatio:       number | null;
+  forwardPE:     number | null;
+  beta:          number | null;
+  dividendYield: number | null;
+  revenueGrowth: number | null;
+  rsi:           number | null;
+  price:         number | null;
+}
+
+export interface ScreenerResult {
+  results: ScreenerRow[];
+  total:   number;
+}
