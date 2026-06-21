@@ -56,6 +56,7 @@ export default function PriceChartCard({
   const [intervalData,     setIntervalData]     = useState<IntervalHistoryData | null>(null);
   const [historyLoading,   setHistoryLoading]   = useState(false);
   const [showVwap,         setShowVwap]         = useState(false);
+  const [showFib,          setShowFib]          = useState(false);
   // Track the last symbol we rendered for — reset interval when it changes
   const [lastSymbol, setLastSymbol] = useState(prediction.symbol);
   if (lastSymbol !== prediction.symbol) {
@@ -63,6 +64,7 @@ export default function PriceChartCard({
     setSelectedInterval('2y');
     setIntervalData(null);
     setShowVwap(false);
+    setShowFib(false);
   }
   const fetchIntervalHistory = useCallback((iv: string) => {
     if (iv === '2y') {
@@ -125,6 +127,18 @@ export default function PriceChartCard({
   const rsiSeries = isTwoYear
     ? (prediction.indicators?.rsi_series ?? [])
     : (intervalData?.rsi_series ?? []);
+
+  // Fibonacci retracement levels (F25) — only on the native 2Y view, where the
+  // indicator payload's swing high/low applies. Ordered by ratio (0.0 → 1.0).
+  const fib = prediction.indicators?.fibonacci ?? null;
+  const fibLevels = useMemo(
+    () => (fib
+      ? Object.entries(fib.levels)
+          .map(([ratio, price]) => ({ ratio, price }))
+          .sort((a, b) => Number(a.ratio) - Number(b.ratio))
+      : []),
+    [fib],
+  );
 
   const toggleSx = {
     '& .MuiToggleButton-root': {
@@ -247,6 +261,19 @@ export default function PriceChartCard({
               <ToggleButton value="vwap">VWAP</ToggleButton>
             </ToggleButtonGroup>
           )}
+
+          {/* Fibonacci retracement overlay — 2Y view only (uses /predict swing high/low) */}
+          {isTwoYear && fib && (
+            <ToggleButtonGroup
+              aria-label="fib-overlay"
+              value={showFib ? ['fib'] : []}
+              onChange={() => setShowFib(v => !v)}
+              size="small"
+              sx={toggleSx}
+            >
+              <ToggleButton value="fib">FIB</ToggleButton>
+            </ToggleButtonGroup>
+          )}
         </Box>
 
         {/* Indicators Guide (collapsible) */}
@@ -355,6 +382,9 @@ export default function PriceChartCard({
             resistance={isTwoYear ? (prediction.indicators?.resistance ?? []) : []}
             intraday={intraday}
             showVwap={intraday && showVwap}
+            fibLevels={isTwoYear ? fibLevels : []}
+            showFib={isTwoYear && showFib}
+            fibColor={theme.palette.warning.main}
             priceHeight={chartH}
           />
         </Box>
