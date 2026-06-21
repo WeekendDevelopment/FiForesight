@@ -18,7 +18,7 @@ jobs:
       name: "terraform.plan"
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Terraform run
         uses: ./.github/actions/terraform
@@ -33,7 +33,7 @@ jobs:
       vm_host: ${{ steps.tf_outputs.outputs.public_ip }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Terraform run
         uses: ./.github/actions/terraform
@@ -51,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup pnpm
         working-directory: frontend
@@ -85,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -119,7 +119,7 @@ jobs:
       - build-backend
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -181,7 +181,7 @@ jobs:
       name: preview
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup HTTPS
         if: github.actor != 'dependabot[bot]'
@@ -207,7 +207,7 @@ jobs:
       url: https://fiforesight-preview.duckdns.org
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Redis
         if: github.actor != 'dependabot[bot]'
