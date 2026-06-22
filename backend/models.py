@@ -332,6 +332,49 @@ def calculate_atr(
         return None
 
 
+def calculate_fibonacci_levels(highs: list[float], lows: list[float],
+                               lookback: int = 60) -> Optional[dict]:
+    """Fib retracement levels from the swing high/low over the last `lookback` bars.
+
+    Returns {"swing_high": float, "swing_low": float, "direction": "up"|"down",
+    "levels": {"0.0": float, "0.236": float, "0.382": float, "0.5": float,
+    "0.618": float, "0.786": float, "1.0": float}} or None if too little data.
+    `direction` is "up" when the swing low occurred before the swing high (uptrend
+    retracement) else "down"; level prices are interpolated between swing_low and
+    swing_high so they render in ascending price order regardless of direction.
+    """
+    try:
+        if (
+            not highs or not lows
+            or len(highs) != len(lows)
+            or len(highs) < 10 or len(lows) < 10
+            or lookback <= 0
+        ):
+            return None
+        window = min(lookback, len(highs), len(lows))
+        h = highs[-window:]
+        lo = lows[-window:]
+        swing_high = max(h)
+        swing_low = min(lo)
+        if swing_high <= swing_low:
+            return None
+        hi_idx = h.index(swing_high)
+        lo_idx = lo.index(swing_low)
+        direction = "up" if lo_idx < hi_idx else "down"
+        rng = swing_high - swing_low
+        ratios = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0]
+        levels = {str(r): round(swing_high - rng * r, 2) for r in ratios}
+        return {
+            "swing_high": round(swing_high, 2),
+            "swing_low": round(swing_low, 2),
+            "direction": direction,
+            "levels": levels,
+        }
+    except Exception as exc:
+        logger.debug("[FIB] calculate_fibonacci_levels failed: %s", exc, exc_info=True)
+        return None
+
+
 @newrelic.agent.function_trace()
 def calculate_stochastic(
     highs: List[float],

@@ -21,7 +21,7 @@ from models import (
     calculate_macd, calculate_bollinger_bands, calculate_sma_series,
     calculate_ema_series, calculate_support_resistance,
     calculate_atr, calculate_stochastic, calculate_adx, calculate_obv,
-    detect_divergences,
+    detect_divergences, calculate_fibonacci_levels,
     _skill_to_weights,
 )
 from services import DataCleaner, ANALYST_PERSONAS
@@ -1411,6 +1411,9 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     divergences = await asyncio.to_thread(
         detect_divergences, closes, rsi_full, macd_data["hist"]
     )
+    # Fibonacci retracement levels (Feature 25) — swing high/low over the chart
+    # window. None when insufficient data; the frontend handles null gracefully.
+    fibonacci = await asyncio.to_thread(calculate_fibonacci_levels, highs, lows)
     logger.info(
         "[STEP-4b#] ✓ Advanced signals — ATR-14=%s | Stoch %%K=%s %%D=%s | "
         "ADX=%s | OBV=%s pts | divergences=%s",
@@ -1904,6 +1907,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             "minus_di":    adx.get("minus_di"),
             "obv_history": obv_history,
             "divergences": divergences,
+            "fibonacci":   fibonacci,
             "rf_feature_importance": forecast.get("rf_feature_importance", []),
             "earnings_surprise":     earnings_surprise,
         },
