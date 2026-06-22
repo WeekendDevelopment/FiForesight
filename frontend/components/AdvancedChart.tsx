@@ -64,6 +64,9 @@ interface Props {
   resistance?: number[];
   intraday?: boolean;   // show HH:MM on the time axis (1D/5D/1M ranges)
   showVwap?: boolean;   // dashed VWAP overlay (intraday ranges only)
+  fibLevels?: { ratio: string; price: number }[]; // Fibonacci retracement levels (F25)
+  showFib?: boolean;    // dashed Fibonacci overlay
+  fibColor?: string;    // overlay colour (theme.palette.warning.main)
   priceHeight?: number; // height of the main price pane in px (default 380)
 }
 
@@ -128,6 +131,9 @@ export default function AdvancedChart({
   resistance = [],
   intraday = false,
   showVwap = false,
+  fibLevels = [],
+  showFib = false,
+  fibColor = '#f59e0b',
   priceHeight = 380,
 }: Props) {
   const priceRef   = useRef<HTMLDivElement>(null);
@@ -290,6 +296,13 @@ export default function AdvancedChart({
       resistance.forEach(lvl => anchor.createPriceLine({
         price: lvl, color: downColor, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: `R ${lvl}`,
       }));
+      // Fibonacci retracement levels (F25) — dashed amber overlay, distinct from S/R.
+      if (showFib) {
+        fibLevels.forEach(({ ratio, price }) => anchor.createPriceLine({
+          price, color: fibColor, lineWidth: 1, lineStyle: 2, axisLabelVisible: true,
+          title: `${(Number(ratio) * 100).toFixed(1)}% ${price}`,
+        }));
+      }
     }
 
     // ── Volume pane ───────────────────────────────────────────────
@@ -378,7 +391,7 @@ export default function AdvancedChart({
       handlers.forEach(h => h());
       charts.forEach(c => c.remove());
     };
-  }, [history, forecast, rsiSeries, indicators, mode, isDark, primaryColor, trendColor, support, resistance, intraday, showVwap]);
+  }, [history, forecast, rsiSeries, indicators, mode, isDark, primaryColor, trendColor, support, resistance, intraday, showVwap, fibLevels, showFib, fibColor]);
 
   const paneBorder = isDark ? '1px solid rgba(255,255,255,0.05)' : '1px solid rgba(0,0,0,0.08)';
   const labelStyle: React.CSSProperties = {

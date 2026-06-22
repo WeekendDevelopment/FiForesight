@@ -33,6 +33,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Chart zoom/pan across all intervals — drop classic view, AdvancedChart timestamp hardening (#221)
 - Walk-forward backtester — rolling 252-day train → 5-day predict, per-model MAE + directional accuracy (#222)
 - Advanced Technical Signals (Feature 14): ATR-14 volatility-adaptive trade stops (2.0×/2.5×, 8% cap), RSI/MACD divergence detection (scipy `find_peaks`, injected into jury context + prompts), earnings surprise history (last 4Q), RF feature importance (top-5), and Stochastic/ADX/OBV sub-panels (`SignalPanels`, localStorage-persisted). New helpers in `models.py`; `indicators` payload extended; 19 new backend tests. (#260)
+- Fibonacci Retracement overlay (Feature 25): swing-high/low auto-detection → 7 retracement levels in the /predict indicators payload + toggleable dashed overlay on PriceChartCard. New `calculate_fibonacci_levels` helper in models.py.
 
 ### Intelligence
 - 3-model LLM Analyst Jury (Llama 4 Scout, Llama 3.3 70B, GPT-OSS 20B) via Groq + LangGraph
@@ -172,7 +173,6 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Stochastic Oscillator — overbought/oversold confirmation alongside RSI · `[Value: Med]` `[Effort: Low]`
 - ADX (Average Directional Index) — trend strength; flag when trend is weak (RSI signals less reliable) · `[Value: Med]` `[Effort: Low]`
 - OBV (On-Balance Volume) — volume accumulation/distribution divergence signal · `[Value: Med]` `[Effort: Low]`
-- Fibonacci retracement levels — auto-calculated from swing high/low; overlay on price chart · `[Value: Med]` `[Effort: Med]`
 
 ### Intelligence & AI
 - ~~Jury dissent surfacing~~ ✅ SHIPPED (Feature 16) — `detect_dissent` (2-1 split → minority rationale), amber "Dissenting View" Alert in `AnalystJuryPanel`
