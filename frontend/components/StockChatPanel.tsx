@@ -186,7 +186,9 @@ export default function StockChatPanel({ prediction, isDark, primaryColor, open,
         {messages.length === 0 ? (
           <Box>
             <Typography sx={{ fontSize: '0.78rem', opacity: 0.5, mb: 2, textAlign: 'center' }}>
-              Ask anything about {prediction?.symbol ?? 'this stock'}
+              Your assistant for {prediction?.symbol ?? 'this stock'} — ask about its forecast,
+              indicators, analyst jury, sentiment, or risks. It only covers this stock&apos;s analysis,
+              not general web search.
             </Typography>
             <Stack spacing={1}>
               {BEGINNER_CHIPS.map(chip => (
@@ -264,7 +266,7 @@ export default function StockChatPanel({ prediction, isDark, primaryColor, open,
             multiline
             maxRows={3}
             size="small"
-            placeholder="Ask about this stock…"
+            placeholder={`Ask about ${prediction?.symbol ?? 'this stock'}…`}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => {
