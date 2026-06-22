@@ -344,10 +344,16 @@ def calculate_fibonacci_levels(highs: list[float], lows: list[float],
     swing_high so they render in ascending price order regardless of direction.
     """
     try:
-        if not highs or not lows or len(highs) < 10 or len(lows) < 10:
+        if (
+            not highs or not lows
+            or len(highs) != len(lows)
+            or len(highs) < 10 or len(lows) < 10
+            or lookback <= 0
+        ):
             return None
-        h = highs[-lookback:]
-        lo = lows[-lookback:]
+        window = min(lookback, len(highs), len(lows))
+        h = highs[-window:]
+        lo = lows[-window:]
         swing_high = max(h)
         swing_low = min(lo)
         if swing_high <= swing_low:
@@ -364,7 +370,8 @@ def calculate_fibonacci_levels(highs: list[float], lows: list[float],
             "direction": direction,
             "levels": levels,
         }
-    except Exception:
+    except Exception as exc:
+        logger.debug("[FIB] calculate_fibonacci_levels failed: %s", exc, exc_info=True)
         return None
 
 
