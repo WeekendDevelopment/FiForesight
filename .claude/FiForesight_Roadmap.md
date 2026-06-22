@@ -3,6 +3,11 @@
 > Source of truth for planned work. Feature-based, free-tier only.
 > Last synced: 2026-06-12 — F11/F12/F10 shipped. F13 (Watchlist + Intraday Sparklines + Responsive) shipped. F9 (Alerts) remains.
 
+> **Planning vs. implementation sessions:** In a *planning/roadmap* session (proposing features,
+> reviewing capabilities, editing this backlog), changes are limited to docs + generated
+> implementation prompts — application code is left to the *implementation* session that builds the
+> feature, to avoid branch/PR confusion. This is scoped to session type, not a blanket rule.
+
 ---
 
 ## Definition of Done (applies to Feature 9 onward)
