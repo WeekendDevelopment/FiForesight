@@ -194,6 +194,79 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Pattern detection (`scipy.signal.find_peaks`) — head & shoulders, double top/bottom, flag/pennant; annotate chart · `[Value: Med]` `[Effort: Med]`
 - Isolation Forest anomaly detection — flag statistical outliers in price/volume series · `[Value: Med]` `[Effort: High]`
 
+### Model Quality & Self-Improvement (meta)
+
+> Theme: validate and fix the math/patterns that drive forecasts, trade setups, and projections
+> FIRST, then add an AI layer that self-improves them. **Build math-first, AI-last.** Most input
+> data already exists (InfluxDB `forecast_record` / `price_outcome` / `model_accuracy`, the
+> walk-forward backtester, RF `feature_importances_`, regime/RL weights). Split so no single item
+> is an unbounded rewrite — fixes are surgical and evidence-driven, not guesses.
+> Recommended order: **calibration audit → driver attribution → component scorecard → math fixes →
+> self-tuning loop → AI meta-layer.**
+
+- **Forecast calibration audit** *(do first)* — is the core output even correct? Measure whether the
+  48h high/low range and Monte Carlo P10/P50/P90 are actually *calibrated* (does ~80% of realized
+  price land inside P10–P90? is directional accuracy > a naive/persistence baseline?). Pure analysis
+  over existing InfluxDB outcome data; surfaces a coverage/reliability report and the "is it currently
+  wrong?" gate everything else depends on. · `[Value: High]` `[Effort: Med]`
+- **Prediction driver attribution** — quantify which inputs actually move each prediction and which
+  correlate with *realized* accuracy (not just in-sample importance). Extend RF `feature_importances_`
+  with an outcome-correlation pass over `price_outcome`; expose a "what drove this call" breakdown.
+  Separates signal from decoration. · `[Value: High]` `[Effort: Med]`
+- **Component backtest scorecard** — before trusting any model/indicator/signal, score its historical
+  hit-rate vs realized outcomes (ensemble vs buy-hold/persistence, each indicator's edge, trade-setup
+  stop/target geometry hit rate, R:R realization). One internal scorecard on the walk-forward
+  backtester + outcome store; the ground truth for what to keep, fix, or drop.
+  · `[Value: High]` `[Effort: Med–High]`
+- **Trade-setup & projection math fixes** — act on the audit/scorecard: correct entry/stop/target/R:R
+  logic and projection ranges where the math is demonstrably off. Surgical, not a rebuild (unless a
+  component is shown to add no edge). · `[Value: High]` `[Effort: Med]` `[Depends: calibration audit + scorecard]`
+- **Self-tuning weight calibration loop** — close the loop: periodically recompute model/signal weights
+  from accumulated accuracy (a bounded, explainable *math* layer atop the existing RL/regime weighting),
+  so the app's crucial factors auto-adjust as outcomes accrue. Recompute-on-demand, not a heavy online
+  learner. · `[Value: High]` `[Effort: High]`
+- **AI meta-improvement layer** — only after the math is validated and self-tuning: an LLM layer that
+  reasons over the driver-attribution + scorecard + calibration outputs to propose concrete model/setup
+  improvements (and explain them). The "AI on top of working math" cap.
+  · `[Value: Med]` `[Effort: High]` `[Depends: all of the above]`
+
+### Strategy Lab (stics.ai capability review)
+
+> From the stics.ai 12-prompt review (2026-06-22). Most of these are only worth their salt when wired
+> to the **rule-based strategy backtester (F28, proposed)** so every AI-generated strategy is
+> immediately validated by real backtest math — same math-first / AI-last principle as above.
+> Build order: ship F28 first (foundation) → cheap tweaks to shipped features → optimizer/risk tools
+> on top of F28 → strategy/factor/macro generators → portfolio optimizer → alpha detection last.
+
+**Net-new**
+- **Strategy generation** (#1) — AI (Groq) proposes 3 codified strategies (indicators + exact settings,
+  entry/exit rules, SL/TP, best conditions, edge) that map onto the F28 backtester rule set, so each
+  suggestion is immediately backtestable. · `[Value: Med]` `[Effort: Med]` `[Depends: F28 backtester]`
+- **Multi-factor / factor screener** (#5) — Momentum + Value + Volatility + Trend factor scores over the
+  curated screener universe, weighted composite rank + example basket. · `[Value: Med]` `[Effort: High]`
+- **Strategy optimization** (#6) — bounded parameter grid-search over the F28 rules to lift Sharpe /
+  cut drawdown; before-vs-after table. · `[Value: Med]` `[Effort: High]` `[Depends: F28 backtester]`
+- **Portfolio construction / optimizer** (#7) — given an asset list + risk tolerance + horizon, suggest
+  an allocation (risk-parity / mean-variance-lite via `scipy.optimize`), expected return + volatility +
+  drawdown + per-asset rationale. Extends Portfolio Manager (F10). · `[Value: Med]` `[Effort: High]`
+- **Macro-based strategy signals** (#11) — FRED macro regime → positioning rules + entry/exit signals;
+  builds on `FREDService` (F15). · `[Value: Med]` `[Effort: Med]`
+- **Risk-reward & drawdown advisory** (#3 + #10) — on a backtested strategy: recovery-time + underwater
+  curve + AI suggestions to reduce risk / lift returns. · `[Value: Med]` `[Effort: Med]` `[Depends: F28 backtester]`
+- **Alpha / edge detection** (#12) — speculative AI: behavioral-inefficiency / market-structure ideas.
+  Lowest priority; gate on everything above. · `[Value: Low–Med]` `[Effort: High]`
+
+**Tweaks to already-shipped capabilities** (enhance, don't rebuild)
+- **Regime (F16)** (#4) — add a volatility dimension (ATR-percentile: calm/normal/volatile) + a plain-
+  language "favoured strategy type / what to avoid" line. · `[Value: Med]` `[Effort: Low]`
+- **Trade Setup** (#8) — extend single-ticker → ranked top-N "best setups now" scan over the screener
+  universe (entry/stop/targets/R:R, sorted by R:R). · `[Value: Med]` `[Effort: Med]`
+- **Monte Carlo (#9)** — also run MC/bootstrap on F28 *strategy* trade returns → prob-of-loss +
+  robust/fragile verdict (currently MC is price-only). · `[Value: Med]` `[Effort: Med]` `[Depends: F28 backtester]`
+- **F28 backtester enhancement** — add per-regime performance breakdown ("best/worst conditions",
+  covering #2) + max-drawdown recovery time (#10); fold into F28 rather than a separate feature.
+  · `[Value: Med]` `[Effort: Low]`
+
 ---
 
 ## Free-Tier Constraint
