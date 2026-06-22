@@ -141,6 +141,7 @@ export interface PredictionData {
     minus_di?:    number | null;
     obv_history?: number[] | null;
     divergences?: Divergences;
+    fibonacci?:   FibonacciLevels | null;
     rf_feature_importance?: FeatureImportance[];
     earnings_surprise?:     EarningsSurprise[];
   };
@@ -245,6 +246,13 @@ export interface Divergences {
   rsi_bearish:  boolean;
   macd_bullish: boolean;
   macd_bearish: boolean;
+}
+
+export interface FibonacciLevels {
+  swing_high: number;
+  swing_low:  number;
+  direction:  'up' | 'down';
+  levels:     Record<string, number>;   // "0.0".."1.0" -> price
 }
 
 export interface FeatureImportance {

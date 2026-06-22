@@ -19,7 +19,7 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: '0'
 
@@ -59,7 +59,7 @@ jobs:
       name: "terraform.apply"
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: '0'
 
@@ -81,7 +81,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: '0'
 
@@ -113,7 +113,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: '0'
 
@@ -140,7 +140,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: '0'
 
@@ -182,7 +182,7 @@ jobs:
       url: https://fi-foresight-weekend-development-a6cff98f.koyeb.app
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Redis
         uses: ./.github/actions/setup-redis
@@ -228,7 +228,7 @@ jobs:
       name: live
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup HTTPS
         uses: ./.github/actions/setup-https
@@ -253,7 +253,7 @@ jobs:
       url: https://fiforesight.duckdns.org
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Redis
         uses: ./.github/actions/setup-redis
