@@ -1267,18 +1267,23 @@ async def dividends(request: Request, symbol: str) -> Dict[str, Any]:
         ex_iso = None
         if ex_date:
             try:
-                ex_iso = datetime.utcfromtimestamp(int(ex_date)).strftime("%Y-%m-%d")
+                ex_iso = datetime.fromtimestamp(int(ex_date), timezone.utc).strftime("%Y-%m-%d")
             except Exception:
                 ex_iso = None
 
+        # Unit contract: yfinance (1.2.x) already returns BOTH dividendYield and
+        # fiveYearAvgDividendYield as percentages (e.g. KO → 2.64 / 2.89), so neither
+        # is scaled here — they stay in the same unit. payoutRatio, by contrast, is a
+        # fraction (0.648) and is scaled ×100 to a percent.
+        five_yr = _num(info.get("fiveYearAvgDividendYield"))
+        payout = _num(info.get("payoutRatio"))
         return {
             "symbol": sym,
             "paysDividend": pays,
-            "dividendYield": round(div_yield * 100, 2) if div_yield is not None else None,
+            "dividendYield": round(div_yield, 2) if div_yield is not None else None,
             "dividendRate": _num(rate),
-            "payoutRatio": round(_num(info.get("payoutRatio")) * 100, 1)
-                if _num(info.get("payoutRatio")) is not None else None,
-            "fiveYearAvgYield": _num(info.get("fiveYearAvgDividendYield")),
+            "payoutRatio": round(payout * 100, 1) if payout is not None else None,
+            "fiveYearAvgYield": round(five_yr, 2) if five_yr is not None else None,
             "exDividendDate": ex_iso,
             "dividendGrowthPct": growth_pct,
         }

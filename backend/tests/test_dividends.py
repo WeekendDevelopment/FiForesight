@@ -56,11 +56,13 @@ def _mock_ticker(info: dict, divs: pd.Series | None = None) -> MagicMock:
 def test_dividend_payer_shape() -> None:
     client = _build_app()
     ex_ts = int(datetime(2026, 1, 9, tzinfo=timezone.utc).timestamp())
+    # yfinance (1.2.x) hands back dividendYield / fiveYearAvgDividendYield already
+    # as percentages (KO ≈ 2.64 / 2.89); payoutRatio is a fraction (0.55 → 55%).
     info = {
-        "dividendYield": 0.024,       # fraction → 2.4%
+        "dividendYield": 2.64,        # already percent → passes through
         "dividendRate": 2.0,
-        "payoutRatio": 0.55,          # → 55.0%
-        "fiveYearAvgDividendYield": 2.8,
+        "payoutRatio": 0.55,          # fraction → 55.0%
+        "fiveYearAvgDividendYield": 2.89,
         "exDividendDate": ex_ts,
     }
     with patch.object(market.yf, "Ticker",
@@ -70,10 +72,10 @@ def test_dividend_payer_shape() -> None:
     d = resp.json()
     assert d["symbol"] == "KO"
     assert d["paysDividend"] is True
-    assert d["dividendYield"] == 2.4          # percent-scaled
+    assert d["dividendYield"] == 2.64         # percent, not re-scaled
     assert d["dividendRate"] == 2.0
     assert d["payoutRatio"] == 55.0
-    assert d["fiveYearAvgYield"] == 2.8
+    assert d["fiveYearAvgYield"] == 2.89
     assert d["exDividendDate"] == "2026-01-09"
     assert d["dividendGrowthPct"] == 25.0     # computed from the series
 
