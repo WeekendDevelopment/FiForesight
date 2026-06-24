@@ -72,6 +72,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Level 2 order book — `OrderBookPanel`, Alpaca Markets (US equities) + Coinbase (crypto) (#209)
 - URL-persistent analysis tab — `?symbol=` param, `router.replace` after predict, watchlist quick-launch (#228)
 - VWAP intraday overlay — dashed line + ±1σ bands on 1D/5D intervals (#228)
+- Dividend & Income card (Feature 26): `GET /dividends/{symbol}` (yfinance, Redis 6h) + `DividendIncomeCard` — forward yield, annual rate, payout ratio, 5-yr avg yield, ex-date, YoY growth; clean non-payer empty state.
 
 ### Navigation & Architecture
 - App Shell sidebar — collapsible, mobile bottom nav, `AppShellContext`, theme + auth in footer (#223)
