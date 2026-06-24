@@ -10,7 +10,7 @@ import { Search } from 'lucide-react';
 import { useAppShell } from '../../contexts/AppShellContext';
 import { useWatchlistContext } from '../../contexts/WatchlistContext';
 import MorningBriefingPanel from '../../components/MorningBriefingPanel';
-import SectorHeatmap from '../../components/SectorHeatmap';
+import SectorHeatmapPanel from '../../components/SectorHeatmapPanel';
 import TrendingSparklines from '../../components/TrendingSparklines';
 
 const EXCHANGES = [
@@ -103,7 +103,11 @@ export default function LandingPage() {
 
       {/* ── Morning briefing (self-fetching) ───────────────────────────── */}
       <Box sx={{ mb: 3 }}>
-        <MorningBriefingPanel isDark={isDark} primaryColor={primaryColor} />
+        <MorningBriefingPanel
+          isDark={isDark}
+          primaryColor={primaryColor}
+          onSelect={(t) => router.push(`/analysis?symbol=${encodeURIComponent(t)}`)}
+        />
       </Box>
 
       <Grid container spacing={3}>
@@ -181,14 +185,19 @@ export default function LandingPage() {
               tickers={TRENDING}
               isDark={isDark}
               extraSymbols={watchlist.map(w => w.symbol)}
+              onSelect={(s) => router.push(`/analysis?symbol=${encodeURIComponent(s)}`)}
             />
           </Paper>
         </Grid>
       </Grid>
 
-      {/* ── Sector heatmap (self-fetching) ─────────────────────────────── */}
+      {/* ── Sector overview (self-fetching, interactive) ───────────────── */}
       <Box sx={{ mt: 3 }}>
-        <SectorHeatmap isDark={isDark} primaryColor={primaryColor} />
+        <SectorHeatmapPanel
+          variant="overview"
+          onSelectTicker={(etf) => router.push(`/analysis?symbol=${encodeURIComponent(etf)}`)}
+          onViewAll={() => router.push('/sectors')}
+        />
       </Box>
     </Box>
   );

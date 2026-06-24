@@ -27,6 +27,9 @@ const INTERVAL_MAP: Record<string, { period: string; interval: string }> = {
 // Ranges whose bars are intraday (5m/15m/1h) — show HH:MM on the time axis.
 const INTRADAY_RANGES = new Set(['1d', '5d', '1m']);
 
+// localStorage key for the FIB overlay toggle (fiforesight: prefix convention).
+const FIB_LS_KEY = 'fiforesight:overlay:fib';
+
 interface Props {
   prediction:      PredictionData;
   symbol:          string;
@@ -56,7 +59,24 @@ export default function PriceChartCard({
   const [intervalData,     setIntervalData]     = useState<IntervalHistoryData | null>(null);
   const [historyLoading,   setHistoryLoading]   = useState(false);
   const [showVwap,         setShowVwap]         = useState(false);
-  // Track the last symbol we rendered for — reset interval when it changes
+  // FIB overlay visibility — persisted in localStorage (fiforesight: prefix),
+  // mirroring the SignalPanels sub-panel persistence pattern. Lazy initialiser
+  // restores it without an effect (no SSR pass here — this only renders after a
+  // client-side prediction fetch). Persisted across symbol switches by design.
+  const [showFib, setShowFib] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try { return localStorage.getItem(FIB_LS_KEY) === '1'; } catch { return false; }
+  });
+  const toggleFib = useCallback(() => {
+    setShowFib(v => {
+      const next = !v;
+      try { localStorage.setItem(FIB_LS_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+  // Track the last symbol we rendered for — reset interval when it changes.
+  // (Derived-state-during-render is React's recommended pattern for resetting
+  // state on a prop change — see "You Might Not Need an Effect".)
   const [lastSymbol, setLastSymbol] = useState(prediction.symbol);
   if (lastSymbol !== prediction.symbol) {
     setLastSymbol(prediction.symbol);
@@ -125,6 +145,18 @@ export default function PriceChartCard({
   const rsiSeries = isTwoYear
     ? (prediction.indicators?.rsi_series ?? [])
     : (intervalData?.rsi_series ?? []);
+
+  // Fibonacci retracement levels (F25) — only on the native 2Y view, where the
+  // indicator payload's swing high/low applies. Ordered by ratio (0.0 → 1.0).
+  const fib = prediction.indicators?.fibonacci ?? null;
+  const fibLevels = useMemo(
+    () => (fib
+      ? Object.entries(fib.levels)
+          .map(([ratio, price]) => ({ ratio, price }))
+          .sort((a, b) => Number(a.ratio) - Number(b.ratio))
+      : []),
+    [fib],
+  );
 
   const toggleSx = {
     '& .MuiToggleButton-root': {
@@ -247,6 +279,19 @@ export default function PriceChartCard({
               <ToggleButton value="vwap">VWAP</ToggleButton>
             </ToggleButtonGroup>
           )}
+
+          {/* Fibonacci retracement overlay — 2Y view only (uses /predict swing high/low) */}
+          {isTwoYear && fib && (
+            <ToggleButtonGroup
+              aria-label="fib-overlay"
+              value={showFib ? ['fib'] : []}
+              onChange={toggleFib}
+              size="small"
+              sx={toggleSx}
+            >
+              <ToggleButton value="fib">FIB</ToggleButton>
+            </ToggleButtonGroup>
+          )}
         </Box>
 
         {/* Indicators Guide (collapsible) */}
@@ -355,6 +400,9 @@ export default function PriceChartCard({
             resistance={isTwoYear ? (prediction.indicators?.resistance ?? []) : []}
             intraday={intraday}
             showVwap={intraday && showVwap}
+            fibLevels={isTwoYear ? fibLevels : []}
+            showFib={isTwoYear && showFib}
+            fibColor={theme.palette.warning.main}
             priceHeight={chartH}
           />
         </Box>

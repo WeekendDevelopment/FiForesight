@@ -141,6 +141,7 @@ export interface PredictionData {
     minus_di?:    number | null;
     obv_history?: number[] | null;
     divergences?: Divergences;
+    fibonacci?:   FibonacciLevels | null;
     rf_feature_importance?: FeatureImportance[];
     earnings_surprise?:     EarningsSurprise[];
   };
@@ -202,6 +203,16 @@ export interface ShortInterest {
   report_date:   string;
 }
 
+/** One sector ETF row from GET /api/sectors/heatmap (F23). */
+export interface SectorRow {
+  sector: string;
+  etf: string;
+  price: number;
+  return1d: number;
+  return5d: number | null;
+  source?: string;   // data provider, e.g. "yfinance"
+}
+
 export interface DirectionForecast {
   /** "up" | "down" — predicted next-day direction. */
   direction:      'up' | 'down';
@@ -235,6 +246,13 @@ export interface Divergences {
   rsi_bearish:  boolean;
   macd_bullish: boolean;
   macd_bearish: boolean;
+}
+
+export interface FibonacciLevels {
+  swing_high: number;
+  swing_low:  number;
+  direction:  'up' | 'down';
+  levels:     Record<string, number>;   // "0.0".."1.0" -> price
 }
 
 export interface FeatureImportance {
@@ -568,4 +586,38 @@ export interface AnalystTargets {
   hold:             number;
   sell:             number;
   strongSell:       number;
+}
+
+// ── Equity Screener (F24) ────────────────────────────────────────────────────
+export interface ScreenerFilter {
+  sector?: string;
+  minPE?: number;
+  maxPE?: number;
+  minRSI?: number;
+  maxRSI?: number;
+  minBeta?: number;
+  maxBeta?: number;
+  minDividendYield?: number;
+  sortBy?: string;
+  sortDir?: 'asc' | 'desc';
+  limit?: number;
+}
+
+export interface ScreenerRow {
+  symbol:        string;
+  name:          string;
+  sector:        string;
+  marketCap:     number | null;
+  peRatio:       number | null;
+  forwardPE:     number | null;
+  beta:          number | null;
+  dividendYield: number | null;
+  revenueGrowth: number | null;
+  rsi:           number | null;
+  price:         number | null;
+}
+
+export interface ScreenerResult {
+  results: ScreenerRow[];
+  total:   number;
 }

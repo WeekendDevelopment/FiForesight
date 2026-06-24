@@ -15,9 +15,15 @@ interface IndexEntry {
 interface Props {
   isDark: boolean;
   primaryColor: string;
+  /** When provided, analysis-safe tickers become clickable and call this with the symbol. */
+  onSelect?: (ticker: string) => void;
 }
 
-export default function MorningBriefingPanel({ isDark, primaryColor }: Props) {
+// Indices like ^VIX / ^TNX carry a caret the backend symbol validator rejects,
+// so they can't be analyzed — only plain tickers (ETFs) are click-to-load.
+const isAnalyzable = (ticker: string): boolean => /^[A-Za-z0-9.\-:]{1,15}$/.test(ticker);
+
+export default function MorningBriefingPanel({ isDark, primaryColor, onSelect }: Props) {
   const [indices, setIndices] = useState<IndexEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -70,9 +76,15 @@ export default function MorningBriefingPanel({ isDark, primaryColor }: Props) {
                 ? (isDark ? 'rgba(22,101,52,0.25)' : 'rgba(220,252,231,0.65)')
                 : (isDark ? 'rgba(153,27,27,0.25)' : 'rgba(254,226,226,0.65)');
 
+            const clickable = !!onSelect && isAnalyzable(item.ticker);
             return (
               <Box
                 key={item.ticker}
+                onClick={clickable ? () => onSelect!(item.ticker) : undefined}
+                role={clickable ? 'button' : undefined}
+                tabIndex={clickable ? 0 : undefined}
+                onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect!(item.ticker); } } : undefined}
+                title={clickable ? `Analyze ${item.ticker}` : undefined}
                 sx={{
                   flexShrink: 0,
                   background: bg,
@@ -82,6 +94,9 @@ export default function MorningBriefingPanel({ isDark, primaryColor }: Props) {
                   py: 0.75,
                   minWidth: 76,
                   textAlign: 'center',
+                  cursor: clickable ? 'pointer' : 'default',
+                  transition: 'transform 120ms ease',
+                  '&:hover': clickable ? { transform: 'translateY(-2px)', borderColor: `${color}66` } : undefined,
                 }}
               >
                 <Typography sx={{ fontWeight: 800, fontSize: '0.68rem', color, lineHeight: 1.2 }}>

@@ -13,9 +13,11 @@ interface Props {
   tickers:      string[];
   isDark:       boolean;
   extraSymbols?: string[];  // watchlist symbols to append as ?extra=
+  /** When provided, each tile becomes clickable and calls this with the symbol. */
+  onSelect?:    (symbol: string) => void;
 }
 
-export default function TrendingSparklines({ tickers, isDark, extraSymbols }: Props) {
+export default function TrendingSparklines({ tickers, isDark, extraSymbols, onSelect }: Props) {
   const [data,       setData]       = useState<SparklineTicker[]>([]);
   const [loading,    setLoading]    = useState(false);
   const lastFetchRef                = useRef<number>(0);
@@ -107,13 +109,22 @@ export default function TrendingSparklines({ tickers, isDark, extraSymbols }: Pr
                 : (isDark ? '#ff0055' : '#dc2626');
               const pts    = (ticker.bars ?? []).map(b => ({ v: b.c }));
 
+              const clickable = !!onSelect;
               return (
                 <Box
                   key={ticker.symbol}
+                  onClick={clickable ? () => onSelect!(ticker.symbol) : undefined}
+                  role={clickable ? 'button' : undefined}
+                  tabIndex={clickable ? 0 : undefined}
+                  onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect!(ticker.symbol); } } : undefined}
+                  title={clickable ? `Analyze ${ticker.symbol}` : undefined}
                   sx={{
                     p: '6px 8px', borderRadius: 1.5, border: `1px solid ${border}`,
                     background: bg, display: 'flex', alignItems: 'center', gap: 1,
                     minWidth: 0,
+                    cursor: clickable ? 'pointer' : 'default',
+                    transition: 'transform 120ms ease, border-color 120ms ease',
+                    '&:hover': clickable ? { transform: 'translateY(-2px)', borderColor: lineC } : undefined,
                   }}
                 >
                   {/* Sparkline */}

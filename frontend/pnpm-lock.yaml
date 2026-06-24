@@ -54,8 +54,8 @@ importers:
         specifier: ^1.29.1
         version: 1.29.1(react@19.2.7)
       react-plotly.js:
-        specifier: ^3.0.0
-        version: 3.0.0(plotly.js@3.6.0(mapbox-gl@1.13.3))(react@19.2.7)
+        specifier: ^4.0.0
+        version: 4.0.0(plotly.js@3.6.0(mapbox-gl@1.13.3))(react@19.2.7)
       recharts:
         specifier: ^3.8.1
         version: 3.8.1(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react-is@19.2.4)(react@19.2.7)(redux@5.0.1)
@@ -2866,8 +2866,9 @@ packages:
     peerDependencies:
       react: '>=16.13.1'
 
-  react-plotly.js@3.0.0:
-    resolution: {integrity: sha512-4syFBxzhzDKG2ztbJNeKjjbgJj05kzJh5MB3lU1PuY2d2WHs/bfuaK06x5eJUgfMk5DMcuOXdV7UWRuew02ylw==}
+  react-plotly.js@4.0.0:
+    resolution: {integrity: sha512-spKsIYganLXUOoeiUVzUHby1Ea4kK/UKdNRKlxFRfkcB6HlvO1zguqWIdQKwa2AkE+IuCc8lMSy1zmLA6hcgBg==}
+    engines: {node: '>=18'}
     peerDependencies:
       plotly.js: '>=3.0.0'
       react: ^18.0.0 || ^19.0.0
@@ -6432,10 +6433,9 @@ snapshots:
       jerrypick: 1.1.2
       react: 19.2.7
 
-  react-plotly.js@3.0.0(plotly.js@3.6.0(mapbox-gl@1.13.3))(react@19.2.7):
+  react-plotly.js@4.0.0(plotly.js@3.6.0(mapbox-gl@1.13.3))(react@19.2.7):
     dependencies:
       plotly.js: 3.6.0(mapbox-gl@1.13.3)
-      prop-types: 15.8.1
       react: 19.2.7
 
   react-redux@9.2.0(@types/react@19.2.17)(react@19.2.7)(redux@5.0.1):

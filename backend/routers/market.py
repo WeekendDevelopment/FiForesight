@@ -9,11 +9,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import yfinance as yf
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 from slowapi.util import get_remote_address
 from scipy.stats import norm
 
 from config import Config
 from dependencies import yf_svc, limiter, fred_svc, insider_svc
+from redis_cache import cache_get, cache_set
+from screener_service import build_universe_snapshot
 
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-:]{1,15}$")
 
@@ -690,59 +693,100 @@ async def ipo_calendar(request: Request, refresh: bool = False) -> Dict[str, Any
 
 
 # ---------------------------------------------------------------------------
-# Sector Heatmap
+# Sector Heatmap (F23)
 # ---------------------------------------------------------------------------
+# Single source of truth for sector data: per-ETF 1D + 5D return with full GICS
+# names. Feeds both the dedicated "Sectors" tab and the compact landing overview.
 
-SECTOR_ETFS = [
-    ("XLK",  "Technology"),
-    ("XLF",  "Financials"),
-    ("XLE",  "Energy"),
-    ("XLV",  "Health Care"),
-    ("XLY",  "Cons. Discret."),
-    ("XLP",  "Cons. Staples"),
-    ("XLI",  "Industrials"),
-    ("XLB",  "Materials"),
-    ("XLRE", "Real Estate"),
-    ("XLU",  "Utilities"),
-    ("XLC",  "Comm. Services"),
-]
+SECTOR_ETF_MAP = {
+    "Technology": "XLK",
+    "Healthcare": "XLV",
+    "Financials": "XLF",
+    "Energy": "XLE",
+    "Consumer Discretionary": "XLY",
+    "Consumer Staples": "XLP",
+    "Industrials": "XLI",
+    "Materials": "XLB",
+    "Utilities": "XLU",
+    "Real Estate": "XLRE",
+    "Communication Services": "XLC",
+}
 
 
-@router.get("/sectors")
+@router.get("/sectors/heatmap")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def sector_heatmap(request: Request):
-    """Returns 1-day % change for 11 SPDR sector ETFs. Cached 15 min."""
+async def get_sector_heatmap(request: Request) -> List[Dict[str, Any]]:
+    """11 GICS sector ETFs with 1D + 5D % returns. Cached 15 min."""
     from redis_cache import cache_get, cache_set
-    CACHE_KEY = "sectors:heatmap"
+    CACHE_KEY = "sectors:heatmap:f23"
     cached = await cache_get(CACHE_KEY)
     if cached:
         return cached
 
-    def _fetch_sectors():
-        results = []
-        for ticker, label in SECTOR_ETFS:
+    def _closes_for(raw, etf):
+        """Close series for one ETF from a yf.download frame. Handles the grouped
+        (multi-ticker) and flat (single-ticker retry) column layouts; raises
+        KeyError when the ticker was dropped from a grouped batch."""
+        try:
+            return raw[etf]["Close"].dropna()
+        except KeyError:
+            # A single-ticker download isn't grouped by ticker.
+            return raw["Close"].dropna()
+
+    def _download_rows(etfs: List[str]) -> Dict[str, Dict[str, Any]]:
+        raw = yf.download(
+            " ".join(etfs), period="6d", auto_adjust=True,
+            progress=False, group_by="ticker",
+        )
+        out: Dict[str, Dict[str, Any]] = {}
+        # iterate the canonical map so each row keeps its full sector name
+        for sector, etf in SECTOR_ETF_MAP.items():
+            if etf not in etfs:
+                continue
             try:
-                hist = yf.Ticker(ticker).history(period="5d", interval="1d")
-                if hist is None or len(hist) < 2:
-                    results.append({"ticker": ticker, "label": label, "change_pct": None, "price": None})
+                closes = _closes_for(raw, etf)
+                if len(closes) < 2:
                     continue
-                prev_close = float(hist["Close"].iloc[-2])
-                last_close = float(hist["Close"].iloc[-1])
-                change_pct = round((last_close - prev_close) / prev_close * 100, 2) if prev_close else None
-                results.append({"ticker": ticker, "label": label, "change_pct": change_pct, "price": round(last_close, 2)})
-            except Exception as _exc:
-                logger.debug("[SECTORS] fetch failed for %s: %s", ticker, _exc)
-                results.append({"ticker": ticker, "label": label, "change_pct": None, "price": None})
-        return results
+                ret_1d = (closes.iloc[-1] / closes.iloc[-2] - 1) * 100
+                ret_5d = (closes.iloc[-1] / closes.iloc[0] - 1) * 100 if len(closes) >= 5 else None
+                out[etf] = {
+                    "sector": sector,
+                    "etf": etf,
+                    "price": round(float(closes.iloc[-1]), 2),
+                    "return1d": round(float(ret_1d), 2),
+                    "return5d": round(float(ret_5d), 2) if ret_5d is not None else None,
+                    "source": "yfinance",
+                }
+            except Exception as e:
+                logger.warning(f"sector heatmap {etf}: {e}")
+        return out
+
+    def _fetch() -> List[Dict[str, Any]]:
+        all_etfs = list(SECTOR_ETF_MAP.values())
+        rows = _download_rows(all_etfs)
+        # yfinance intermittently drops a ticker from a grouped batch (transient).
+        # Retry just the missing ones once so a sector doesn't silently vanish.
+        missing = [etf for etf in all_etfs if etf not in rows]
+        if missing:
+            logger.info("sector heatmap retrying %d missing ETFs: %s", len(missing), missing)
+            rows.update(_download_rows(missing))
+        # Emit in canonical sector order.
+        return [rows[etf] for etf in all_etfs if etf in rows]
 
     try:
-        data = await asyncio.wait_for(asyncio.to_thread(_fetch_sectors), timeout=12.0)
-    except asyncio.TimeoutError:
-        logger.warning("[SECTORS] upstream fetch timed out")
-        raise HTTPException(status_code=504, detail="Market data temporarily unavailable")
-    payload = {"sectors": data}
-    await cache_set(CACHE_KEY, payload, ttl_seconds=900)
-    return payload
+        result = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=12.0)
+    except Exception as e:
+        logger.error(f"sector heatmap: {e}")
+        raise HTTPException(status_code=502, detail="Could not fetch sector data")
+
+    # No usable rows for any ETF => treat as an upstream failure (provider outage),
+    # not an empty-but-OK response, so the UI can show its error state.
+    if not result:
+        logger.warning("sector heatmap returned no usable ETF rows")
+        raise HTTPException(status_code=502, detail="Could not fetch sector data")
+
+    await cache_set(CACHE_KEY, result, ttl_seconds=900)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1163,3 +1207,68 @@ async def analyst_targets(request: Request, symbol: str) -> Dict[str, Any]:
 
     await cache_set(cache_key, result, ttl_seconds=21600)  # 6h TTL
     return result
+
+
+# ---------------------------------------------------------------------------
+# Equity Screener (Light Edition, F24)
+# ---------------------------------------------------------------------------
+class ScreenerFilter(BaseModel):
+    """Filter/sort criteria for the curated-universe screener. All bounds optional."""
+    sector: Optional[str] = None          # e.g. "Technology"
+    minPE: Optional[float] = None
+    maxPE: Optional[float] = None
+    minRSI: Optional[float] = None
+    maxRSI: Optional[float] = None
+    minBeta: Optional[float] = None
+    maxBeta: Optional[float] = None
+    minDividendYield: Optional[float] = None
+    sortBy: str = "marketCap"             # marketCap | peRatio | rsi | dividendYield
+    sortDir: str = "desc"                 # asc | desc
+    limit: int = 25
+
+
+_SCREENER_SORT_KEYS = {"marketCap", "peRatio", "forwardPE", "beta", "rsi", "dividendYield", "revenueGrowth"}
+
+
+@router.post("/screener")
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def run_screener(request: Request, filters: ScreenerFilter) -> Dict[str, Any]:
+    """Filter & sort the curated ~50-stock universe (F24).
+
+    Builds the universe snapshot on-demand (one yfinance row per ticker), caches
+    it in Redis for 1h, then applies the requested numeric/sector filters and sort
+    in-memory. Returns ``{results, total}`` where ``total`` is the post-filter count
+    and ``results`` is capped at ``limit``. 60/min via the read-only limiter.
+    """
+    cache_key = "screener:universe"
+    snapshot = await cache_get(cache_key)
+    if not isinstance(snapshot, list) or not snapshot:
+        snapshot = await build_universe_snapshot()
+        if snapshot:
+            await cache_set(cache_key, snapshot, ttl_seconds=3600)  # 1h TTL
+
+    rows = snapshot or []
+    if filters.sector:
+        rows = [r for r in rows if r.get("sector") == filters.sector]
+    if filters.minPE is not None:
+        rows = [r for r in rows if r.get("peRatio") is not None and r["peRatio"] >= filters.minPE]
+    if filters.maxPE is not None:
+        rows = [r for r in rows if r.get("peRatio") is not None and r["peRatio"] <= filters.maxPE]
+    if filters.minRSI is not None:
+        rows = [r for r in rows if r.get("rsi") is not None and r["rsi"] >= filters.minRSI]
+    if filters.maxRSI is not None:
+        rows = [r for r in rows if r.get("rsi") is not None and r["rsi"] <= filters.maxRSI]
+    if filters.minBeta is not None:
+        rows = [r for r in rows if r.get("beta") is not None and r["beta"] >= filters.minBeta]
+    if filters.maxBeta is not None:
+        rows = [r for r in rows if r.get("beta") is not None and r["beta"] <= filters.maxBeta]
+    if filters.minDividendYield is not None:
+        rows = [r for r in rows
+                if r.get("dividendYield") is not None and r["dividendYield"] >= filters.minDividendYield]
+
+    sort_key = filters.sortBy if filters.sortBy in _SCREENER_SORT_KEYS else "marketCap"
+    reverse = filters.sortDir == "desc"
+    rows = sorted(rows, key=lambda x: (x.get(sort_key) or 0), reverse=reverse)
+
+    limit = max(1, min(filters.limit, 50))
+    return {"results": rows[:limit], "total": len(rows)}
