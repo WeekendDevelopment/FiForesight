@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+import pandas as pd
 import yfinance as yf
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -1204,6 +1205,89 @@ async def analyst_targets(request: Request, symbol: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"analyst_targets {sym}: {e}")
         raise HTTPException(status_code=502, detail="Could not fetch analyst targets")
+
+    await cache_set(cache_key, result, ttl_seconds=21600)  # 6h TTL
+    return result
+
+
+@router.get("/dividends/{symbol}")
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def dividends(request: Request, symbol: str) -> Dict[str, Any]:
+    """Dividend / income profile for ``symbol``. Redis-cached 6h; 502 on fetch
+    failure. Non-payers return {"symbol", "paysDividend": False}. 60/min."""
+    from redis_cache import cache_get, cache_set
+
+    sym = symbol.strip().upper()
+    if not _SYMBOL_RE.match(sym):
+        raise HTTPException(status_code=422, detail="Invalid symbol.")
+
+    cache_key = f"dividends:{sym}"
+    cached = await cache_get(cache_key)
+    if cached:
+        return cached
+
+    def _fetch() -> Dict[str, Any]:
+        t = yf.Ticker(sym)
+        info = {}
+        try:
+            info = t.info or {}
+        except Exception:
+            info = {}
+
+        def _num(v):  # reuse the NaN-safe coercion style from analyst_targets
+            try:
+                if v is None:
+                    return None
+                n = float(v)
+                return None if not math.isfinite(n) else (int(n) if n.is_integer() else n)
+            except (TypeError, ValueError):
+                return None
+
+        # Sanitize through _num first so a NaN/inf from yfinance becomes None and
+        # never reaches JSON serialization (allow_nan=False would 500 the response).
+        div_yield = _num(info.get("dividendYield"))
+        rate = info.get("dividendRate")
+        pays = bool(rate) or bool(div_yield)
+
+        # dividend growth: compare trailing-12mo dividends vs the prior 12mo
+        growth_pct = None
+        try:
+            divs = t.dividends  # pandas Series indexed by date
+            if divs is not None and len(divs) >= 2:
+                cutoff = divs.index.max()
+                last_12 = divs[divs.index > (cutoff - pd.Timedelta(days=365))].sum()
+                prev_12 = divs[(divs.index <= (cutoff - pd.Timedelta(days=365))) &
+                               (divs.index > (cutoff - pd.Timedelta(days=730)))].sum()
+                if prev_12 > 0:
+                    growth_pct = round((last_12 / prev_12 - 1) * 100, 1)
+        except Exception:
+            growth_pct = None
+
+        ex_date = info.get("exDividendDate")
+        ex_iso = None
+        if ex_date:
+            try:
+                ex_iso = datetime.utcfromtimestamp(int(ex_date)).strftime("%Y-%m-%d")
+            except Exception:
+                ex_iso = None
+
+        return {
+            "symbol": sym,
+            "paysDividend": pays,
+            "dividendYield": round(div_yield * 100, 2) if div_yield is not None else None,
+            "dividendRate": _num(rate),
+            "payoutRatio": round(_num(info.get("payoutRatio")) * 100, 1)
+                if _num(info.get("payoutRatio")) is not None else None,
+            "fiveYearAvgYield": _num(info.get("fiveYearAvgDividendYield")),
+            "exDividendDate": ex_iso,
+            "dividendGrowthPct": growth_pct,
+        }
+
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=12.0)
+    except Exception as e:
+        logger.error(f"dividends {sym}: {e}")
+        raise HTTPException(status_code=502, detail="Could not fetch dividend data")
 
     await cache_set(cache_key, result, ttl_seconds=21600)  # 6h TTL
     return result
