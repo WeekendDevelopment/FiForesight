@@ -1221,7 +1221,10 @@ async def dividends(request: Request, symbol: str) -> Dict[str, Any]:
     if not _SYMBOL_RE.match(sym):
         raise HTTPException(status_code=422, detail="Invalid symbol.")
 
-    cache_key = f"dividends:{sym}"
+    # Versioned key: the v2 bump busts any v1 payloads cached under the earlier
+    # (mis-scaled ×100) yield format so a format change takes effect on deploy
+    # instead of waiting out the 6h TTL.
+    cache_key = f"dividends:v2:{sym}"
     cached = await cache_get(cache_key)
     if cached:
         return cached
