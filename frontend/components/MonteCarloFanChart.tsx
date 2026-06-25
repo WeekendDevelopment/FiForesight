@@ -216,7 +216,7 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol, r
               { icon: '🐂🐻', term: 'Bull / Bear case', desc: 'The best 10% of outcomes (Bull) and the worst 10% (Bear). 80% of all simulated paths fall between these two lines — that\'s your likely range.' },
               { icon: '⚠️', term: 'VaR 95 (Risk gauge)', desc: 'Stands for "Value at Risk." If you held this stock for 5 days, this is the most you\'d expect to lose in 95 out of 100 scenarios. Lower = safer.' },
               { icon: '🏔️', term: '3D Surface', desc: 'A 3D view where mountain peaks show the most likely price for each day. Taller peak = higher chance of landing there. Open it from the "3D Surface" button.' },
-              { icon: '🎲', term: 'How it works', desc: 'The simulation uses the stock\'s real historical data (daily returns and volatility) to generate 1,000 realistic random price paths — like rolling the dice 1,000 times.' },
+              { icon: '🎲', term: 'How it works', desc: 'The simulation resamples the stock\'s own real daily moves (with replacement) to build 1,000 price paths — like reshuffling its actual history 1,000 times. Using real moves keeps the fat tails (big rare drops) a plain bell-curve model would miss.' },
             ].map(({ icon, term, desc }) => (
               <Box key={term} sx={{ display: 'flex', gap: 0.5, alignItems: 'flex-start' }}>
                 <Typography sx={{ fontSize: 11, lineHeight: 1.2, flexShrink: 0 }}>{icon}</Typography>

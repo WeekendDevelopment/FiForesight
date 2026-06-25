@@ -100,7 +100,7 @@ export interface PredictionData {
   prediction: {
     highRange: string;
     lowRange:  string;
-    trend:     'Bullish' | 'Bearish';
+    trend:     'Bullish' | 'Bearish' | 'Neutral';
   };
   analystNote:  string;
   confidence:   string;
@@ -144,6 +144,7 @@ export interface PredictionData {
     fibonacci?:   FibonacciLevels | null;
     rf_feature_importance?: FeatureImportance[];
     earnings_surprise?:     EarningsSurprise[];
+    candle_pattern?:        CandlePattern | null;
   };
   juryAnalysts?: AnalystJuror[];
   modelWeights?: { prophet: number; sarima: number; rf: number };
@@ -267,6 +268,13 @@ export interface EarningsSurprise {
   surprise_pct: number | null;
 }
 
+/** Latest daily candlestick pattern (entry-trigger candle for a swing setup). */
+export interface CandlePattern {
+  pattern:     string;                              // e.g. "Bullish Engulfing"
+  direction:   'bullish' | 'bearish' | 'neutral';
+  description: string;
+}
+
 // Sub-panel indicators toggleable on the price chart (persisted in localStorage).
 export type SubPanelKey = 'stoch' | 'adx' | 'obv';
 
@@ -281,13 +289,25 @@ export interface TradeSetupResponse {
   target_3:                number;
   risk_reward:             string;
   setup_type:              string;
-  direction?:              'Long' | 'Short';   // trade side
+  direction?:              'Long' | 'Short' | 'Neutral';   // trade side ('Neutral' = no clean setup)
   rationale:               string;
   risk_per_share:          number;
   risk_pct:                number;
   suggested_position_pct:  number;
   atr_14?:                 number | null;
   atr_multiplier?:         number | null;
+  /** False when the setup contradicts the forecast, the trend is mixed, or reward < risk. */
+  actionable?:             boolean;
+  /** One-line explanation shown in place of the levels when not actionable. */
+  conflict_note?:          string | null;
+  /** Swing entry trigger — what to wait for at the entry zone (candle confirmation). */
+  entry_trigger?:          string | null;
+  /** "confirmed" once a matching daily candle has printed, else "pending". */
+  confirmation?:           'confirmed' | 'pending' | null;
+  /** CFD-ready framing — same setup expressed for a CFD broker. */
+  cfd_side?:               'Buy' | 'Sell' | null;
+  cfd_margin_pct?:         number | null;
+  cfd_note?:               string | null;
 }
 
 export interface ChatMessage {

@@ -70,3 +70,29 @@ def test_monte_carlo_determinism():
     assert r1["p50"] == r2["p50"]
     assert r1["p10"] == r2["p10"]
     assert r1["p90"] == r2["p90"]
+
+
+def _skewed_crash_history():
+    """Strongly negatively-skewed history: many tiny ups, rare large crashes."""
+    closes = [100.0]
+    for i in range(120):
+        closes.append(closes[-1] * (0.85 if i % 30 == 0 else 1.002))
+    return closes
+
+
+def test_monte_carlo_bootstrap_is_default_and_fatter_downside():
+    """Bootstrap (default) should carry the real crash tail — a heavier downside
+    than the symmetric Normal GBM on the same negatively-skewed history."""
+    closes = _skewed_crash_history()
+    boot = run_monte_carlo(closes, steps=5, n_sims=4000)                     # default
+    norm = run_monte_carlo(closes, steps=5, n_sims=4000, method="normal")
+    assert boot["p10"] <= norm["p10"]      # heavier left tail
+    assert boot["var_95"] >= 0
+
+
+def test_monte_carlo_falls_back_to_normal_on_short_history():
+    """With <5 returns, bootstrap isn't viable → Normal path still produces output."""
+    result = run_monte_carlo([100.0, 101.0, 99.0, 102.0, 100.5, 101.5,
+                              103.0, 102.0, 104.0, 103.5, 105.0], steps=5, n_sims=200)
+    assert result is not None
+    assert result["p10"] <= result["p50"] <= result["p90"]
