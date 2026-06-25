@@ -310,6 +310,35 @@ export interface TradeSetupResponse {
   cfd_note?:               string | null;
 }
 
+/** Intraday day-trade setup — VWAP-anchored Opening Range Breakout (ORB). */
+export interface DayTradeSetup {
+  available:      boolean;
+  strategy:       string;
+  /** ok | market_closed | forming | conflict | no_setup */
+  status:         string;
+  message:        string;
+  direction:      'Long' | 'Short' | 'Neutral';
+  entry:          number | null;
+  stop:           number | null;
+  targets:        number[] | null;
+  risk_reward:    string | null;
+  entry_trigger:  string | null;
+  confirmation:   'active' | 'pending' | null;
+  levels: {
+    or_high:      number;
+    or_low:       number;
+    vwap:         number;
+    session_high: number;
+    session_low:  number;
+    last:         number;
+    n_bars:       number;
+    or_complete:  boolean;
+  } | null;
+  cfd_side:       'Buy' | 'Sell' | null;
+  cfd_margin_pct: number | null;
+  cfd_note:       string | null;
+}
+
 export interface ChatMessage {
   role:    'user' | 'assistant';
   content: string;
