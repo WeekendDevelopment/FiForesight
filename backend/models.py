@@ -731,12 +731,16 @@ def detect_candle_patterns(
                         "description": "Long upper wick, small body — sellers rejected higher prices."}
 
         # ── Inside Bar (consolidation; direction neutral) ──
-        if h2 < h1 and l2 > l1:
+        # Require a real range on the last bar: a synthetic/flat live bar
+        # (h2 == l2, appended when the current day has no real bar yet) sits
+        # inside the prior range and would otherwise trip a false "Inside Bar".
+        if rng2 > 0 and h2 < h1 and l2 > l1:
             return {"pattern": "Inside Bar", "direction": "neutral",
                     "description": "Range contained within the prior bar — consolidation; breakout pending."}
 
         return None
-    except Exception:
+    except Exception as exc:
+        logger.debug("[CANDLE] detect_candle_patterns failed: %s", exc, exc_info=True)
         return None
 
 

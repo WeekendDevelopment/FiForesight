@@ -637,6 +637,18 @@ export interface AnalystTargets {
   strongSell:       number;
 }
 
+// ── Dividend & Income (F26) ──────────────────────────────────────────────────
+export interface DividendInfo {
+  symbol:            string;
+  paysDividend:      boolean;
+  dividendYield:     number | null;   // percent
+  dividendRate:      number | null;   // $/yr
+  payoutRatio:       number | null;   // percent
+  fiveYearAvgYield:  number | null;   // percent
+  exDividendDate:    string | null;   // YYYY-MM-DD
+  dividendGrowthPct: number | null;   // YoY %
+}
+
 // ── Equity Screener (F24) ────────────────────────────────────────────────────
 export interface ScreenerFilter {
   sector?: string;

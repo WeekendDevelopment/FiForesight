@@ -1,4 +1,5 @@
 # backend/routers/trade.py
+import asyncio
 import json
 import logging
 import re
@@ -393,7 +394,13 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
                 f"Stop: ${stop_loss:.2f} | Targets: ${target_1:.2f} / ${target_2:.2f} / ${target_3:.2f}\n"
                 f"Write one sentence explaining why this {direction} {setup_type} trade setup makes sense."
             )
-            raw = await analyst_jury_svc._call_groq("llama-3.3-70b-versatile", system, user)
+            # Bound the external call (the httpx client allows up to 35s) so a
+            # slow Groq response can't hang the request — falls back to the
+            # template rationale below on timeout, same as any other failure.
+            raw = await asyncio.wait_for(
+                analyst_jury_svc._call_groq("llama-3.3-70b-versatile", system, user),
+                timeout=12.0,
+            )
             rationale = raw.strip()
         except Exception as exc:
             logger.warning("[TRADE-SETUP] Groq rationale failed: %s", exc)

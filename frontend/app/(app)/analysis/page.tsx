@@ -37,6 +37,7 @@ import StockChatPanel    from '../../../components/StockChatPanel';
 import { useIndicatorSignals } from '../../../hooks/useIndicatorSignals';
 import DCFCard               from '../../../components/DCFCard';
 import AnalystTargetsCard     from '../../../components/AnalystTargetsCard';
+import DividendIncomeCard      from '../../../components/DividendIncomeCard';
 import InsiderTransactionsCard from '../../../components/InsiderTransactionsCard';
 import SectorContextChip       from '../../../components/SectorContextChip';
 import GapExplainerBanner    from '../../../components/GapExplainerBanner';
@@ -505,6 +506,11 @@ function AnalysisContent() {
                   data={analystTargets}
                   loading={analystTargetsLoading}
                 />
+
+                {/* ── Dividend & Income (F26) ───────────────────────── */}
+                {/* Self-fetches /api/dividends/{symbol} on symbol change; renders
+                    its own loading / non-payer empty states. */}
+                <DividendIncomeCard key={prediction.symbol} symbol={prediction.symbol} />
 
                 {/* ── Insider Transactions (SEC EDGAR Form 4) ───────── */}
                 <InsiderTransactionsCard

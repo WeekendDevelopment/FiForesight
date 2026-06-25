@@ -90,9 +90,11 @@ def test_monte_carlo_bootstrap_is_default_and_fatter_downside():
     assert boot["var_95"] >= 0
 
 
-def test_monte_carlo_falls_back_to_normal_on_short_history():
-    """With <5 returns, bootstrap isn't viable → Normal path still produces output."""
+def test_monte_carlo_normal_method_produces_output():
+    """method="normal" forces the Normal GBM path (the bootstrap fallback) and
+    must still return ordered percentile output."""
     result = run_monte_carlo([100.0, 101.0, 99.0, 102.0, 100.5, 101.5,
-                              103.0, 102.0, 104.0, 103.5, 105.0], steps=5, n_sims=200)
+                              103.0, 102.0, 104.0, 103.5, 105.0],
+                             steps=5, n_sims=200, method="normal")
     assert result is not None
     assert result["p10"] <= result["p50"] <= result["p90"]

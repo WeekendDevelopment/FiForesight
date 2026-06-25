@@ -5,6 +5,7 @@ All external calls are mocked; no network required.
 from typing import Any, Dict, List, Tuple
 from unittest.mock import patch, AsyncMock, MagicMock
 import importlib as _il
+import warnings
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -60,8 +61,10 @@ def _reset_rate_limiter():
     """
     try:
         limiter.reset()
-    except Exception:
-        pass
+    except Exception as exc:
+        # Best-effort: if the storage backend can't be reset, tests still proceed
+        # (they'll just share the limit window) — surface it so it's not silent.
+        warnings.warn(f"limiter.reset() failed: {exc}", RuntimeWarning, stacklevel=2)
     yield
 
 

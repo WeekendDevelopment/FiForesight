@@ -113,7 +113,6 @@ export default function SignalCoherencePanel({ prediction, isDark, primaryColor 
   const bull = signals.filter(s => s.dir === 'bull').length;
   const bear = signals.filter(s => s.dir === 'bear').length;
   const neut = signals.filter(s => s.dir === 'neutral').length;
-  const total = signals.length || 1;
   const decisive = bull + bear;
   const conflict = bull > 0 && bear > 0;
   const coherence = decisive > 0 ? Math.max(bull, bear) / decisive : 0;
