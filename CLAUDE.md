@@ -34,7 +34,7 @@ FiForesight/
 │   │   ├── predict.py          # /health /debug /predict /sparklines /compare
 │   │   ├── simulation.py       # /simulation/suggest /simulation/performance /simulation/state
 │   │   ├── trade.py            # /trade-setup /chat
-│   │   ├── market.py           # /dcf /options /ipo/calendar /earnings/calendar /sectors/heatmap (F23) /briefing /orderbook /macro/snapshot /insider/{symbol} (F15) /screener (F24)
+│   │   ├── market.py           # /dcf /options /ipo/calendar /earnings/calendar /sectors/heatmap (F23) /sectors/rotation (F27) /briefing /orderbook /macro/snapshot /insider/{symbol} (F15) /screener (F24)
 │   │   ├── analytics.py        # /analytics/accuracy/{symbol} /analytics/sentiment/{symbol}
 │   │   ├── portfolio.py        # /portfolio/holdings (GET/POST/DELETE) /portfolio/summary (auth-gated)
 │   │   ├── alerts.py           # /alerts/rules (CRUD) /alerts/fires /alerts/subscribe /alerts/evaluate [cron] (Feature 9)

@@ -73,6 +73,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - URL-persistent analysis tab — `?symbol=` param, `router.replace` after predict, watchlist quick-launch (#228)
 - VWAP intraday overlay — dashed line + ±1σ bands on 1D/5D intervals (#228)
 - Dividend & Income card (Feature 26): `GET /dividends/{symbol}` (yfinance, Redis 6h) + `DividendIncomeCard` — forward yield, annual rate, payout ratio, 5-yr avg yield, ex-date, YoY growth; clean non-payer empty state.
+- Sector Rotation leaderboard (Feature 27): `GET /sectors/rotation` (11 GICS ETFs' relative strength vs SPY over 1M/3M/6M + RRG-lite quadrant, Redis 1h) + `/rotation` page (leaderboard table + quadrant scatter, click-to-analyze). Reuses the heatmap batch-download machinery.
 
 ### Navigation & Architecture
 - App Shell sidebar — collapsible, mobile bottom nav, `AppShellContext`, theme + auth in footer (#223)
@@ -193,6 +194,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - ~~Macro dashboard (`/macro` tab)~~ ✅ SHIPPED (Feature 15) — standalone FRED tab: 5 stat cards, T10Y2Y trend line, 30d-delta bar chart, inversion banner
 - International markets — yfinance supports non-US tickers; exchange detection already exists · `[Value: Med]` `[Effort: Med]`
 - ~~Analyst price target range~~ ✅ SHIPPED (Feature 21, PR #267) — `GET /analyst-targets/{symbol}`, `AnalystTargetsCard` (low/mean/high range bar + current marker + rating breakdown) below `DCFCard`
+- "Setups today" hint — scan the user's watchlist and flag which tickers have a *clean* (actionable) swing and/or day-trade setup, so users aren't hunting ticker-by-ticker. The coherence gate (PR #288/#289) correctly returns "no clean trade" on most choppy-day tickers (~3/10 actionable in a basket scan), so this surfaces the few that pass without loosening the gate. Likely a small badge/count in the Watchlist panel + an endpoint that fans out `/trade-setup` + `/day-trade-setup` per watchlist symbol (reuse Redis cache; one row each). · `[Value: High]` `[Effort: Med]`
 
 ### Architecture & Infra
 - Custom alert rule builder — price cross, RSI threshold, % move triggers; needs auth + background worker + notification channel · `[Value: High]` `[Effort: High]`
