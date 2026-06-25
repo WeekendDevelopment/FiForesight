@@ -1,4 +1,5 @@
 # backend/routers/trade.py
+import asyncio
 import json
 import logging
 import re
@@ -18,6 +19,13 @@ logger = logging.getLogger(__name__)
 
 # Regex matching the same safe-symbol set used by /jury/reanalyze and services.py
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-:]{1,15}$")
+
+# Candlestick patterns recognised by models.detect_candle_patterns. The pattern
+# name arrives client→server, so we only echo it back into the trigger text when
+# it's one of these known values (never trust arbitrary strings).
+_KNOWN_PATTERNS = {
+    "Bullish Engulfing", "Bearish Engulfing", "Hammer", "Shooting Star", "Inside Bar",
+}
 
 # Strip newlines + ASCII control characters from context interpolation values
 _CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -50,6 +58,17 @@ class TradeSetupRequest(BaseModel):
     # compatibility — falls back to the support/resistance % stop when absent.
     atr_14: Optional[float] = None
     conservative: bool = False
+    # 5-day ensemble forecast central path endpoint (forecastDays[-1].predicted).
+    # When supplied, the setup is checked for coherence with the model: a short
+    # whose targets sit below a price the forecast projects HIGHER (or a long
+    # below a falling forecast) is flagged non-actionable instead of being shown
+    # as a tradeable edge. Optional for backward compatibility.
+    forecast_close: Optional[float] = None
+    # Latest daily candlestick pattern (from /predict indicators.candle_pattern).
+    # Turns the entry into a real trigger — "wait for X at $level" — and marks the
+    # setup confirmed when a matching reversal candle has already printed.
+    candle_pattern: Optional[str] = None
+    candle_pattern_dir: Optional[str] = None   # "bullish" | "bearish" | "neutral"
 
     @field_validator("symbol")
     @classmethod
@@ -66,6 +85,20 @@ class TradeSetupRequest(BaseModel):
     def validate_atr(cls, v: Optional[float]) -> Optional[float]:
         if v is not None and v < 0:
             raise ValueError("atr_14 must be non-negative")
+        return v
+
+    @field_validator("forecast_close")
+    @classmethod
+    def validate_forecast_close(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and v <= 0:
+            raise ValueError("forecast_close must be > 0")
+        return v
+
+    @field_validator("candle_pattern_dir")
+    @classmethod
+    def validate_candle_dir(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ("bullish", "bearish", "neutral"):
+            raise ValueError("candle_pattern_dir must be bullish, bearish, or neutral")
         return v
 
     @field_validator("current_price")
@@ -105,13 +138,28 @@ class TradeSetupResponse(BaseModel):
     target_3: float
     risk_reward: str
     setup_type: str
-    direction: str          # "Long" | "Short" — trade side
+    direction: str          # "Long" | "Short" | "Neutral" — trade side ("Neutral" = no clean setup)
     rationale: str
     risk_per_share: float
     risk_pct: float
     suggested_position_pct: float
     atr_14: Optional[float] = None
     atr_multiplier: Optional[float] = None
+    # Coherence gate: False when the setup contradicts the 5-day forecast, the
+    # trend is mixed, or reward < risk. The frontend mutes/hides the levels and
+    # surfaces `conflict_note` instead of presenting a misleading "edge".
+    actionable: bool = True
+    conflict_note: Optional[str] = None
+    # Swing entry trigger derived from the latest daily candle (Option A):
+    # entry_trigger = what to wait for; confirmation = "confirmed" | "pending".
+    entry_trigger: Optional[str] = None
+    confirmation: Optional[str] = None
+    # CFD-ready framing — the same setup expressed for a CFD broker (e.g. T212):
+    # which side to open, the margin a typical retail leverage implies, and the
+    # financing/spread caveats that erode a leveraged multi-day hold.
+    cfd_side: Optional[str] = None        # "Buy" | "Sell"
+    cfd_margin_pct: Optional[float] = None
+    cfd_note: Optional[str] = None
 
 
 @router.post("/trade-setup", response_model=TradeSetupResponse)
@@ -229,35 +277,143 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
     else:
         setup_type = "Range Consolidation"
 
-    # Rationale via Groq (~80 tokens)
+    # ── Coherence gate (forecast-aware) ───────────────────────────────────────
+    # The trend chose the geometry above, but presenting a short whose targets
+    # sit below a price the 5-day model expects to RISE — or any setup that risks
+    # more than it can win — is exactly the contradiction users call out. Resolve
+    # it honestly: flag the setup non-actionable rather than dressing up a bad
+    # trade with entry/stop/target levels.
+    trend_dir = {"Bullish": "up", "Bearish": "down"}.get(req.trend, "flat")
+
+    forecast_dir = "flat"
+    if req.forecast_close is not None and req.forecast_close > 0:
+        if req.forecast_close > p * 1.01:        # >1% above spot over 5 days
+            forecast_dir = "up"
+        elif req.forecast_close < p * 0.99:
+            forecast_dir = "down"
+
+    rr_ratio = reward / risk          # both floored at 0.01 in the branches above
+    conflict = (
+        (trend_dir == "up"   and forecast_dir == "down") or
+        (trend_dir == "down" and forecast_dir == "up")
+    )
+
+    actionable    = True
+    conflict_note: Optional[str] = None
+    if trend_dir == "flat":
+        actionable    = False
+        direction     = "Neutral"
+        setup_type    = "No Clean Setup"
+        conflict_note = (
+            "Trend is mixed — no directional edge right now. Treat the entry zone as a "
+            "watch range, not a trade."
+        )
+    elif conflict:
+        actionable    = False
+        direction     = "Neutral"
+        setup_type    = "Conflicting Signals"
+        fdir = "higher" if forecast_dir == "up" else "lower"
+        conflict_note = (
+            f"Signals disagree: the {req.trend.lower()} trend favours a {trend_dir} move, "
+            f"but the 5-day forecast projects {fdir}. No clean trade — wait for them to align."
+        )
+    elif rr_ratio < 1.0:
+        actionable    = False
+        setup_type    = "Unfavorable R:R"
+        conflict_note = (
+            f"Risk outweighs reward at current levels (R:R {risk_reward}) — not a "
+            f"high-quality {direction.lower()} setup."
+        )
+
+    # ── Swing entry trigger (Option A — candle confirmation) ──────────────────
+    # A setup is a *plan*: wait for price to reach the entry zone AND for a
+    # confirming reversal candle, then enter. We surface that trigger explicitly
+    # instead of implying "enter now". `confirmation` is "confirmed" when a daily
+    # candle matching the side has already printed, else "pending".
+    entry_trigger: Optional[str] = None
+    confirmation: Optional[str]  = None
+    if actionable:
+        want_dir = "bullish" if direction == "Long" else "bearish"
+        pattern_ok = (
+            req.candle_pattern in _KNOWN_PATTERNS
+            and req.candle_pattern_dir == want_dir
+        )
+        if pattern_ok:
+            confirmation  = "confirmed"
+            entry_trigger = (
+                f"{req.candle_pattern} printed at the entry zone "
+                f"(${entry_low:.2f}–${entry_high:.2f}) — trigger active."
+            )
+        else:
+            confirmation  = "pending"
+            candles = "engulfing / hammer" if want_dir == "bullish" else "engulfing / shooting star"
+            entry_trigger = (
+                f"Wait for a {want_dir} reversal candle ({candles}) in the entry zone "
+                f"(${entry_low:.2f}–${entry_high:.2f}) before entering — don't chase."
+            )
+
+    # ── CFD-ready framing ─────────────────────────────────────────────────────
+    # The setup is instrument-agnostic; this expresses it for a CFD broker. KEY
+    # point: leverage only changes the *margin* posted — the risk is still the
+    # stop distance, so the 1%-rule size above is unchanged. We surface the side,
+    # the implied margin at a typical retail leverage, and the carrying costs that
+    # quietly erode a leveraged multi-day hold (financing per night + spread).
+    cfd_side: Optional[str]        = None
+    cfd_margin_pct: Optional[float] = None
+    cfd_note: Optional[str]        = None
+    if actionable:
+        cfd_leverage   = 5.0   # typical EU retail major-stock CFD cap (broker-dependent)
+        cfd_side       = "Buy" if direction == "Long" else "Sell"
+        cfd_margin_pct = round(100.0 / cfd_leverage, 1)
+        cfd_note = (
+            f"Place as a {cfd_side} CFD — same stop & targets. At {cfd_leverage:.0f}:1, "
+            f"margin ≈ {cfd_margin_pct:.0f}% of notional, but size by the stop (risk is "
+            f"unchanged). Budget spread + overnight financing (~4–5 nights on a 5-day "
+            f"swing); check your broker's rate."
+        )
+
+    # Rationale: a generated sentence for a real setup; the plain conflict note
+    # otherwise (also skips the Groq call when there's no edge to explain).
     rationale = (
         f"{setup_type} setup with RSI at {rsi:.0f} and a {req.trend.lower()} trend; "
         f"entry zone ${entry_low:.2f}–${entry_high:.2f} targets ${target_2:.2f}."
     )
-    try:
-        system = (
-            "You are a trading analyst. "
-            "Respond in exactly one plain-text sentence — no markdown, no bullet points."
-        )
-        user = (
-            f"Symbol: {req.symbol} | Price: ${p:.2f} | RSI: {rsi:.1f} | "
-            f"Trend: {req.trend} | Sentiment: {req.sentiment_label}\n"
-            f"Side: {direction} | Entry: ${entry_low:.2f}–${entry_high:.2f} | "
-            f"Stop: ${stop_loss:.2f} | Targets: ${target_1:.2f} / ${target_2:.2f} / ${target_3:.2f}\n"
-            f"Write one sentence explaining why this {direction} {setup_type} trade setup makes sense."
-        )
-        raw = await analyst_jury_svc._call_groq("llama-3.3-70b-versatile", system, user)
-        rationale = raw.strip()
-    except Exception as exc:
-        logger.warning("[TRADE-SETUP] Groq rationale failed: %s", exc)
+    if not actionable:
+        rationale = conflict_note or rationale
+    else:
+        try:
+            system = (
+                "You are a trading analyst. "
+                "Respond in exactly one plain-text sentence — no markdown, no bullet points."
+            )
+            user = (
+                f"Symbol: {req.symbol} | Price: ${p:.2f} | RSI: {rsi:.1f} | "
+                f"Trend: {req.trend} | Sentiment: {req.sentiment_label}\n"
+                f"Side: {direction} | Entry: ${entry_low:.2f}–${entry_high:.2f} | "
+                f"Stop: ${stop_loss:.2f} | Targets: ${target_1:.2f} / ${target_2:.2f} / ${target_3:.2f}\n"
+                f"Write one sentence explaining why this {direction} {setup_type} trade setup makes sense."
+            )
+            # Bound the external call (the httpx client allows up to 35s) so a
+            # slow Groq response can't hang the request — falls back to the
+            # template rationale below on timeout, same as any other failure.
+            raw = await asyncio.wait_for(
+                analyst_jury_svc._call_groq("llama-3.3-70b-versatile", system, user),
+                timeout=12.0,
+            )
+            rationale = raw.strip()
+        except Exception as exc:
+            logger.warning("[TRADE-SETUP] Groq rationale failed: %s", exc)
 
     # Position sizing — 1% portfolio-risk rule.
     # 1.0 / risk_pct_decimal already yields position_pct (e.g. 5% risk → 20% position).
-    # Cap at 50% so a very tight stop doesn't suggest an outsized allocation.
+    # Cap at 50% so a very tight stop doesn't suggest an outsized allocation. A
+    # non-actionable setup suggests 0% — we don't size a trade we're not endorsing.
     entry_mid_final = (entry_low + entry_high) / 2
     risk_ps  = round(max(abs(entry_mid_final - stop_loss), 0.01), 4)
     risk_pct_val = round(risk_ps / entry_mid_final * 100, 2)
-    suggested_pct = round(min(1.0 / (risk_pct_val / 100), 50.0), 1)
+    suggested_pct = (
+        round(min(1.0 / (risk_pct_val / 100), 50.0), 1) if actionable else 0.0
+    )
 
     return TradeSetupResponse(
         entry_low=entry_low,
@@ -275,6 +431,13 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
         suggested_position_pct=suggested_pct,
         atr_14=round(req.atr_14, 4) if use_atr else None,
         atr_multiplier=atr_multiplier,
+        actionable=actionable,
+        conflict_note=conflict_note,
+        entry_trigger=entry_trigger,
+        confirmation=confirmation,
+        cfd_side=cfd_side,
+        cfd_margin_pct=cfd_margin_pct,
+        cfd_note=cfd_note,
     )
 
 

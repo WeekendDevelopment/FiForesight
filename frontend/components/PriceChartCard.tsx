@@ -181,7 +181,8 @@ export default function PriceChartCard({
             <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
               <Chip
                 label={`${prediction.prediction.trend} Trend`}
-                color={prediction.prediction.trend === 'Bullish' ? 'success' : 'error'}
+                color={prediction.prediction.trend === 'Bullish' ? 'success'
+                  : prediction.prediction.trend === 'Bearish' ? 'error' : 'default'}
                 size="small"
                 sx={{ fontWeight: 900, fontSize: '0.7rem' }}
               />

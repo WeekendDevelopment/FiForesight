@@ -5,6 +5,8 @@ All external calls are mocked; no network required.
 from typing import Any, Dict, List, Tuple
 from unittest.mock import patch, AsyncMock, MagicMock
 import importlib as _il
+import warnings
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
@@ -47,6 +49,23 @@ _test_app.include_router(market.router)
 _test_app.dependency_overrides[require_user] = lambda: "test-user-uuid"
 
 client = TestClient(_test_app)
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """Reset the shared in-memory limiter before each test.
+
+    The suite fires many /trade-setup + /market calls in well under a minute;
+    without this they accumulate against the per-IP limit and later tests get a
+    spurious 429. (Dedicated rate-limit behaviour is covered in test_security.py.)
+    """
+    try:
+        limiter.reset()
+    except Exception as exc:
+        # Best-effort: if the storage backend can't be reset, tests still proceed
+        # (they'll just share the limit window) — surface it so it's not silent.
+        warnings.warn(f"limiter.reset() failed: {exc}", RuntimeWarning, stacklevel=2)
+    yield
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +250,201 @@ def test_trade_setup_invalid_rsi() -> None:
 def test_trade_setup_high_below_low() -> None:
     resp = client.post("/trade-setup", json=_trade_payload(high_range=130.0, low_range=140.0))
     assert resp.status_code == 422
+
+
+# ── Coherence gate: forecast-aware, honesty-gated setups ──────────────────────
+
+def test_trade_setup_conflict_short_vs_rising_forecast() -> None:
+    """The GOOGL case: a bearish trend would build a short, but the 5-day forecast
+    projects HIGHER — the setup must be flagged non-actionable, not a fake short."""
+    payload = _trade_payload(
+        rsi=35.0, trend="Bearish", current_price=150.0,
+        high_range=160.0, low_range=140.0,
+        forecast_close=156.0,   # +4% over 5 days → forecast up, contradicts short
+    )
+    with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
+        resp = client.post("/trade-setup", json=payload)
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["actionable"] is False
+    assert d["direction"] == "Neutral"
+    assert d["setup_type"] == "Conflicting Signals"
+    assert d["conflict_note"]
+    assert d["suggested_position_pct"] == 0.0
+
+
+def test_trade_setup_conflict_long_vs_falling_forecast() -> None:
+    payload = _trade_payload(
+        rsi=55.0, trend="Bullish", current_price=150.0,
+        high_range=160.0, low_range=140.0,
+        forecast_close=144.0,   # −4% → forecast down, contradicts long
+    )
+    with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
+        resp = client.post("/trade-setup", json=payload)
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["actionable"] is False
+    assert d["direction"] == "Neutral"
+    assert d["setup_type"] == "Conflicting Signals"
+
+
+def test_trade_setup_aligned_forecast_is_actionable() -> None:
+    """Bullish trend + rising forecast agree → a real, actionable long."""
+    payload = _trade_payload(
+        rsi=55.0, trend="Bullish", current_price=150.0,
+        high_range=165.0, low_range=140.0,
+        forecast_close=158.0,   # +5% → forecast up, agrees with long
+    )
+    with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
+        resp = client.post("/trade-setup", json=payload)
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["actionable"] is True
+    assert d["direction"] == "Long"
+    assert d["suggested_position_pct"] > 0
+
+
+def test_trade_setup_neutral_trend_no_clean_setup() -> None:
+    """A mixed (Neutral) trend yields an honest 'No Clean Setup', not a forced long."""
+    with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
+        resp = client.post("/trade-setup", json=_trade_payload(rsi=50.0, trend="Neutral"))
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["actionable"] is False
+    assert d["direction"] == "Neutral"
+    assert d["setup_type"] == "No Clean Setup"
+    assert d["suggested_position_pct"] == 0.0
+
+
+def test_trade_setup_unfavorable_rr_flagged() -> None:
+    """A setup whose reward is smaller than its risk is flagged, not presented as an edge."""
+    payload = _trade_payload(
+        rsi=50.0, trend="Bearish", current_price=150.0,
+        high_range=152.0, low_range=149.0,   # tiny downside reward
+        atr_14=10.0,                         # huge ATR → wide stop = large risk
+    )
+    with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
+        resp = client.post("/trade-setup", json=payload)
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["actionable"] is False
+    assert d["setup_type"] == "Unfavorable R:R"
+    assert d["suggested_position_pct"] == 0.0
+
+
+def test_trade_setup_no_forecast_is_backward_compatible() -> None:
+    """Without forecast_close, behaviour is unchanged (no spurious conflict)."""
+    payload = _trade_payload(rsi=32.0, trend="Bearish", high_range=180.0, low_range=135.0)
+    with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
+        resp = client.post("/trade-setup", json=payload)
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["direction"] == "Short"
+    assert d["setup_type"] == "Breakdown Play"
+    assert d["actionable"] is True
+
+
+# ── Swing entry trigger: daily candle confirmation ────────────────────────────
+
+def test_trade_setup_entry_confirmed_by_matching_candle() -> None:
+    """An actionable long with a bullish candle already printed → confirmed trigger."""
+    payload = _trade_payload(
+        rsi=55.0, trend="Bullish", current_price=150.0,
+        high_range=165.0, low_range=140.0, forecast_close=158.0,
+        candle_pattern="Bullish Engulfing", candle_pattern_dir="bullish",
+    )
+    with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
+        resp = client.post("/trade-setup", json=payload)
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["actionable"] is True
+    assert d["confirmation"] == "confirmed"
+    assert "Bullish Engulfing" in d["entry_trigger"]
+
+
+def test_trade_setup_entry_pending_without_candle() -> None:
+    """Actionable long, no candle → pending trigger ('wait for ...')."""
+    payload = _trade_payload(
+        rsi=55.0, trend="Bullish", current_price=150.0,
+        high_range=165.0, low_range=140.0, forecast_close=158.0,
+    )
+    with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
+        resp = client.post("/trade-setup", json=payload)
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["confirmation"] == "pending"
+    assert "Wait for" in d["entry_trigger"]
+
+
+def test_trade_setup_entry_pending_when_candle_dir_mismatches() -> None:
+    """A bearish candle does not confirm a long → still pending."""
+    payload = _trade_payload(
+        rsi=55.0, trend="Bullish", current_price=150.0,
+        high_range=165.0, low_range=140.0, forecast_close=158.0,
+        candle_pattern="Shooting Star", candle_pattern_dir="bearish",
+    )
+    with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
+        resp = client.post("/trade-setup", json=payload)
+    assert resp.status_code == 200
+    assert resp.json()["confirmation"] == "pending"
+
+
+def test_trade_setup_no_trigger_when_not_actionable() -> None:
+    """A conflicted (non-actionable) setup carries no entry trigger."""
+    payload = _trade_payload(
+        rsi=35.0, trend="Bearish", current_price=150.0,
+        high_range=160.0, low_range=140.0, forecast_close=156.0,
+        candle_pattern="Bullish Engulfing", candle_pattern_dir="bullish",
+    )
+    with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
+        resp = client.post("/trade-setup", json=payload)
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["actionable"] is False
+    assert d["confirmation"] is None
+    assert d["entry_trigger"] is None
+
+
+def test_trade_setup_invalid_candle_dir_rejected() -> None:
+    resp = client.post("/trade-setup", json=_trade_payload(candle_pattern_dir="sideways"))
+    assert resp.status_code == 422
+
+
+# ── CFD-ready framing ─────────────────────────────────────────────────────────
+
+def test_trade_setup_cfd_framing_on_actionable_long() -> None:
+    payload = _trade_payload(
+        rsi=55.0, trend="Bullish", current_price=150.0,
+        high_range=165.0, low_range=140.0, forecast_close=158.0,
+    )
+    with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
+        resp = client.post("/trade-setup", json=payload)
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["cfd_side"] == "Buy"
+    assert d["cfd_margin_pct"] == 20.0          # 5:1 leverage → 20% margin
+    assert "CFD" in d["cfd_note"] and "financing" in d["cfd_note"]
+
+
+def test_trade_setup_cfd_side_sell_on_short() -> None:
+    payload = _trade_payload(
+        rsi=32.0, trend="Bearish", current_price=150.0,
+        high_range=180.0, low_range=135.0,   # aligned short (no forecast_close)
+    )
+    with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
+        resp = client.post("/trade-setup", json=payload)
+    assert resp.status_code == 200
+    assert resp.json()["cfd_side"] == "Sell"
+
+
+def test_trade_setup_no_cfd_framing_when_not_actionable() -> None:
+    payload = _trade_payload(rsi=50.0, trend="Neutral")
+    with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
+        resp = client.post("/trade-setup", json=payload)
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["cfd_side"] is None
+    assert d["cfd_note"] is None
 
 
 # ---------------------------------------------------------------------------

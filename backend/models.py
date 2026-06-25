@@ -616,6 +616,134 @@ def calculate_model_stats(prices: List[float]) -> Dict:
     return stats
 
 
+def classify_trend(
+    price: float,
+    sma50: Optional[float],
+    sma200: Optional[float],
+    trend_slope: Optional[float],
+    macd: Optional[float],
+    macd_signal: Optional[float],
+    rsi: Optional[float],
+) -> str:
+    """Composite short/medium-term trend label — "Bullish" | "Bearish" | "Neutral".
+
+    Replaces the old single-oscillator heuristic (``"Bullish" if rsi > 50``),
+    which mislabelled stocks (e.g. a name in a long-term uptrend reading
+    "Bearish" purely because RSI dipped below 50) and was the *sole* input to the
+    trade-setup direction. Here we average four independent structural/momentum
+    votes, each in {-1, +1}:
+
+      • price vs SMA50      — above = uptrend
+      • SMA50 vs SMA200     — golden/death cross context
+      • 20-day price slope  — sign of the recent drift
+      • MACD vs signal      — momentum confirmation
+
+    Each vote is skipped when its input is missing (so a <200-bar name still gets
+    a read from whatever is available). RSI is only a light tiebreaker inside the
+    neutral band — it never overrides structure. When no structural input exists
+    at all we fall back to the legacy RSI rule so the label is never empty.
+    """
+    score = 0.0
+    votes = 0
+    if sma50 is not None and price > 0:
+        score += 1 if price >= sma50 else -1
+        votes += 1
+    if sma50 is not None and sma200 is not None:
+        score += 1 if sma50 >= sma200 else -1
+        votes += 1
+    if trend_slope is not None and trend_slope != 0:
+        score += 1 if trend_slope > 0 else -1
+        votes += 1
+    if macd is not None and macd_signal is not None:
+        score += 1 if macd >= macd_signal else -1
+        votes += 1
+
+    if votes == 0:
+        # No structural signal available — keep the legacy behaviour as a floor.
+        return "Bullish" if (rsi if rsi is not None else 50) > 50 else "Bearish"
+
+    norm = score / votes          # -1 (all bearish) .. +1 (all bullish)
+    if norm >= 0.5:
+        return "Bullish"
+    if norm <= -0.5:
+        return "Bearish"
+    # Mixed structure — let RSI break the tie only when it is clearly stretched,
+    # otherwise call it honestly Neutral rather than forcing a side.
+    if rsi is not None:
+        if rsi >= 60:
+            return "Bullish"
+        if rsi <= 40:
+            return "Bearish"
+    return "Neutral"
+
+
+def detect_candle_patterns(
+    opens: List[float],
+    highs: List[float],
+    lows: List[float],
+    closes: List[float],
+) -> Optional[Dict]:
+    """Detect a confirmed candlestick pattern on the most recent daily bar.
+
+    Returns the single most significant pattern printed at the **last** bar — the
+    candle that would confirm/trigger a swing entry — or ``None``. Deterministic,
+    pure, and defensive: any length mismatch, missing value, or insufficient
+    history returns ``None`` so a bad bar never aborts ``/predict``.
+
+    Priority (strongest first): engulfing → hammer/shooting-star → inside bar.
+    Each result carries a ``direction`` (bullish / bearish / neutral) used to
+    decide whether it confirms a long or a short.
+    """
+    n = len(closes)
+    if n < 2 or not (len(opens) == len(highs) == len(lows) == n):
+        return None
+    try:
+        o1, h1, l1, c1 = opens[-2], highs[-2], lows[-2], closes[-2]   # prior bar
+        o2, h2, l2, c2 = opens[-1], highs[-1], lows[-1], closes[-1]   # last bar
+        if any(v is None for v in (o1, h1, l1, c1, o2, h2, l2, c2)):
+            return None
+
+        body2  = abs(c2 - o2)
+        rng2   = h2 - l2
+        upper2 = h2 - max(o2, c2)
+        lower2 = min(o2, c2) - l2
+
+        prev_bear = c1 < o1
+        prev_bull = c1 > o1
+        last_bull = c2 > o2
+        last_bear = c2 < o2
+
+        # ── Engulfing (strongest reversal signal) ──
+        if prev_bear and last_bull and o2 <= c1 and c2 >= o1 and body2 > 0:
+            return {"pattern": "Bullish Engulfing", "direction": "bullish",
+                    "description": "Last candle's body engulfs the prior down candle — bullish reversal."}
+        if prev_bull and last_bear and o2 >= c1 and c2 <= o1 and body2 > 0:
+            return {"pattern": "Bearish Engulfing", "direction": "bearish",
+                    "description": "Last candle's body engulfs the prior up candle — bearish reversal."}
+
+        # ── Hammer / Shooting Star (single-bar long-wick rejection) ──
+        if rng2 > 0 and body2 > 0:
+            if lower2 >= 2 * body2 and upper2 <= body2:
+                return {"pattern": "Hammer", "direction": "bullish",
+                        "description": "Long lower wick, small body — buyers rejected lower prices."}
+            if upper2 >= 2 * body2 and lower2 <= body2:
+                return {"pattern": "Shooting Star", "direction": "bearish",
+                        "description": "Long upper wick, small body — sellers rejected higher prices."}
+
+        # ── Inside Bar (consolidation; direction neutral) ──
+        # Require a real range on the last bar: a synthetic/flat live bar
+        # (h2 == l2, appended when the current day has no real bar yet) sits
+        # inside the prior range and would otherwise trip a false "Inside Bar".
+        if rng2 > 0 and h2 < h1 and l2 > l1:
+            return {"pattern": "Inside Bar", "direction": "neutral",
+                    "description": "Range contained within the prior bar — consolidation; breakout pending."}
+
+        return None
+    except Exception as exc:
+        logger.debug("[CANDLE] detect_candle_patterns failed: %s", exc, exc_info=True)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Per-model forecast helpers
 # ---------------------------------------------------------------------------
@@ -953,17 +1081,24 @@ def run_monte_carlo(
     closes: List[float],
     steps: int = 5,
     n_sims: int = 1000,
+    method: str = "bootstrap",
 ) -> Optional[Dict]:
     """
-    Geometric Brownian Motion Monte Carlo price path simulation.
+    Monte Carlo price-path simulation — fat-tailed by default.
 
-    Daily log-returns are simulated as:
+    ``method="bootstrap"`` (default): each simulated daily move is drawn (with
+    replacement) from THIS stock's *actual* historical daily log-returns. This
+    preserves the empirical fat tails and skew that a Normal/GBM model flattens,
+    so P10 / VaR-95 reflect the kind of moves the stock has really made rather
+    than an idealised bell curve that underestimates crashes.
+
+    ``method="normal"``: classic Geometric Brownian Motion fallback —
         Δlog(S_t) = (μ - σ²/2) + σ·Z_t,  Z_t ~ N(0,1)
-    and accumulated with np.cumsum to form each GBM path (Δt = 1 trading day).
+    used automatically when history is too short to bootstrap (<5 returns).
 
-    μ and σ are estimated from daily log-returns of closes.
-    Uses np.random.default_rng(seed=42) for reproducibility.
-    Returns None gracefully when fewer than 10 price points are available.
+    Paths are accumulated with np.cumsum (Δt = 1 trading day). μ and σ are
+    estimated from daily log-returns. Uses np.random.default_rng(seed=42) for
+    reproducibility. Returns None gracefully when <10 price points are available.
     """
     if len(closes) < 10:
         logger.warning(
@@ -978,15 +1113,24 @@ def run_monte_carlo(
         S0          = float(arr[-1])
 
         rng = np.random.default_rng(seed=42)
-        Z   = rng.standard_normal((n_sims, steps))
 
-        # GBM via cumulative log-returns (Δt = 1 trading day).
-        # Each column is an independent daily increment; np.cumsum builds
-        # temporally consistent Brownian-motion trajectories.
-        drift            = mu - 0.5 * sigma ** 2
-        step_log_returns = drift + sigma * Z          # per-step Δ log price
-        log_paths        = np.cumsum(step_log_returns, axis=1)
-        paths            = S0 * np.exp(log_paths)     # shape (n_sims, steps)
+        use_bootstrap = method == "bootstrap" and len(log_returns) >= 5
+        if use_bootstrap:
+            # Fat-tailed: resample the stock's real daily log-returns. Captures
+            # empirical tails + skew (a single −15% day in history can recur in a
+            # path), unlike the symmetric Normal which never produces moves it
+            # wasn't told to.
+            idx              = rng.integers(0, len(log_returns), size=(n_sims, steps))
+            step_log_returns = log_returns[idx]       # per-step Δ log price
+        else:
+            # Normal GBM fallback (thin-tailed). Δt = 1 trading day; np.cumsum
+            # builds temporally consistent Brownian-motion trajectories.
+            Z                = rng.standard_normal((n_sims, steps))
+            drift            = mu - 0.5 * sigma ** 2
+            step_log_returns = drift + sigma * Z
+
+        log_paths = np.cumsum(step_log_returns, axis=1)
+        paths     = S0 * np.exp(log_paths)            # shape (n_sims, steps)
 
         final     = paths[:, -1]
         p10       = float(np.percentile(final, 10))
@@ -1016,7 +1160,8 @@ def run_monte_carlo(
             })
 
         logger.info(
-            f"[MC] ✓ n_sims={n_sims}, steps={steps} | "
+            f"[MC] ✓ method={'bootstrap' if use_bootstrap else 'normal'}, "
+            f"n_sims={n_sims}, steps={steps} | "
             f"S0=${S0:.2f} → p10=${p10:.2f}, p50=${p50:.2f}, p90=${p90:.2f} | "
             f"prob_gain={prob_gain:.1f}%, VaR95=${var_95:.2f}"
         )

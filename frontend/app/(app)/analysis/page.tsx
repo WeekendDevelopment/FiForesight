@@ -30,6 +30,7 @@ import PriceChartCard    from '../../../components/PriceChartCard';
 import FundamentalsPanel      from '../../../components/FundamentalsPanel';
 import PeerComparisonPanel    from '../../../components/PeerComparisonPanel';
 import TradeSetupCard         from '../../../components/TradeSetupCard';
+import SignalCoherencePanel    from '../../../components/SignalCoherencePanel';
 import OrderBookPanel    from '../../../components/OrderBookPanel';
 import StockChatPanel    from '../../../components/StockChatPanel';
 import { useIndicatorSignals } from '../../../hooks/useIndicatorSignals';
@@ -109,6 +110,12 @@ function AnalysisContent() {
       sentiment_label: data.sentiment?.label ?? 'Neutral',
       var_95:          data.monteCarlo?.var_95 ?? null,
       atr_14:          data.indicators?.atr_14 ?? null,
+      // 5-day forecast central path endpoint — lets the backend flag a setup that
+      // contradicts the model (e.g. a short below a rising forecast).
+      forecast_close:  data.forecastDays?.[data.forecastDays.length - 1]?.predicted ?? null,
+      // Latest daily candle — turns the entry into a confirmation trigger.
+      candle_pattern:     data.indicators?.candle_pattern?.pattern   ?? null,
+      candle_pattern_dir: data.indicators?.candle_pattern?.direction ?? null,
     }, { headers: authHeaders })
       .then(r  => setTradeSetup(r.data))
       .catch(() => { /* non-fatal */ })
@@ -316,6 +323,13 @@ function AnalysisContent() {
                   sector={prediction.metrics?.sector}
                   onSelectTicker={(etf) => handlePredict(etf)}
                   isDark={isDark}
+                />
+
+                {/* ── Signal Coherence — one honest net read across the cards ── */}
+                <SignalCoherencePanel
+                  prediction={prediction}
+                  isDark={isDark}
+                  primaryColor={primaryColor}
                 />
 
                 {/* Price chart card */}

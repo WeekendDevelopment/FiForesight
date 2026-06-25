@@ -9,7 +9,8 @@ import pytest
 from backend.models import (
     MODELS_AVAILABLE,
     calculate_atr, calculate_stochastic, calculate_adx, calculate_obv,
-    detect_divergences, run_ensemble_forecast,
+    detect_divergences, run_ensemble_forecast, classify_trend,
+    detect_candle_patterns,
 )
 
 
@@ -206,3 +207,120 @@ def test_fetch_earnings_surprise_graceful_on_raise(monkeypatch):
     monkeypatch.setattr(services, "yf", type("YF", (), {"Ticker": staticmethod(_boom)}))
     monkeypatch.setattr(services, "YFINANCE_AVAILABLE", True)
     assert svc.fetch_earnings_surprise("AAPL") == []
+
+
+# == classify_trend (composite trend label) =================================
+
+def test_classify_trend_all_bullish():
+    """Price > SMA50 > SMA200, positive slope, MACD > signal → Bullish."""
+    assert classify_trend(
+        price=110.0, sma50=105.0, sma200=100.0,
+        trend_slope=0.5, macd=1.2, macd_signal=0.8, rsi=58.0,
+    ) == "Bullish"
+
+
+def test_classify_trend_all_bearish():
+    assert classify_trend(
+        price=90.0, sma50=95.0, sma200=100.0,
+        trend_slope=-0.5, macd=0.4, macd_signal=0.9, rsi=42.0,
+    ) == "Bearish"
+
+
+def test_classify_trend_mixed_is_neutral():
+    """Long-term up (price>SMA200, SMA50>SMA200) but short-term down (slope<0,
+    MACD<signal) and a mid RSI → honestly Neutral, not forced to a side."""
+    label = classify_trend(
+        price=101.0, sma50=100.0, sma200=98.0,
+        trend_slope=-0.3, macd=0.2, macd_signal=0.5, rsi=50.0,
+    )
+    assert label == "Neutral"
+
+
+def test_classify_trend_mixed_rsi_breaks_tie_when_stretched():
+    """Same mixed structure, but a stretched RSI tips the neutral band."""
+    assert classify_trend(
+        price=101.0, sma50=100.0, sma200=98.0,
+        trend_slope=-0.3, macd=0.2, macd_signal=0.5, rsi=65.0,
+    ) == "Bullish"
+    assert classify_trend(
+        price=101.0, sma50=100.0, sma200=98.0,
+        trend_slope=-0.3, macd=0.2, macd_signal=0.5, rsi=35.0,
+    ) == "Bearish"
+
+
+def test_classify_trend_no_structure_falls_back_to_rsi():
+    """With no SMAs/slope/MACD, the legacy RSI>50 rule is the floor (never empty)."""
+    assert classify_trend(
+        price=100.0, sma50=None, sma200=None,
+        trend_slope=None, macd=None, macd_signal=None, rsi=55.0,
+    ) == "Bullish"
+    assert classify_trend(
+        price=100.0, sma50=None, sma200=None,
+        trend_slope=None, macd=None, macd_signal=None, rsi=45.0,
+    ) == "Bearish"
+
+
+# == detect_candle_patterns (daily candle confirmation) =====================
+
+def test_candle_bullish_engulfing():
+    # prior bearish (100→96), last bullish body engulfs it (95→102)
+    op = [100.0, 95.0]
+    hi = [101.0, 103.0]
+    lo = [95.0, 94.0]
+    cl = [96.0, 102.0]
+    out = detect_candle_patterns(op, hi, lo, cl)
+    assert out and out["pattern"] == "Bullish Engulfing" and out["direction"] == "bullish"
+
+
+def test_candle_bearish_engulfing():
+    # prior bullish (100→104), last bearish body engulfs it (105→99)
+    op = [100.0, 105.0]
+    hi = [105.0, 106.0]
+    lo = [99.0, 98.0]
+    cl = [104.0, 99.0]
+    out = detect_candle_patterns(op, hi, lo, cl)
+    assert out and out["pattern"] == "Bearish Engulfing" and out["direction"] == "bearish"
+
+
+def test_candle_hammer():
+    # last bar: small body near top, long lower wick (lower >= 2x body)
+    op = [100.0, 100.0]
+    hi = [101.0, 101.5]
+    lo = [98.0, 96.0]
+    cl = [99.0, 101.0]
+    out = detect_candle_patterns(op, hi, lo, cl)
+    assert out and out["pattern"] == "Hammer" and out["direction"] == "bullish"
+
+
+def test_candle_shooting_star():
+    # last bar: small body near bottom, long upper wick (upper >= 2x body).
+    # prior bar bearish so the engulfing checks don't fire first.
+    op = [105.0, 101.0]
+    hi = [106.0, 106.0]
+    lo = [99.0, 99.5]
+    cl = [100.0, 100.0]
+    out = detect_candle_patterns(op, hi, lo, cl)
+    assert out and out["pattern"] == "Shooting Star" and out["direction"] == "bearish"
+
+
+def test_candle_inside_bar():
+    # last range contained in prior; not engulfing/hammer/star → Inside Bar (neutral)
+    op = [100.0, 98.0]
+    hi = [110.0, 105.0]
+    lo = [90.0, 95.0]
+    cl = [108.0, 102.0]
+    out = detect_candle_patterns(op, hi, lo, cl)
+    assert out and out["pattern"] == "Inside Bar" and out["direction"] == "neutral"
+
+
+def test_candle_none_when_no_pattern():
+    op = [100.0, 100.5]
+    hi = [110.0, 110.5]
+    lo = [90.0, 90.2]
+    cl = [100.2, 100.4]
+    assert detect_candle_patterns(op, hi, lo, cl) is None
+
+
+def test_candle_insufficient_or_mismatched_returns_none():
+    assert detect_candle_patterns([100.0], [101.0], [99.0], [100.0]) is None
+    assert detect_candle_patterns([100.0, 101.0], [101.0], [99.0], [100.0, 101.0]) is None

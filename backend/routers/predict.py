@@ -21,7 +21,8 @@ from models import (
     calculate_macd, calculate_bollinger_bands, calculate_sma_series,
     calculate_ema_series, calculate_support_resistance,
     calculate_atr, calculate_stochastic, calculate_adx, calculate_obv,
-    detect_divergences, calculate_fibonacci_levels,
+    detect_divergences, calculate_fibonacci_levels, classify_trend,
+    detect_candle_patterns,
     _skill_to_weights,
 )
 from services import DataCleaner, ANALYST_PERSONAS
@@ -1414,6 +1415,9 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     # Fibonacci retracement levels (Feature 25) — swing high/low over the chart
     # window. None when insufficient data; the frontend handles null gracefully.
     fibonacci = await asyncio.to_thread(calculate_fibonacci_levels, highs, lows)
+    # Candlestick pattern on the latest daily bar — the entry-trigger candle that
+    # confirms a swing setup. None when no pattern printed; never aborts /predict.
+    candle_pattern = await asyncio.to_thread(detect_candle_patterns, opens, highs, lows, closes)
     logger.info(
         "[STEP-4b#] ✓ Advanced signals — ATR-14=%s | Stoch %%K=%s %%D=%s | "
         "ADX=%s | OBV=%s pts | divergences=%s",
@@ -1877,6 +1881,24 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     )
     logger.info(f"[REQUEST] ════════════════ /predict ← {symbol} complete ════════════════")
 
+    # ── Composite trend label ────────────────────────────────────────────────
+    # Replaces the old single-oscillator heuristic (`rsi > 50`). Blends price
+    # structure (SMA50/200) + 20-day slope + MACD so the header badge and the
+    # trade-setup direction reflect the actual trend, not just where RSI sits.
+    def _last_valid(seq):
+        return next((v for v in reversed(seq) if v is not None), None)
+
+    trend_label = classify_trend(
+        price        = live_price,
+        sma50        = _last_valid(sma50),
+        sma200       = _last_valid(sma200),
+        trend_slope  = forecast.get("stats", {}).get("trend_slope"),
+        macd         = _last_valid(macd_data["macd"]),
+        macd_signal  = _last_valid(macd_data["signal"]),
+        rsi          = rsi,
+    )
+    logger.info(f"[TREND] {symbol} composite trend → {trend_label} (RSI={rsi:.1f})")
+
     return PredictionResponse(
         symbol       = symbol,
         currentPrice = f"{live_price:.2f}",
@@ -1884,7 +1906,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         prediction   = {
             "highRange": f"{forecast['high']:.2f}",
             "lowRange":  f"{forecast['low']:.2f}",
-            "trend":     "Bullish" if rsi > 50 else "Bearish",
+            "trend":     trend_label,
         },
         analystNote  = note,
         confidence   = forecast["conf"],
@@ -1910,6 +1932,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             "fibonacci":   fibonacci,
             "rf_feature_importance": forecast.get("rf_feature_importance", []),
             "earnings_surprise":     earnings_surprise,
+            "candle_pattern":        candle_pattern,
         },
         lastUpdated  = now.isoformat(),
         juryAnalysts  = jury,
