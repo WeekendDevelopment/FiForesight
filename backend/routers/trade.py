@@ -13,6 +13,7 @@ from slowapi.util import get_remote_address
 
 from config import Config
 from dependencies import analyst_jury_svc, limiter, require_user, _user_rate_key
+from day_trade_service import build_day_trade_setup
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -439,6 +440,47 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
         cfd_margin_pct=cfd_margin_pct,
         cfd_note=cfd_note,
     )
+
+
+# ---------------------------------------------------------------------------
+# Day-trade setup endpoint (intraday ORB + VWAP)
+# ---------------------------------------------------------------------------
+
+class DayTradeSetupRequest(BaseModel):
+    symbol: str
+    # Composite daily trend ("Bullish"/"Bearish"/"Neutral") — the bias the
+    # intraday setup must stay coherent with. Defaults to Neutral (pure VWAP).
+    daily_trend: str = "Neutral"
+
+    @field_validator("symbol")
+    @classmethod
+    def validate_symbol(cls, v: str) -> str:
+        s = (v or "").strip().upper()
+        if not _SYMBOL_RE.match(s):
+            raise ValueError("symbol must match [A-Za-z0-9.\\-:]{1,15}")
+        return s
+
+    @field_validator("daily_trend")
+    @classmethod
+    def validate_trend(cls, v: str) -> str:
+        if v not in ("Bullish", "Bearish", "Neutral"):
+            raise ValueError("daily_trend must be Bullish, Bearish, or Neutral")
+        return v
+
+
+@router.post("/day-trade-setup")
+@limiter.limit(lambda: Config.RATE_LIMIT_TRADE, key_func=_user_rate_key)
+async def day_trade_setup(
+    request: Request, req: DayTradeSetupRequest, _user: str = Depends(require_user)
+):
+    """Intraday VWAP-anchored Opening Range Breakout setup.
+
+    Fetches one 5-min snapshot (no streaming), computes the opening range + VWAP,
+    and returns a defined-risk ORB plan gated for coherence against the daily
+    trend. Always 200 with an ``available``/``status`` payload — a market-closed
+    or thin-data session degrades to a message, never a 500.
+    """
+    return await build_day_trade_setup(req.symbol, req.daily_trend)
 
 
 # ---------------------------------------------------------------------------

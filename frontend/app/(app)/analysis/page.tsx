@@ -30,6 +30,7 @@ import PriceChartCard    from '../../../components/PriceChartCard';
 import FundamentalsPanel      from '../../../components/FundamentalsPanel';
 import PeerComparisonPanel    from '../../../components/PeerComparisonPanel';
 import TradeSetupCard         from '../../../components/TradeSetupCard';
+import DayTradeSetupCard      from '../../../components/DayTradeSetupCard';
 import SignalCoherencePanel    from '../../../components/SignalCoherencePanel';
 import OrderBookPanel    from '../../../components/OrderBookPanel';
 import StockChatPanel    from '../../../components/StockChatPanel';
@@ -43,7 +44,7 @@ import GapExplainerBanner    from '../../../components/GapExplainerBanner';
 import ReversalRiskCard       from '../../../components/ReversalRiskCard';
 import DirectionForecastCard  from '../../../components/DirectionForecastCard';
 import MorningBriefingPanel   from '../../../components/MorningBriefingPanel';
-import type { PredictionData, IndicatorKey, TradeSetupResponse, DCFResult, AnalystTargets } from '../../../types';
+import type { PredictionData, IndicatorKey, TradeSetupResponse, DayTradeSetup, DCFResult, AnalystTargets } from '../../../types';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -82,6 +83,8 @@ function AnalysisContent() {
   const [chartMode,        setChartMode]        = useState<'line' | 'candle'>('line');
   const [tradeSetup,       setTradeSetup]       = useState<TradeSetupResponse | null>(null);
   const [tradeSetupLoading, setTradeSetupLoading] = useState(false);
+  const [dayTradeSetup,    setDayTradeSetup]    = useState<DayTradeSetup | null>(null);
+  const [dayTradeLoading,  setDayTradeLoading]  = useState(false);
   const [dcfData,          setDcfData]          = useState<DCFResult | null>(null);
   const [analystTargets,   setAnalystTargets]   = useState<AnalystTargets | null>(null);
   const [analystTargetsLoading, setAnalystTargetsLoading] = useState(false);
@@ -122,6 +125,18 @@ function AnalysisContent() {
       .finally(() => setTradeSetupLoading(false));
   };
 
+  const fetchDayTradeSetup = (data: PredictionData) => {
+    setDayTradeSetup(null);
+    setDayTradeLoading(true);
+    axios.post('/api/day-trade-setup', {
+      symbol:      data.symbol,
+      daily_trend: data.prediction.trend,   // gate intraday coherence vs the daily bias
+    }, { headers: authHeaders })
+      .then(r  => setDayTradeSetup(r.data))
+      .catch(() => { /* non-fatal */ })
+      .finally(() => setDayTradeLoading(false));
+  };
+
   const handlePredict = async (overrideSymbol?: string) => {
     // Determine the full symbol (may carry an exchange suffix, e.g. "AAPL:NASDAQ").
     let fullSymbol: string;
@@ -142,6 +157,7 @@ function AnalysisContent() {
     setLoading(true);
     setError(null);
     setTradeSetup(null);
+    setDayTradeSetup(null);
     setDcfData(null);
     setAnalystTargets(null);
     setAnalystTargetsLoading(false);
@@ -154,8 +170,10 @@ function AnalysisContent() {
       router.replace(`/analysis?symbol=${encodeURIComponent(baseSymbol)}`, { scroll: false });
       if (user) {
         fetchTradeSetup(response.data);
+        fetchDayTradeSetup(response.data);
       } else {
         setTradeSetup(null);
+        setDayTradeSetup(null);
       }
       // Fire-and-forget DCF fetch (non-blocking)
       axios.get(`/api/dcf/${baseSymbol}`)
@@ -199,6 +217,9 @@ function AnalysisContent() {
   useEffect(() => {
     if (session?.access_token && prediction && !tradeSetup && !tradeSetupLoading) {
       fetchTradeSetup(prediction);
+    }
+    if (session?.access_token && prediction && !dayTradeSetup && !dayTradeLoading) {
+      fetchDayTradeSetup(prediction);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.access_token, prediction]);
@@ -379,6 +400,16 @@ function AnalysisContent() {
                     title="Trade Setup"
                     message="Sign in to see entry zones, stop levels, and position sizing."
                     onSignIn={() => setAuthOpen(true)}
+                    isDark={isDark}
+                    primaryColor={primaryColor}
+                  />
+                )}
+
+                {/* ── Day-Trade Setup (intraday ORB+VWAP) ───────────── */}
+                {user && (
+                  <DayTradeSetupCard
+                    setup={dayTradeSetup}
+                    loading={dayTradeLoading}
                     isDark={isDark}
                     primaryColor={primaryColor}
                   />
