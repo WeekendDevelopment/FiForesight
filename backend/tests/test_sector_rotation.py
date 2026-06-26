@@ -172,3 +172,18 @@ def test_total_failure_502() -> None:
     with patch("backend.routers.market.yf.download", side_effect=RuntimeError("boom")):
         resp = client.get("/sectors/rotation")
     assert resp.status_code == 502
+
+
+def test_empty_rows_502() -> None:
+    # Download succeeds structurally but every series is too short for the 1M
+    # lookback (len < 22), so no sector yields a row → empty result → 502.
+    tickers = list(SECTOR_ETF_MAP.values()) + ["SPY"]
+    cols = pd.MultiIndex.from_product([tickers, _FIELDS])
+    short = pd.DataFrame(index=range(10), columns=cols, dtype="float64")
+    for t in tickers:
+        for field in _FIELDS:
+            short[(t, field)] = list(np.linspace(100.0, 105.0, 10))
+
+    with patch("backend.routers.market.yf.download", return_value=short):
+        resp = client.get("/sectors/rotation")
+    assert resp.status_code == 502

@@ -808,7 +808,7 @@ async def sector_rotation(request: Request) -> List[Dict[str, Any]]:
 
     tickers = list(SECTOR_ETF_MAP.values()) + ["SPY"]
 
-    def _closes(raw, etf):
+    def _closes(raw: pd.DataFrame, etf: str) -> pd.Series:
         """Close series for one ticker — handles grouped (multi-ticker) and
         flat (single-ticker) column layouts, mirroring the heatmap helper."""
         try:
@@ -816,7 +816,7 @@ async def sector_rotation(request: Request) -> List[Dict[str, Any]]:
         except KeyError:
             return raw["Close"].dropna()
 
-    def _ret(closes, bars):
+    def _ret(closes: pd.Series, bars: int) -> Optional[float]:
         if len(closes) <= bars:
             return None
         return (closes.iloc[-1] / closes.iloc[-bars - 1] - 1) * 100
