@@ -148,7 +148,16 @@ export default function SectorRotationPage() {
                           key={row.etf}
                           hover
                           onClick={() => handleSelect(row.etf)}
-                          sx={{ cursor: 'pointer' }}
+                          role="link"
+                          tabIndex={0}
+                          aria-label={`Analyze ${row.sector} (${row.etf})`}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSelect(row.etf); }
+                          }}
+                          sx={{
+                            cursor: 'pointer',
+                            '&:focus-visible': { outline: `2px solid ${primaryColor}`, outlineOffset: -2 },
+                          }}
                         >
                           <TableCell>
                             <Typography variant="body2" sx={{ fontWeight: 700 }}>{row.sector}</Typography>

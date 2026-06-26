@@ -861,7 +861,7 @@ async def sector_rotation(request: Request) -> List[Dict[str, Any]]:
         return rows
 
     try:
-        result = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=15.0)
+        result = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=12.0)
     except Exception as e:
         logger.error(f"sector rotation: {e}")
         raise HTTPException(status_code=502, detail="Could not fetch rotation data")

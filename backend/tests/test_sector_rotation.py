@@ -100,11 +100,13 @@ def test_quadrant_classification() -> None:
     ]
     for case in rows:
         level, mom = case["rs_3m"], case["rs_momentum"]
+        # Mirrors the endpoint's classification; the guards after the first branch
+        # are deliberately reduced (the static analyzer flags the implied ones).
         if level >= 0 and mom >= 0:
             q = "leading"
-        elif level >= 0 and mom < 0:
+        elif level >= 0:
             q = "weakening"
-        elif level < 0 and mom >= 0:
+        elif mom >= 0:
             q = "improving"
         else:
             q = "lagging"
