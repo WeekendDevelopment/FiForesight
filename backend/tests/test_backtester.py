@@ -88,6 +88,23 @@ def _build_app() -> TestClient:
     return TestClient(app)
 
 
+def test_backtest_success_200() -> None:
+    client = _build_app()
+    payload = {
+        "totalReturnPct": 12.34, "buyHoldReturnPct": 8.0, "cagrPct": 5.6,
+        "winRatePct": 60.0, "numTrades": 5, "maxDrawdownPct": -10.0,
+        "sharpe": 1.1, "equityCurve": [{"date": "2024-01-01", "strategy": 1.0, "buyHold": 1.0}],
+    }
+    with patch.object(market, "run_backtest", AsyncMock(return_value=payload)):
+        resp = client.post("/backtest",
+                           json={"symbol": "AAPL", "strategy": "sma_cross",
+                                 "params": {"fast": 20, "slow": 50}, "period": "2y"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body == payload
+    assert set(body) >= {"totalReturnPct", "numTrades", "sharpe", "equityCurve"}
+
+
 def test_unknown_strategy_422() -> None:
     client = _build_app()
     resp = client.post("/backtest", json={"symbol": "AAPL", "strategy": "bogus"})

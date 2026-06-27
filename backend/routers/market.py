@@ -1473,7 +1473,8 @@ async def backtest(request: Request, body: BacktestRequest) -> Dict[str, Any]:
         json.dumps(
             {"s": sym, "st": body.strategy, "p": body.params, "pe": body.period},
             sort_keys=True,
-        ).encode()
+        ).encode(),
+        usedforsecurity=False,
     ).hexdigest()
     cached = await cache_get(key)
     if cached:

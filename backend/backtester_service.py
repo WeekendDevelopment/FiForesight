@@ -88,13 +88,20 @@ def _run(df: pd.DataFrame, in_pos: pd.Series) -> dict:
     # trades = transitions flat->held (entry) and held->flat (exit)
     entries = held & ~held.shift(1).fillna(False)
     exits = ~held & held.shift(1).fillna(False)
+    # Trade P&L uses the SAME shifted interval as strat_ret: a position held over
+    # bars [e, x-1] earns close[x-1]/close[e-1]-1, so entry/exit prices reference
+    # the prior bar's close. Keeps the trades table coherent with the equity curve.
     trade_returns, in_trade, entry_px = [], False, None
-    for i, c in enumerate(close):
+    for i in range(len(close)):
         if entries.iloc[i]:
-            in_trade, entry_px = True, c
-        elif exits.iloc[i] and in_trade and entry_px:
-            trade_returns.append(c / entry_px - 1)
+            in_trade = True
+            entry_px = close.iloc[i - 1] if i > 0 else close.iloc[i]
+        elif exits.iloc[i] and in_trade and entry_px is not None:
+            exit_px = close.iloc[i - 1] if i > 0 else close.iloc[i]
+            trade_returns.append(exit_px / entry_px - 1)
             in_trade = False
+    if in_trade and entry_px is not None:  # close any position still open on the last bar
+        trade_returns.append(close.iloc[-1] / entry_px - 1)
     wins = sum(1 for r in trade_returns if r > 0)
     n = len(trade_returns)
     roll_max = equity.cummax()
@@ -123,16 +130,25 @@ def _run(df: pd.DataFrame, in_pos: pd.Series) -> dict:
 
 
 async def run_backtest(symbol: str, strategy: str, params: dict, period: str) -> dict:
-    """Fetch the window and simulate the curated strategy (bounded 20s)."""
+    """Fetch the window and simulate the curated strategy (bounded 12s)."""
     if strategy not in STRATEGIES:
         raise ValueError("unknown strategy")
     per = _PERIOD_MAP.get(period, "2y")
 
-    def _work():
+    def _work() -> dict:
         df = yf.Ticker(symbol).history(period=per, auto_adjust=True)
         if df is None or len(df) < 60:
             raise ValueError("insufficient history")
         in_pos = _signals(df, strategy, params)
         return _run(df, in_pos)
 
-    return await asyncio.wait_for(asyncio.to_thread(_work), timeout=20.0)
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(_work), timeout=12.0)
+    except asyncio.TimeoutError:
+        logger.warning("backtest timed out for %s/%s/%s", symbol, strategy, per)
+        raise
+    except ValueError:
+        raise  # insufficient history / bad input — surfaced to the caller as 422
+    except Exception:
+        logger.exception("backtest failed for %s/%s/%s", symbol, strategy, per)
+        raise
