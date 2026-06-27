@@ -97,6 +97,22 @@ def test_calendar_fallback_to_earnings_dates() -> None:
     assert future.strftime("%Y-%m-%d") in payload["calendar"]
 
 
+def test_fallback_ignores_past_only_dates() -> None:
+    # earnings_dates carries only past dates → no upcoming date → ticker dropped,
+    # never surfaced under a stale date key.
+    past = pd.Timestamp.now().normalize() - pd.Timedelta(days=30)
+    df = pd.DataFrame(index=pd.DatetimeIndex([past]), data={"EPS Estimate": [1.0]})
+    fake = _FakeTicker(calendar=None, earnings_dates=df)
+
+    client = _build_app()
+    with patch.object(market, "EARNINGS_WATCHLIST", ["MU"]), \
+            patch.object(market.yf, "Ticker", return_value=fake):
+        resp = client.get("/earnings/calendar")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["calendar"] == {}
+
+
 def test_bad_ticker_skipped() -> None:
     good = _FakeTicker(calendar={"Earnings Date": ["2026-07-15"]})
     bad = _FakeTicker(raise_on="calendar")

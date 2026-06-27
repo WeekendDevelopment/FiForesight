@@ -398,11 +398,12 @@ def _next_future_earnings_date(t: "yf.Ticker") -> Optional[str]:
     if df is None or not hasattr(df, "index") or len(df) == 0:
         return None
     now = pd.Timestamp.now(tz=getattr(df.index, "tz", None))
+    # Drop NaT/None sentinels and keep only upcoming dates — never surface a
+    # past earnings date as "upcoming" by falling back to max(index).
     future = [ts for ts in df.index if pd.notna(ts) and ts >= now]
-    pick = min(future) if future else max(df.index)
-    if pd.isna(pick):
+    if not future:
         return None
-    return str(pick)[:10]
+    return str(min(future))[:10]
 
 
 @router.get("/earnings/calendar")
