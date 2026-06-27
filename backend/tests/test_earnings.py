@@ -27,19 +27,24 @@ class _FakeFastInfo:
 class _FakeTicker:
     """Mimics the slice of yf.Ticker the endpoint touches."""
 
-    def __init__(self, calendar=None, earnings_dates=None, raise_on=None):
+    def __init__(
+        self,
+        calendar: object | None = None,
+        earnings_dates: "pd.DataFrame | None" = None,
+        raise_on: str | None = None,
+    ) -> None:
         self._calendar = calendar
         self._earnings_dates = earnings_dates
         self._raise_on = raise_on
         self.fast_info = _FakeFastInfo()
 
     @property
-    def calendar(self):
+    def calendar(self) -> object | None:
         if self._raise_on == "calendar":
             raise RuntimeError("yfinance boom")
         return self._calendar
 
-    def get_earnings_dates(self, limit: int = 8):
+    def get_earnings_dates(self, limit: int = 8) -> "pd.DataFrame":
         if self._earnings_dates is None:
             raise RuntimeError("no earnings dates for this ticker")
         return self._earnings_dates
