@@ -190,19 +190,23 @@ export default function PriceChartCard({
   const isTwoYear = selectedInterval === '2y';
   const intraday  = INTRADAY_RANGES.has(selectedInterval);
 
+  // Fibonacci retracement levels (F25) — only on the native 2Y view, where the
+  // indicator payload's swing high/low applies. Ordered by ratio (0.0 → 1.0).
+  const fib = prediction.indicators?.fibonacci ?? null;
+
   // True when at least one overlay/indicator is actually drawn on the current
-  // range — drives the legend empty-state (a "Clean view" shows nothing).
+  // range — drives the legend empty-state (a "Clean view" shows nothing). The
+  // fib branch uses the same `!!fib` guard as the toggle row + legend, so a
+  // saved overlays.fib=true on a ticker with no Fibonacci data doesn't wrongly
+  // suppress the empty-state.
   const anyOverlayVisible =
     indicators.length > 0 ||
-    (isTwoYear && (overlays.support || overlays.resistance || overlays.projection || overlays.fib)) ||
+    (isTwoYear && (overlays.support || overlays.resistance || overlays.projection || (overlays.fib && !!fib))) ||
     (intraday && overlays.vwap);
   const rsiSeries = isTwoYear
     ? (prediction.indicators?.rsi_series ?? [])
     : (intervalData?.rsi_series ?? []);
 
-  // Fibonacci retracement levels (F25) — only on the native 2Y view, where the
-  // indicator payload's swing high/low applies. Ordered by ratio (0.0 → 1.0).
-  const fib = prediction.indicators?.fibonacci ?? null;
   const fibLevels = useMemo(
     () => (fib
       ? Object.entries(fib.levels)
