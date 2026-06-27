@@ -709,8 +709,8 @@ def test_earnings_calendar_groups_and_caps() -> None:
     assert "calendar" in payload and "generated_at" in payload
     cal = payload["calendar"]
     assert "2026-06-20" in cal
-    # All watchlist tickers share one date → capped to 8 per day.
-    assert len(cal["2026-06-20"]) <= 8
+    # All watchlist tickers share one date → capped to 12 per day (issue #283).
+    assert len(cal["2026-06-20"]) <= 12
     entry = cal["2026-06-20"][0]
     for key in ("symbol", "name", "market_cap", "date"):
         assert key in entry
