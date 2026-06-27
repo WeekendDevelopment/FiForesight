@@ -1,7 +1,9 @@
 # backend/routers/history.py
 import asyncio
 import logging
+from datetime import datetime, time as dtime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import re
 
@@ -45,8 +47,22 @@ PERIODS_PER_YEAR: dict[str, int] = {
 }
 
 INTRADAY_INTERVALS = {"5m", "15m", "1h"}
-INTRADAY_TTL       = 300   # 5 min
-DAILY_TTL          = 900   # 15 min
+# Intraday bars go stale fast while the market is open — a long cache TTL was
+# leaving the 1d/5m chart frozen mid-session (#287c). Use a short TTL during US
+# market hours so the latest minute bars surface, and a relaxed TTL after the
+# close when no new bars are produced.
+INTRADAY_TTL_OPEN   = 120   # 2 min — regular trading hours (09:30–16:00 ET)
+INTRADAY_TTL_CLOSED = 300   # 5 min — pre/post-market & weekends
+DAILY_TTL           = 900   # 15 min
+_EASTERN            = ZoneInfo("America/New_York")
+
+
+def _intraday_ttl() -> int:
+    """Short cache TTL during US market hours so intraday bars stay fresh."""
+    now = datetime.now(_EASTERN)
+    is_weekday    = now.weekday() < 5  # Mon–Fri
+    in_session    = dtime(9, 30) <= now.time() <= dtime(16, 0)
+    return INTRADAY_TTL_OPEN if (is_weekday and in_session) else INTRADAY_TTL_CLOSED
 
 # Minimum bar count needed to accept InfluxDB data as "sufficient" for each period
 _INFLUX_MIN_ROWS: dict[str, int] = {
@@ -144,7 +160,7 @@ async def get_history(
         )
 
     is_intraday = interval in INTRADAY_INTERVALS
-    ttl         = INTRADAY_TTL if is_intraday else DAILY_TTL
+    ttl         = _intraday_ttl() if is_intraday else DAILY_TTL
     cache_key   = f"history:{symbol}:{period}:{interval}"
 
     cached = await cache_get(cache_key)

@@ -298,6 +298,16 @@ export type SubPanelKey = 'stoch' | 'adx' | 'obv';
 
 export type IndicatorKey = 'bb' | 'sma' | 'ema' | 'macd' | 'rsi' | 'volume';
 
+// Chart overlays beyond the technical indicators — rendered on the price pane and
+// toggled independently of the indicator set (F29). Persisted as a single object
+// under localStorage key `fiforesight:chart:overlays`.
+//   support / resistance — horizontal S/R price lines (2Y view)
+//   projection           — the 48h ensemble forecast line + band (2Y view)
+//   vwap                 — volume-weighted average price (intraday ranges)
+//   fib                  — Fibonacci retracement levels (2Y view)
+export type ChartOverlayKey = 'support' | 'resistance' | 'projection' | 'vwap' | 'fib';
+export type ChartOverlayState = Record<ChartOverlayKey, boolean>;
+
 export interface TradeSetupResponse {
   entry_low:               number;
   entry_high:              number;
