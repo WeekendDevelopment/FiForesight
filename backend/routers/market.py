@@ -790,6 +790,87 @@ async def get_sector_heatmap(request: Request) -> List[Dict[str, Any]]:
     return result
 
 
+@router.get("/sectors/rotation")
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def sector_rotation(request: Request) -> List[Dict[str, Any]]:
+    """Relative strength of each GICS sector ETF vs SPY over 1M/3M/6M.
+
+    Returns a list of {sector, etf, rs_1m, rs_3m, rs_6m, rs_momentum,
+    quadrant, ret_1m} sorted by rs_1m desc. rs_* = ETF % return − SPY %
+    return over that window. rs_momentum = rs_1m − rs_3m (positive = catching
+    up). quadrant ∈ {leading, weakening, lagging, improving} from sign of
+    rs_3m (level) × sign of rs_momentum. Redis-cached 1h; 502 on total
+    fetch failure (one missing ETF is skipped, not fatal). 60/min."""
+    CACHE_KEY = "sectors:rotation:f27"
+    cached = await cache_get(CACHE_KEY)
+    if cached:
+        return cached
+
+    tickers = list(SECTOR_ETF_MAP.values()) + ["SPY"]
+
+    def _closes(raw: pd.DataFrame, etf: str) -> pd.Series:
+        """Close series for one ticker — handles grouped (multi-ticker) and
+        flat (single-ticker) column layouts, mirroring the heatmap helper."""
+        try:
+            return raw[etf]["Close"].dropna()
+        except KeyError:
+            return raw["Close"].dropna()
+
+    def _ret(closes: pd.Series, bars: int) -> Optional[float]:
+        if len(closes) <= bars:
+            return None
+        return (closes.iloc[-1] / closes.iloc[-bars - 1] - 1) * 100
+
+    def _fetch() -> List[Dict[str, Any]]:
+        raw = yf.download(
+            " ".join(tickers), period="7mo", interval="1d",
+            auto_adjust=True, progress=False, group_by="ticker",
+        )
+        spy = _closes(raw, "SPY")
+        spy_1m, spy_3m, spy_6m = _ret(spy, 21), _ret(spy, 63), _ret(spy, 126)
+        rows: List[Dict[str, Any]] = []
+        for sector, etf in SECTOR_ETF_MAP.items():
+            try:
+                c = _closes(raw, etf)
+                if len(c) < 22:
+                    continue
+                r1, r3, r6 = _ret(c, 21), _ret(c, 63), _ret(c, 126)
+                rs_1m = round(r1 - spy_1m, 2) if r1 is not None and spy_1m is not None else None
+                rs_3m = round(r3 - spy_3m, 2) if r3 is not None and spy_3m is not None else None
+                rs_6m = round(r6 - spy_6m, 2) if r6 is not None and spy_6m is not None else None
+                momentum = round((rs_1m - rs_3m), 2) if rs_1m is not None and rs_3m is not None else None
+                level = rs_3m if rs_3m is not None else (rs_1m or 0)
+                mom = momentum if momentum is not None else 0
+                if level >= 0 and mom >= 0:
+                    quadrant = "leading"
+                elif level >= 0 and mom < 0:
+                    quadrant = "weakening"
+                elif level < 0 and mom >= 0:
+                    quadrant = "improving"
+                else:
+                    quadrant = "lagging"
+                rows.append({
+                    "sector": sector, "etf": etf, "rs_1m": rs_1m,
+                    "rs_3m": rs_3m, "rs_6m": rs_6m, "rs_momentum": momentum,
+                    "quadrant": quadrant,
+                    "ret_1m": round(r1, 2) if r1 is not None else None,
+                })
+            except Exception as e:
+                logger.warning(f"sector rotation {etf}: {e}")
+        rows.sort(key=lambda x: (x["rs_1m"] if x["rs_1m"] is not None else -999), reverse=True)
+        return rows
+
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=12.0)
+    except Exception as e:
+        logger.error(f"sector rotation: {e}")
+        raise HTTPException(status_code=502, detail="Could not fetch rotation data")
+    if not result:
+        raise HTTPException(status_code=502, detail="Could not fetch rotation data")
+    await cache_set(CACHE_KEY, result, ttl_seconds=3600)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Morning Briefing
 # ---------------------------------------------------------------------------

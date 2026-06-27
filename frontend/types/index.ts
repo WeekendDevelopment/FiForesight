@@ -214,6 +214,17 @@ export interface SectorRow {
   source?: string;   // data provider, e.g. "yfinance"
 }
 
+export interface SectorRotationRow {
+  sector: string;
+  etf: string;
+  rs_1m: number | null;
+  rs_3m: number | null;
+  rs_6m: number | null;
+  rs_momentum: number | null;
+  quadrant: 'leading' | 'weakening' | 'improving' | 'lagging';
+  ret_1m: number | null;
+}
+
 export interface DirectionForecast {
   /** "up" | "down" — predicted next-day direction. */
   direction:      'up' | 'down';
