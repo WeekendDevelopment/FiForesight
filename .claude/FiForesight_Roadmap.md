@@ -34,6 +34,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Walk-forward backtester — rolling 252-day train → 5-day predict, per-model MAE + directional accuracy (#222)
 - Advanced Technical Signals (Feature 14): ATR-14 volatility-adaptive trade stops (2.0×/2.5×, 8% cap), RSI/MACD divergence detection (scipy `find_peaks`, injected into jury context + prompts), earnings surprise history (last 4Q), RF feature importance (top-5), and Stochastic/ADX/OBV sub-panels (`SignalPanels`, localStorage-persisted). New helpers in `models.py`; `indicators` payload extended; 19 new backend tests. (#260)
 - Fibonacci Retracement overlay (Feature 25): swing-high/low auto-detection → 7 retracement levels in the /predict indicators payload + toggleable dashed overlay on PriceChartCard. New `calculate_fibonacci_levels` helper in models.py.
+- Rule-Based Strategy Backtester (Feature 28): `POST /backtest` + `/backtest` page — curated long-only strategies (SMA cross / RSI reversion / MACD cross / Bollinger bounce) simulated over a yfinance window, equity curve vs buy-&-hold + win rate / max drawdown / Sharpe / CAGR. On-demand (no cron), `backtester_service.py` (reuses `models.py` indicator helpers), Redis 1h. Out-of-scope v1: shorting, leverage, costs, position sizing.
 
 ### Intelligence
 - 3-model LLM Analyst Jury (Llama 4 Scout, Llama 3.3 70B, GPT-OSS 20B) via Groq + LangGraph
