@@ -1,3 +1,10 @@
+export interface BacktestPoint { date: string; strategy: number; buyHold: number; }
+export interface BacktestResult {
+  totalReturnPct: number; buyHoldReturnPct: number; cagrPct: number;
+  winRatePct: number | null; numTrades: number; maxDrawdownPct: number;
+  sharpe: number; equityCurve: BacktestPoint[];
+}
+
 export interface ForecastDay {
   date:           string;
   predicted:      number;

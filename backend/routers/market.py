@@ -18,6 +18,7 @@ from config import Config
 from dependencies import yf_svc, limiter, fred_svc, insider_svc
 from redis_cache import cache_get, cache_set
 from screener_service import build_universe_snapshot
+from backtester_service import run_backtest, STRATEGIES
 
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-:]{1,15}$")
 
@@ -1445,3 +1446,45 @@ async def run_screener(request: Request, filters: ScreenerFilter) -> Dict[str, A
 
     limit = max(1, min(filters.limit, 50))
     return {"results": rows[:limit], "total": len(rows)}
+
+
+class BacktestRequest(BaseModel):
+    """Body for the rule-based strategy backtester (F28)."""
+    symbol: str
+    strategy: str = "sma_cross"
+    params: Dict[str, Any] = {}
+    period: str = "2y"   # 1y | 2y | 5y
+
+
+@router.post("/backtest")
+@limiter.limit(lambda: Config.RATE_LIMIT_BACKTEST, key_func=get_remote_address)
+async def backtest(request: Request, body: BacktestRequest) -> Dict[str, Any]:
+    """Run a curated long-only strategy over a yfinance window. On-demand,
+    no persistence. Redis-cached 1h by (symbol,strategy,params,period)."""
+    import hashlib
+    import json
+
+    sym = body.symbol.strip().upper()
+    if not _SYMBOL_RE.match(sym):
+        raise HTTPException(status_code=422, detail="Invalid symbol.")
+    if body.strategy not in STRATEGIES:
+        raise HTTPException(status_code=422, detail="Unknown strategy.")
+    key = "backtest:" + hashlib.md5(
+        json.dumps(
+            {"s": sym, "st": body.strategy, "p": body.params, "pe": body.period},
+            sort_keys=True,
+        ).encode(),
+        usedforsecurity=False,
+    ).hexdigest()
+    cached = await cache_get(key)
+    if cached:
+        return cached
+    try:
+        result = await run_backtest(sym, body.strategy, body.params, body.period)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        logger.error(f"backtest {sym}: {e}")
+        raise HTTPException(status_code=502, detail="Backtest failed")
+    await cache_set(key, result, ttl_seconds=3600)
+    return result
