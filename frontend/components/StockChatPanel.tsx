@@ -154,7 +154,13 @@ export default function StockChatPanel({ prediction, isDark, primaryColor, open,
       variant="persistent"
       PaperProps={{
         sx: {
-          width: 380,
+          width: { xs: '100%', sm: 380 },
+          maxWidth: '100vw',
+          // On mobile the persistent drawer renders inline (no portal), so the
+          // fixed bottom nav (60px, z1200) paints over its lower edge — hiding
+          // the input. Trim the paper height to sit above the nav; the drawer
+          // (z1200 default) still covers the watchlist chip bar (z1199) beneath.
+          height: { xs: 'calc(100% - 60px)', sm: '100%' },
           background: bgPaper,
           backdropFilter: 'blur(20px)',
           borderLeft: `1px solid ${primaryColor}22`,

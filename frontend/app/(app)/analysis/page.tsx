@@ -713,7 +713,16 @@ function AnalysisContent() {
             aria-label={user ? (chatOpen ? 'Close chat' : 'Open AI chat') : 'Sign in to open AI chat'}
             sx={{
               position: 'fixed',
-              bottom: { xs: 84, md: 24 },  // clear 60px mobile nav + 24px margin
+              // Clear the 60px mobile bottom nav (+24px margin); when the mobile
+              // watchlist chip bar is showing (48px above the nav), lift higher
+              // so the FAB doesn't sit on top of the chips.
+              bottom: {
+                xs: watchlist.length > 0
+                  ? 'calc(132px + env(safe-area-inset-bottom, 0px))'
+                  : 'calc(84px + env(safe-area-inset-bottom, 0px))',
+                md: 24,
+              },
+              zIndex: 1201,  // above the bottom nav (1200) + watchlist bar (1199)
               right: 24,
               background: primaryColor,
               '&:hover': { background: primaryColor, filter: 'brightness(1.15)' },
