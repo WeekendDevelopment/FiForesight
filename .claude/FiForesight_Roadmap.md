@@ -81,7 +81,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - App Shell sidebar — collapsible, mobile bottom nav, `AppShellContext`, theme + auth in footer (#223)
 - Landing page — lightweight: MorningBriefingPanel + SectorHeatmap + TrendingSparklines + search (#223)
 - Standalone Options Chain tab (`/options`) — self-fetching `OptionsChainPanel`, symbol search (#225)
-- Earnings Calendar tab (`/earnings`) — top 60 S&P 500, top 8/day, Redis 6h TTL (#225)
+- Earnings Calendar tab (`/earnings`) — top ~65 S&P 500, top 12/day, Redis 6h TTL (#225; coverage fix #283)
 - Options Greeks (Δ, Θ) + aggregate stats (IV, put/call ratio, IV skew) (#225)
 - Expiry selector on options chain (#225)
 

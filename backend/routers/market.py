@@ -374,9 +374,36 @@ EARNINGS_NAMES: Dict[str, str] = {
     "IBM": "IBM", "SBUX": "Starbucks", "CAT": "Caterpillar", "GS": "Goldman Sachs",
     "BLK": "BlackRock", "SPGI": "S&P Global", "AXP": "American Express",
     "NOW": "ServiceNow", "ISRG": "Intuitive Surgical",
+    # Semis / large caps the team tracks but were missing (issue #283).
+    "MU": "Micron Technology", "LRCX": "Lam Research", "KLAC": "KLA Corp",
+    "ADI": "Analog Devices", "PANW": "Palo Alto Networks", "SNPS": "Synopsys",
+    "CDNS": "Cadence Design",
 }
 
 EARNINGS_WATCHLIST = list(EARNINGS_NAMES.keys())
+
+
+def _next_future_earnings_date(t: "yf.Ticker") -> Optional[str]:
+    """Fallback when ``t.calendar`` has no date: pull the next future date from
+    ``t.get_earnings_dates`` (a DataFrame indexed by Timestamp). Returns an ISO
+    ``YYYY-MM-DD`` string or None. Never raises — caller's try/except still
+    guards, but a bad ticker here degrades to None rather than aborting."""
+    try:
+        df = t.get_earnings_dates(limit=8)
+    except Exception:  # noqa: BLE001 — yfinance can raise on a missing ticker
+        try:
+            df = getattr(t, "earnings_dates", None)
+        except Exception:  # noqa: BLE001
+            return None
+    if df is None or not hasattr(df, "index") or len(df) == 0:
+        return None
+    now = pd.Timestamp.now(tz=getattr(df.index, "tz", None))
+    # Drop NaT/None sentinels and keep only upcoming dates — never surface a
+    # past earnings date as "upcoming" by falling back to max(index).
+    future = [ts for ts in df.index if pd.notna(ts) and ts >= now]
+    if not future:
+        return None
+    return str(min(future))[:10]
 
 
 @router.get("/earnings/calendar")
@@ -395,25 +422,26 @@ async def earnings_calendar(request: Request):
             try:
                 t = yf.Ticker(ticker)
                 cal = t.calendar  # dict or DataFrame depending on yfinance version
-                if cal is None:
-                    continue
-                if hasattr(cal, "loc"):  # DataFrame
+                date_val: Optional[str] = None
+                if cal is not None and hasattr(cal, "loc"):  # DataFrame
                     if "Earnings Date" in cal.index:
                         dates = cal.loc["Earnings Date"]
                         date_val = (
                             str(dates.iloc[0])[:10]
                             if hasattr(dates, "iloc") else str(dates)[:10]
                         )
-                    else:
-                        continue
                 elif isinstance(cal, dict):
-                    date_val = cal.get("Earnings Date", [None])
-                    if isinstance(date_val, list):
-                        date_val = str(date_val[0])[:10] if date_val else None
+                    raw = cal.get("Earnings Date", [None])
+                    if isinstance(raw, list):
+                        date_val = str(raw[0])[:10] if raw else None
                     else:
-                        date_val = str(date_val)[:10]
-                else:
-                    continue
+                        date_val = str(raw)[:10]
+
+                # Fallback: yfinance sometimes returns calendar=None for a name
+                # that still has a known earnings date (issue #283). Pull it from
+                # get_earnings_dates so coverage doesn't silently drop the ticker.
+                if not date_val or date_val == "None":
+                    date_val = _next_future_earnings_date(t)
                 if not date_val or date_val == "None":
                     continue
 
@@ -433,11 +461,12 @@ async def earnings_calendar(request: Request):
                 logger.debug("[EARNINGS] skipping ticker %s: %s", ticker, _exc)
                 continue
 
-        # Sort each day's entries by market cap desc, keep top 8.
+        # Sort each day's entries by market cap desc, keep top 12 so a busy
+        # earnings day doesn't silently drop mid-caps (issue #283).
         calendar: Dict[str, List[Dict[str, Any]]] = {}
         for date_str, entries in results.items():
             entries.sort(key=lambda x: x["market_cap"], reverse=True)
-            calendar[date_str] = entries[:8]
+            calendar[date_str] = entries[:12]
         return calendar
 
     try:
