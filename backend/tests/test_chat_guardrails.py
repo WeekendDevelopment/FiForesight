@@ -56,3 +56,31 @@ def test_prompt_defaults_to_na_with_empty_context() -> None:
     prompt = build_chat_system_prompt({})
     assert "data for N/A" in prompt
     assert "FiForesight in-app assistant" in prompt
+
+
+def test_prompt_includes_chart_technical_context() -> None:
+    """The chart overlays the user sees (Fibonacci, S/R, MAs, MACD, etc.) are
+    interpolated so the assistant can explain them instead of refusing."""
+    prompt = build_chat_system_prompt({
+        "symbol": "GOOGL",
+        "fibonacci": "uptrend swing $120.00–$155.00; 61.8%=$133.37",
+        "support": "$120.50, $128.00",
+        "resistance": "$155.00",
+        "moving_averages": "SMA20 $140.00, SMA50 $138.00",
+        "macd": "MACD 1.230 vs signal 0.980 (bullish)",
+        "forecast": "48h range $148–$153 (62% confidence)",
+        "regime": "trending_up (88% conf)",
+    })
+    assert "Fibonacci: uptrend swing $120.00–$155.00; 61.8%=$133.37" in prompt
+    assert "Support: $120.50, $128.00" in prompt
+    assert "MACD: MACD 1.230 vs signal 0.980 (bullish)" in prompt
+    assert "48h Forecast: 48h range $148–$153 (62% confidence)" in prompt
+    assert "Market Regime: trending_up (88% conf)" in prompt
+
+
+def test_prompt_scope_allows_explaining_chart_concepts() -> None:
+    """Scope must explicitly permit teaching technical concepts (e.g. reading a
+    Fibonacci retracement) — the regression that made the assistant unhelpful."""
+    prompt = build_chat_system_prompt({"symbol": "AAPL"})
+    assert "Fibonacci" in prompt
+    assert "Teaching the concept is in-scope" in prompt

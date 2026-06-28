@@ -16,12 +16,54 @@ const BEGINNER_CHIPS = [
   "Explain the analyst jury verdicts",
 ];
 
+const fmt = (n: number | null | undefined, d = 2): string =>
+  n == null || !Number.isFinite(n) ? 'N/A' : Number(n).toFixed(d);
+
 function buildContext(prediction: PredictionData) {
+  const ind  = prediction.indicators;
+  const last = prediction.history?.[prediction.history.length - 1];
+  const fib  = ind?.fibonacci ?? null;
+
+  // Fibonacci levels the chart actually draws — so the assistant can explain the
+  // specific retracements the user is looking at, not just the concept.
+  const fibStr = fib
+    ? `${fib.direction === 'up' ? 'uptrend' : 'downtrend'} swing $${fmt(fib.swing_low)}–$${fmt(fib.swing_high)}; ` +
+      Object.entries(fib.levels)
+        .sort((a, b) => Number(a[0]) - Number(b[0]))
+        .map(([r, p]) => `${(Number(r) * 100).toFixed(1)}%=$${fmt(p)}`)
+        .join(', ')
+    : 'N/A';
+
+  const maStr = last
+    ? `SMA20 $${fmt(prediction.modelStats?.sma_20)}, SMA50 $${fmt(last.sma50)}, ` +
+      `SMA200 $${fmt(last.sma200)}, EMA20 $${fmt(last.ema20)}, EMA50 $${fmt(last.ema50)}`
+    : 'N/A';
+
+  const macdStr = last && last.macd != null && last.macd_signal != null
+    ? `MACD ${fmt(last.macd, 3)} vs signal ${fmt(last.macd_signal, 3)} ` +
+      `(${last.macd > last.macd_signal ? 'bullish' : 'bearish'})`
+    : 'N/A';
+
+  const bbStr = last && last.bb_upper != null && last.bb_lower != null
+    ? `upper $${fmt(last.bb_upper)}, mid $${fmt(last.bb_middle)}, lower $${fmt(last.bb_lower)}`
+    : 'N/A';
+
   return {
     symbol:          prediction.symbol,
     currentPrice:    prediction.currentPrice,
     rsi:             prediction.rsi,
     trend:           prediction.prediction.trend,
+    forecast:        `48h range $${prediction.prediction.lowRange}–$${prediction.prediction.highRange} (${prediction.confidence}% confidence)`,
+    support:         ind?.support?.length    ? ind.support.map(s => `$${s}`).join(', ')    : 'N/A',
+    resistance:      ind?.resistance?.length ? ind.resistance.map(r => `$${r}`).join(', ') : 'N/A',
+    fibonacci:       fibStr,
+    moving_averages: maStr,
+    macd:            macdStr,
+    bollinger:       bbStr,
+    atr_14:          ind?.atr_14 != null ? `$${fmt(ind.atr_14)}` : 'N/A',
+    regime:          prediction.regime?.regime
+                       ? `${prediction.regime.regime} (${Math.round((prediction.regime.confidence ?? 0) * 100)}% conf)`
+                       : 'N/A',
     jury_summary:    prediction.juryAnalysts
                        ?.map(a => `${a.id}: ${a.rating} (${a.confidence}%)`)
                        .join(', '),
