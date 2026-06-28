@@ -6,9 +6,9 @@ import {
   Box, Card, CardContent, Chip, Collapse, CircularProgress, Stack, Typography,
   ToggleButton, ToggleButtonGroup, Button, useMediaQuery, useTheme,
 } from '@mui/material';
-import { Info, ChevronDown, ChevronUp } from 'lucide-react';
+import { Info, ChevronDown, ChevronUp, Eraser, RotateCcw } from 'lucide-react';
 import dynamic from 'next/dynamic';
-import type { PredictionData, IndicatorKey, ChartStats, IndicatorSignals, IntervalHistoryData } from '../types';
+import type { PredictionData, IndicatorKey, ChartOverlayKey, ChartOverlayState, ChartStats, IndicatorSignals, IntervalHistoryData } from '../types';
 import SignalPanels from './SignalPanels';
 
 const AdvancedChart = dynamic(() => import('./AdvancedChart'), { ssr: false });
@@ -27,8 +27,40 @@ const INTERVAL_MAP: Record<string, { period: string; interval: string }> = {
 // Ranges whose bars are intraday (5m/15m/1h) — show HH:MM on the time axis.
 const INTRADAY_RANGES = new Set(['1d', '5d', '1m']);
 
-// localStorage key for the FIB overlay toggle (fiforesight: prefix convention).
-const FIB_LS_KEY = 'fiforesight:overlay:fib';
+// Single localStorage key holding the full chart-overlay visibility model (F29).
+const OVERLAYS_LS_KEY = 'fiforesight:chart:overlays';
+// Legacy single-purpose key (FIB only) — migrated into OVERLAYS_LS_KEY on read.
+const LEGACY_FIB_LS_KEY = 'fiforesight:overlay:fib';
+
+// Default overlay visibility — S/R + the forecast projection are on (they're the
+// classic chart context); VWAP + Fibonacci start off (opt-in overlays).
+const DEFAULT_OVERLAYS: ChartOverlayState = {
+  support: true, resistance: true, projection: true, vwap: false, fib: false,
+};
+const ALL_OVERLAYS_OFF: ChartOverlayState = {
+  support: false, resistance: false, projection: false, vwap: false, fib: false,
+};
+// Default indicator set (mirrors the analysis page's initial state).
+const DEFAULT_INDICATORS: IndicatorKey[] = ['bb', 'sma'];
+
+// Read the persisted overlay state, merging the legacy FIB-only key if present.
+function loadOverlays(): ChartOverlayState {
+  if (typeof window === 'undefined') return DEFAULT_OVERLAYS;
+  try {
+    const raw = localStorage.getItem(OVERLAYS_LS_KEY);
+    if (raw) return { ...DEFAULT_OVERLAYS, ...(JSON.parse(raw) as Partial<ChartOverlayState>) };
+    const legacyFib = localStorage.getItem(LEGACY_FIB_LS_KEY);
+    if (legacyFib != null) return { ...DEFAULT_OVERLAYS, fib: legacyFib === '1' };
+  } catch { /* ignore */ }
+  return DEFAULT_OVERLAYS;
+}
+
+function saveOverlays(state: ChartOverlayState): void {
+  try {
+    localStorage.setItem(OVERLAYS_LS_KEY, JSON.stringify(state));
+    localStorage.removeItem(LEGACY_FIB_LS_KEY); // migrated — drop the old key
+  } catch { /* ignore */ }
+}
 
 interface Props {
   prediction:      PredictionData;
@@ -58,22 +90,38 @@ export default function PriceChartCard({
   const [selectedInterval, setSelectedInterval] = useState<string>('2y');
   const [intervalData,     setIntervalData]     = useState<IntervalHistoryData | null>(null);
   const [historyLoading,   setHistoryLoading]   = useState(false);
-  const [showVwap,         setShowVwap]         = useState(false);
-  // FIB overlay visibility — persisted in localStorage (fiforesight: prefix),
-  // mirroring the SignalPanels sub-panel persistence pattern. Lazy initialiser
-  // restores it without an effect (no SSR pass here — this only renders after a
-  // client-side prediction fetch). Persisted across symbol switches by design.
-  const [showFib, setShowFib] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    try { return localStorage.getItem(FIB_LS_KEY) === '1'; } catch { return false; }
-  });
-  const toggleFib = useCallback(() => {
-    setShowFib(v => {
-      const next = !v;
-      try { localStorage.setItem(FIB_LS_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+
+  // Unified overlay-visibility model (F29) — covers VWAP, Fibonacci, S/R and the
+  // forecast projection in one persisted object. Lazy initialiser restores it
+  // (and migrates the legacy FIB-only key) without an effect. Persisted across
+  // symbol switches by design. The indicator set (bb/sma/…) stays parent-owned
+  // via `indicators`/`setIndicators`; the toggle UI below presents both together.
+  const [overlays, setOverlays] = useState<ChartOverlayState>(loadOverlays);
+  const toggleOverlay = useCallback((key: ChartOverlayKey) => {
+    setOverlays(prev => {
+      const next = { ...prev, [key]: !prev[key] };
+      saveOverlays(next);
       return next;
     });
   }, []);
+  const toggleIndicator = useCallback((key: IndicatorKey) => {
+    setIndicators(
+      indicators.includes(key) ? indicators.filter(k => k !== key) : [...indicators, key],
+    );
+  }, [indicators, setIndicators]);
+  // "Clean view" — strip every overlay + indicator for a bare price chart (#284).
+  const cleanView = useCallback(() => {
+    setIndicators([]);
+    setOverlays(ALL_OVERLAYS_OFF);
+    saveOverlays(ALL_OVERLAYS_OFF);
+  }, [setIndicators]);
+  // "Reset" — restore the default indicator set + overlay visibility.
+  const resetView = useCallback(() => {
+    setIndicators(DEFAULT_INDICATORS);
+    setOverlays(DEFAULT_OVERLAYS);
+    saveOverlays(DEFAULT_OVERLAYS);
+  }, [setIndicators]);
+
   // Track the last symbol we rendered for — reset interval when it changes.
   // (Derived-state-during-render is React's recommended pattern for resetting
   // state on a prop change — see "You Might Not Need an Effect".)
@@ -82,7 +130,6 @@ export default function PriceChartCard({
     setLastSymbol(prediction.symbol);
     setSelectedInterval('2y');
     setIntervalData(null);
-    setShowVwap(false);
   }
   const fetchIntervalHistory = useCallback((iv: string) => {
     if (iv === '2y') {
@@ -100,8 +147,8 @@ export default function PriceChartCard({
 
   const handleIntervalChange = useCallback((iv: string) => {
     setSelectedInterval(iv);
-    // VWAP only applies to intraday ranges (1D/5D/1M) — clear it otherwise.
-    if (!INTRADAY_RANGES.has(iv)) setShowVwap(false);
+    // Overlay visibility persists across ranges; each overlay self-gates on
+    // applicability (VWAP only renders intraday, S/R + projection only on 2Y).
     fetchIntervalHistory(iv);
   }, [fetchIntervalHistory]);
 
@@ -142,13 +189,24 @@ export default function PriceChartCard({
   // Forecast / support / resistance only apply to the native 2Y view.
   const isTwoYear = selectedInterval === '2y';
   const intraday  = INTRADAY_RANGES.has(selectedInterval);
-  const rsiSeries = isTwoYear
-    ? (prediction.indicators?.rsi_series ?? [])
-    : (intervalData?.rsi_series ?? []);
 
   // Fibonacci retracement levels (F25) — only on the native 2Y view, where the
   // indicator payload's swing high/low applies. Ordered by ratio (0.0 → 1.0).
   const fib = prediction.indicators?.fibonacci ?? null;
+
+  // True when at least one overlay/indicator is actually drawn on the current
+  // range — drives the legend empty-state (a "Clean view" shows nothing). The
+  // fib branch uses the same `!!fib` guard as the toggle row + legend, so a
+  // saved overlays.fib=true on a ticker with no Fibonacci data doesn't wrongly
+  // suppress the empty-state.
+  const anyOverlayVisible =
+    indicators.length > 0 ||
+    (isTwoYear && (overlays.support || overlays.resistance || overlays.projection || (overlays.fib && !!fib))) ||
+    (intraday && overlays.vwap);
+  const rsiSeries = isTwoYear
+    ? (prediction.indicators?.rsi_series ?? [])
+    : (intervalData?.rsi_series ?? []);
+
   const fibLevels = useMemo(
     () => (fib
       ? Object.entries(fib.levels)
@@ -238,28 +296,7 @@ export default function PriceChartCard({
           ))}
         </ToggleButtonGroup>
 
-        {/* Indicator toggles */}
-        <ToggleButtonGroup
-          value={indicators}
-          onChange={(_, v) => setIndicators(v)}
-          size="small"
-          sx={{ mb: 2, flexWrap: 'wrap', gap: 0.5 }}
-        >
-          {([
-            { key: 'bb',     label: 'Bollinger Bands' },
-            { key: 'sma',    label: 'SMA 50/200'      },
-            { key: 'ema',    label: 'EMA 20/50'       },
-            { key: 'macd',   label: 'MACD'            },
-            { key: 'rsi',    label: 'RSI'             },
-            { key: 'volume', label: 'Volume'          },
-          ] as { key: IndicatorKey; label: string }[]).map(({ key, label }) => (
-            <ToggleButton key={key} value={key} sx={{ fontSize: '0.65rem', py: 0.5, px: 1.5, borderRadius: '8px !important' }}>
-              {label}
-            </ToggleButton>
-          ))}
-        </ToggleButtonGroup>
-
-        {/* Chart mode + engine toggles */}
+        {/* Chart mode (line/candle) — not an overlay, kept on its own row */}
         <Box sx={{ display: 'flex', gap: 1.5, mb: 2, flexWrap: 'wrap' }}>
           <ToggleButtonGroup exclusive aria-label="chart-mode" value={chartMode}
             onChange={(_e, val) => val && setChartMode(val)} size="small" sx={toggleSx}
@@ -267,32 +304,81 @@ export default function PriceChartCard({
             <ToggleButton value="line">LINE</ToggleButton>
             <ToggleButton value="candle">CANDLE</ToggleButton>
           </ToggleButtonGroup>
+        </Box>
 
-          {/* VWAP overlay — intraday ranges only (5m/15m/1h carry vwap bars) */}
-          {intraday && (
-            <ToggleButtonGroup
-              aria-label="vwap-overlay"
-              value={showVwap ? ['vwap'] : []}
-              onChange={() => setShowVwap(v => !v)}
-              size="small"
-              sx={toggleSx}
-            >
-              <ToggleButton value="vwap">VWAP</ToggleButton>
-            </ToggleButtonGroup>
-          )}
+        {/* Unified overlay controls (F29) — every chart line toggles independently
+            (#284/#287a). Indicators (parent-owned set) + chart overlays (VWAP, S/R,
+            forecast projection, Fibonacci) live in one wrapping/scrollable row, with
+            "Clean view" (clear all) and "Reset" (restore defaults). Overlays self-gate
+            on the active range so only applicable toggles render. */}
+        <Box sx={{ mb: 2 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1, mb: 1 }}>
+            <Typography variant="caption" sx={{ opacity: 0.4, letterSpacing: 1.5, fontWeight: 800 }}>
+              OVERLAYS
+            </Typography>
+            <Stack direction="row" spacing={0.5}>
+              <Button size="small" variant="text" onClick={cleanView} startIcon={<Eraser size={12} />}
+                sx={{ fontSize: '0.6rem', letterSpacing: 1, py: 0.2, px: 1, opacity: 0.7, '&:hover': { opacity: 1 } }}>
+                Clean view
+              </Button>
+              <Button size="small" variant="text" onClick={resetView} startIcon={<RotateCcw size={12} />}
+                sx={{ fontSize: '0.6rem', letterSpacing: 1, py: 0.2, px: 1, opacity: 0.7, '&:hover': { opacity: 1 } }}>
+                Reset
+              </Button>
+            </Stack>
+          </Box>
+          <Box
+            sx={{
+              display: 'flex', flexWrap: 'wrap', gap: 0.5,
+              overflowX: 'auto', pb: 0.5,
+              '&::-webkit-scrollbar': { height: 4 },
+              '& .MuiToggleButton-root': {
+                fontSize: '0.65rem', fontWeight: 700, py: 0.5, px: 1.5,
+                borderRadius: '8px !important', whiteSpace: 'nowrap',
+                border: '1px solid rgba(128,128,128,0.2) !important',
+                '&.Mui-selected': { background: `${primaryColor}1a`, color: primaryColor },
+                '&:not(.Mui-selected)': { color: 'rgba(128,128,128,0.6)' },
+                '&:hover': { color: primaryColor, background: `${primaryColor}0d` },
+              },
+            }}
+          >
+            {/* Technical indicators (parent-owned multi-select set) */}
+            {([
+              { key: 'bb',     label: 'Bollinger Bands' },
+              { key: 'sma',    label: 'SMA 50/200'      },
+              { key: 'ema',    label: 'EMA 20/50'       },
+              { key: 'macd',   label: 'MACD'            },
+              { key: 'rsi',    label: 'RSI'             },
+              { key: 'volume', label: 'Volume'          },
+            ] as { key: IndicatorKey; label: string }[]).map(({ key, label }) => (
+              <ToggleButton
+                key={key} value={key}
+                selected={indicators.includes(key)}
+                onChange={() => toggleIndicator(key)}
+              >
+                {label}
+              </ToggleButton>
+            ))}
 
-          {/* Fibonacci retracement overlay — 2Y view only (uses /predict swing high/low) */}
-          {isTwoYear && fib && (
-            <ToggleButtonGroup
-              aria-label="fib-overlay"
-              value={showFib ? ['fib'] : []}
-              onChange={toggleFib}
-              size="small"
-              sx={toggleSx}
-            >
-              <ToggleButton value="fib">FIB</ToggleButton>
-            </ToggleButtonGroup>
-          )}
+            {/* Chart overlays — each self-gates on the active range */}
+            {([
+              { key: 'support',    label: 'Support',    show: isTwoYear },
+              { key: 'resistance', label: 'Resistance', show: isTwoYear },
+              { key: 'projection', label: 'Forecast',   show: isTwoYear },
+              { key: 'fib',        label: 'Fibonacci',  show: isTwoYear && !!fib },
+              { key: 'vwap',       label: 'VWAP',       show: intraday },
+            ] as { key: ChartOverlayKey; label: string; show: boolean }[])
+              .filter(o => o.show)
+              .map(({ key, label }) => (
+                <ToggleButton
+                  key={key} value={key}
+                  selected={overlays[key]}
+                  onChange={() => toggleOverlay(key)}
+                >
+                  {label}
+                </ToggleButton>
+              ))}
+          </Box>
         </Box>
 
         {/* Indicators Guide (collapsible) */}
@@ -318,26 +404,30 @@ export default function PriceChartCard({
             }}>
               <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 1.5 }}>
                 {([
-                  { key: 'bb', always: false, label: 'Bollinger Bands', color: primaryColor,
-                    description: 'Volatility envelope: upper/lower = ±2 std devs from the 20-day MA. Bands widen during high volatility, narrow during consolidation.' },
-                  { key: 'sma', always: false, label: 'SMA 50 / SMA 200', color: '#f97316', color2: '#a855f7',
+                  { key: 'bb', visible: indicators.includes('bb'), label: 'Bollinger Bands', color: primaryColor,
+                    description: 'Dashed envelope: upper/lower = ±2 std devs from the 20-day MA. Bands widen during high volatility, narrow during consolidation.' },
+                  { key: 'sma', visible: indicators.includes('sma'), label: 'SMA 50 / SMA 200', color: '#f97316', color2: '#a855f7',
                     description: 'Trend-following averages. SMA50 (orange) tracks medium-term, SMA200 (purple) tracks long-term. Golden cross (50 > 200) = bullish; death cross (50 < 200) = bearish.' },
-                  { key: 'ema', always: false, label: 'EMA 20 / EMA 50', color: '#06b6d4', color2: '#f43f5e',
-                    description: 'Exponential Moving Averages weight recent prices more heavily than SMA, reacting faster to momentum shifts. EMA20 (cyan) for short-term momentum, EMA50 (rose) confirms trend direction. EMA20 crossing EMA50 is a faster golden/death cross signal.' },
-                  { key: 'macd', always: false, label: 'MACD (12, 26, 9)', color: isDark ? '#00f2ff' : '#0077ff',
-                    description: 'Momentum oscillator. Line crossing above signal = bullish; below = bearish. Histogram bars show momentum strength — growing bars = accelerating trend.' },
-                  { key: 'rsi', always: false, label: 'RSI (14)', color: '#bc13fe',
-                    description: 'Relative Strength Index: 0–100 oscillator. Above 70 = overbought (potential reversal down). Below 30 = oversold (potential reversal up). 50 is the neutral midline.' },
-                  { key: 'volume', always: false, label: 'Volume', color: primaryColor,
-                    description: 'Number of shares traded. High volume on an up-move = strong buying conviction. High volume on a down-move = heavy selling distribution. Low volume = weak signal.' },
-                  { key: 'sma20', always: true, label: 'SMA 20 (ref)', color: '#f59e0b',
-                    description: "Short-term 20-day moving average shown as a horizontal reference line at today's value. Price above = near-term uptrend; below = near-term weakness." },
-                  { key: 'support', always: true, label: 'Support Levels (S)', color: isDark ? '#00ffa3' : '#16a34a',
-                    description: 'Price floors identified from the last 3 months using local price minima. Historically where buyers stepped in — expect potential bounce or consolidation when revisited.' },
-                  { key: 'resistance', always: true, label: 'Resistance Levels (R)', color: isDark ? '#ff0055' : '#dc2626',
-                    description: 'Price ceilings identified from the last 3 months using local price maxima. Historically where sellers emerged — expect potential rejection or slowdown on approach.' },
-                ] as { key: string; always: boolean; label: string; color: string; color2?: string; description: string }[])
-                  .filter(item => item.always || indicators.includes(item.key as IndicatorKey))
+                  { key: 'ema', visible: indicators.includes('ema'), label: 'EMA 20 / EMA 50', color: '#06b6d4', color2: '#f43f5e',
+                    description: 'Exponential Moving Averages weight recent prices more heavily than SMA, reacting faster to momentum shifts. EMA20 (cyan dashed) for short-term momentum, EMA50 (rose dashed) confirms trend direction.' },
+                  { key: 'macd', visible: indicators.includes('macd'), label: 'MACD (12, 26, 9)', color: isDark ? '#00f2ff' : '#0077ff',
+                    description: 'Momentum oscillator (own sub-pane). Line crossing above signal = bullish; below = bearish. Histogram bars show momentum strength — growing bars = accelerating trend.' },
+                  { key: 'rsi', visible: indicators.includes('rsi'), label: 'RSI (14)', color: '#bc13fe',
+                    description: 'Relative Strength Index (own sub-pane): 0–100 oscillator. Above 70 = overbought (potential reversal down). Below 30 = oversold (potential reversal up). 50 is the neutral midline.' },
+                  { key: 'volume', visible: indicators.includes('volume'), label: 'Volume', color: primaryColor,
+                    description: 'Number of shares traded (own sub-pane). High volume on an up-move = strong buying conviction. High volume on a down-move = heavy selling distribution. Low volume = weak signal.' },
+                  { key: 'support', visible: isTwoYear && overlays.support, label: 'Support Levels (S)', color: isDark ? '#00ffa3' : '#16a34a',
+                    description: 'Green dashed price lines — floors from the last 3 months (local price minima). Historically where buyers stepped in: expect a potential bounce or consolidation when revisited.' },
+                  { key: 'resistance', visible: isTwoYear && overlays.resistance, label: 'Resistance Levels (R)', color: isDark ? '#ff0055' : '#dc2626',
+                    description: 'Red dashed price lines — ceilings from the last 3 months (local price maxima). Historically where sellers emerged: expect potential rejection or slowdown on approach.' },
+                  { key: 'projection', visible: isTwoYear && overlays.projection, label: 'Forecast Projection', color: '#bc13fe',
+                    description: 'Purple dashed line + lighter band = the ensemble 48h price forecast (predicted path with its high/low range). Wider band = lower model confidence.' },
+                  { key: 'fib', visible: isTwoYear && overlays.fib && !!fib, label: 'Fibonacci Levels', color: theme.palette.warning.main,
+                    description: 'Amber dashed price lines at 23.6 / 38.2 / 50 / 61.8% retracements between the recent swing high and low — common support/resistance zones during pullbacks.' },
+                  { key: 'vwap', visible: intraday && overlays.vwap, label: 'VWAP', color: '#ff9800',
+                    description: 'Orange dashed line — volume-weighted average price, reset each session. Price above VWAP = intraday buyers in control; below = sellers in control.' },
+                ] as { key: string; visible: boolean; label: string; color: string; color2?: string; description: string }[])
+                  .filter(item => item.visible)
                   .map(item => {
                     const sig = indicatorSignals[item.key];
                     return (
@@ -370,6 +460,11 @@ export default function PriceChartCard({
                     );
                   })}
               </Box>
+              {!anyOverlayVisible && (
+                <Typography sx={{ fontSize: '0.62rem', opacity: 0.5, fontStyle: 'italic' }}>
+                  Clean view — no overlays active. Toggle overlays above to plot them and see what each colour means here.
+                </Typography>
+              )}
             </Box>
           </Collapse>
         </Box>
@@ -390,19 +485,19 @@ export default function PriceChartCard({
           )}
           <AdvancedChart
             history={activeHistory}
-            forecast={isTwoYear ? prediction.forecastDays : []}
+            forecast={isTwoYear && overlays.projection ? prediction.forecastDays : []}
             rsiSeries={rsiSeries}
             indicators={indicators}
             mode={chartMode}
             isDark={isDark}
             primaryColor={primaryColor}
             trendColor={trendColor}
-            support={isTwoYear ? (prediction.indicators?.support ?? []) : []}
-            resistance={isTwoYear ? (prediction.indicators?.resistance ?? []) : []}
+            support={isTwoYear && overlays.support ? (prediction.indicators?.support ?? []) : []}
+            resistance={isTwoYear && overlays.resistance ? (prediction.indicators?.resistance ?? []) : []}
             intraday={intraday}
-            showVwap={intraday && showVwap}
+            showVwap={intraday && overlays.vwap}
             fibLevels={isTwoYear ? fibLevels : []}
-            showFib={isTwoYear && showFib}
+            showFib={isTwoYear && overlays.fib}
             fibColor={theme.palette.warning.main}
             priceHeight={chartH}
           />

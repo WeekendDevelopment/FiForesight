@@ -124,3 +124,57 @@ def test_history_empty_data_returns_404() -> None:
     with cg, cs, patch("yfinance.download", MagicMock(return_value=pd.DataFrame())):
         resp = client.get("/history?symbol=ZZZZ&period=1d&interval=5m")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Intraday freshness + VWAP completeness (F29 / #287c / #285)
+# ---------------------------------------------------------------------------
+
+def test_history_intraday_every_bar_carries_vwap() -> None:
+    """Every intraday bar must carry a `vwap` field (the chart's VWAP overlay
+    reads it per-bar). A missing field on any bar regresses the overlay."""
+    df = _make_ohlcv_df(78, "5min")  # a full 1d/5m session worth of bars
+    cg, cs = _cache_patches()
+    with cg, cs, patch("yfinance.download", MagicMock(return_value=df)):
+        resp = client.get("/history?symbol=AAPL&period=1d&interval=5m")
+
+    assert resp.status_code == 200
+    bars = resp.json()["history"]
+    assert len(bars) == 78
+    assert all("vwap" in b for b in bars), "every intraday bar must carry vwap"
+
+
+def test_history_intraday_not_truncated_before_latest_bar() -> None:
+    """The 1d frame must extend to the final available bar — no mid-session
+    trimming (#287c). The last returned bar's epoch must equal the last input."""
+    df = _make_ohlcv_df(78, "5min")
+    expected_last_time = int(df.index[-1].timestamp())
+    cg, cs = _cache_patches()
+    with cg, cs, patch("yfinance.download", MagicMock(return_value=df)):
+        resp = client.get("/history?symbol=AAPL&period=1d&interval=5m")
+
+    bars = resp.json()["history"]
+    assert len(bars) == len(df)               # no bars dropped
+    assert bars[-1]["time"] == expected_last_time
+
+
+def test_intraday_ttl_short_during_market_hours() -> None:
+    """The intraday cache TTL is short while the US market is open so the chart
+    surfaces the latest minutes, and relaxes outside session hours (#287c)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    import backend.routers.history as hist
+
+    eastern = ZoneInfo("America/New_York")
+    # A Wednesday 11:00 ET — regular trading hours.
+    with patch.object(hist, "datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 1, 7, 11, 0, tzinfo=eastern)
+        assert hist._intraday_ttl() == hist.INTRADAY_TTL_OPEN
+    # A Wednesday 20:00 ET — after the close.
+    with patch.object(hist, "datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 1, 7, 20, 0, tzinfo=eastern)
+        assert hist._intraday_ttl() == hist.INTRADAY_TTL_CLOSED
+    # A Saturday — weekend.
+    with patch.object(hist, "datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 1, 10, 11, 0, tzinfo=eastern)
+        assert hist._intraday_ttl() == hist.INTRADAY_TTL_CLOSED

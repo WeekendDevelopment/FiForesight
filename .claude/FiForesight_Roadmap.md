@@ -75,6 +75,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - VWAP intraday overlay — dashed line + ±1σ bands on 1D/5D intervals (#228)
 - Dividend & Income card (Feature 26): `GET /dividends/{symbol}` (yfinance, Redis 6h) + `DividendIncomeCard` — forward yield, annual rate, payout ratio, 5-yr avg yield, ex-date, YoY growth; clean non-payer empty state.
 - Sector Rotation leaderboard (Feature 27): `GET /sectors/rotation` (11 GICS ETFs' relative strength vs SPY over 1M/3M/6M + RRG-lite quadrant, Redis 1h) + `/rotation` page (leaderboard table + quadrant scatter, click-to-analyze). Reuses the heatmap batch-download machinery.
+- Analysis Chart Controls & Legend (F29): unified toggleable overlays (indicators, S/R, projections, VWAP, Fibonacci) + 'Clean view', colour-coded indicator legend, restored VWAP, intraday-freshness fix. Closes #284/#285/#287.
 
 ### Navigation & Architecture
 - App Shell sidebar — collapsible, mobile bottom nav, `AppShellContext`, theme + auth in footer (#223)
