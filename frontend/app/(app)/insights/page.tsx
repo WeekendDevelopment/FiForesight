@@ -11,9 +11,9 @@ import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
   ResponsiveContainer, Tooltip, ReferenceLine, Cell, Legend,
 } from 'recharts';
-import { Activity, Search, Target, TrendingUp, Gauge } from 'lucide-react';
+import { Activity, Search, Target, TrendingUp, Gauge, ShieldCheck } from 'lucide-react';
 import { useAppShell } from '../../../contexts/AppShellContext';
-import type { AccuracyAnalytics, SentimentAnalytics, SentimentPoint } from '../../../types';
+import type { AccuracyAnalytics, SentimentAnalytics, SentimentPoint, CalibrationReport } from '../../../types';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -49,6 +49,7 @@ function InsightsContent() {
   const [submitted, setSubmitted] = useState<string | null>(null);
   const [accuracy,  setAccuracy]  = useState<AccuracyAnalytics | null>(null);
   const [sentiment, setSentiment] = useState<SentimentAnalytics | null>(null);
+  const [calibration, setCalibration] = useState<CalibrationReport | null>(null);
   const [loading,   setLoading]   = useState(false);
   const [error,     setError]     = useState<string | null>(null);
 
@@ -63,14 +64,17 @@ function InsightsContent() {
     setError(null);
     setAccuracy(null);
     setSentiment(null);
+    setCalibration(null);
     router.replace(`/insights?symbol=${encodeURIComponent(sym)}`, { scroll: false });
     try {
-      const [accRes, sentRes] = await Promise.all([
+      const [accRes, sentRes, calRes] = await Promise.all([
         axios.get(`/api/analytics/accuracy/${sym}`),
         axios.get(`/api/analytics/sentiment/${sym}`),
+        axios.get(`/api/analytics/calibration/${sym}`),
       ]);
       setAccuracy(accRes.data);
       setSentiment(sentRes.data);
+      setCalibration(calRes.data);
     } catch (err: unknown) {
       const msg = axios.isAxiosError(err)
         ? (err.response?.data?.error ?? err.message)
@@ -95,6 +99,7 @@ function InsightsContent() {
     Object.keys(accuracy.model_mae).length > 0 ||
     accuracy.ensemble_mae_by_horizon.length > 0
   );
+  const hasCalibration = !!calibration && calibration.samples > 0;
 
   // ── Derived chart data ───────────────────────────────────────────────────────
   const modelMaeData = accuracy
@@ -186,7 +191,7 @@ function InsightsContent() {
         )}
 
         {/* ── No-data empty state (searched, but no history yet) ─────────── */}
-        {!loading && submitted && accuracy && !hasData && (!sentiment || sentiment.history.length === 0) && (
+        {!loading && submitted && accuracy && !hasData && !hasCalibration && (!sentiment || sentiment.history.length === 0) && (
           <Box sx={{ height: '45vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, opacity: 0.4, textAlign: 'center', px: 3 }}>
             <Gauge size={48} color={primaryColor} />
             <Typography variant="h6" sx={{ fontWeight: 400 }}>No accuracy history yet for {submitted}</Typography>
@@ -198,8 +203,15 @@ function InsightsContent() {
         )}
 
         {/* ── Charts ────────────────────────────────────────────────────── */}
-        {!loading && submitted && (hasData || (sentiment && sentiment.history.length > 0)) && (
+        {!loading && submitted && (hasData || hasCalibration || (sentiment && sentiment.history.length > 0)) && (
           <Grid container spacing={3}>
+
+            {/* 0. Forecast calibration audit (Feature 30) */}
+            {calibration && (
+              <Grid size={12}>
+                <CalibrationSection report={calibration} isDark={isDark} primaryColor={primaryColor} />
+              </Grid>
+            )}
 
             {/* 1. Model performance ranking (MAE, lower = better) */}
             <Grid size={{ xs: 12, md: 6 }}>
@@ -396,6 +408,138 @@ function InsightsContent() {
         )}
       </Container>
     </Box>
+  );
+}
+
+// ── Calibration audit section (Feature 30) ──────────────────────────────────────
+
+const VERDICT_META: Record<string, { label: string; tone: 'good' | 'bad' | 'warn'; blurb: string }> = {
+  well_calibrated: { label: 'Well Calibrated', tone: 'good', blurb: 'Realized prices land inside the forecast band about as often as they should.' },
+  overconfident:   { label: 'Overconfident',   tone: 'bad',  blurb: 'Bands are too tight — prices escape the range more often than expected.' },
+  underconfident:  { label: 'Underconfident',  tone: 'warn', blurb: 'Bands are too wide — prices almost always land inside, so the range is uninformative.' },
+};
+
+function CalibrationSection({ report, isDark, primaryColor }: { report: CalibrationReport; isDark: boolean; primaryColor: string }) {
+  const green = isDark ? '#00ffa3' : '#16a34a';
+  const red   = isDark ? '#ff0055' : '#dc2626';
+  const amber = isDark ? '#f59e0b' : '#d97706';
+  const axis  = isDark ? '#94a3b8' : '#64748b';
+
+  const coverage = report.p10_p90_coverage_pct ?? report.range_coverage_pct;
+  const target   = report.coverage_target_pct ?? 80;
+  const verdict  = report.calibration_verdict;
+  const meta     = verdict ? VERDICT_META[verdict] : null;
+  const toneColor = (t: 'good' | 'bad' | 'warn') => (t === 'good' ? green : t === 'bad' ? red : amber);
+
+  // Insufficient history → reuse the page's samples-too-thin empty pattern.
+  if (!meta || coverage === null) {
+    return (
+      <Card>
+        <CardContent>
+          <Typography variant="overline" sx={{ opacity: 0.6, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <ShieldCheck size={14} /> Forecast Calibration · should I trust this forecast?
+          </Typography>
+          <Box sx={{ py: 4, textAlign: 'center', opacity: 0.6 }}>
+            <Typography variant="body2" sx={{ maxWidth: 520, mx: 'auto' }}>
+              Not enough resolved forecasts yet to audit calibration
+              {report.samples ? ` (${report.samples} so far)` : ''}. Coverage, directional edge,
+              and bias appear once more predictions resolve against real closes.
+            </Typography>
+          </Box>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const coverageColor = toneColor(meta.tone);
+  const edge = report.edge_pct;
+  const dir  = report.directional_accuracy_pct;
+  const naive = report.naive_accuracy_pct;
+  const bias = report.mean_signed_error;
+
+  const clampPct = (v: number) => Math.max(0, Math.min(100, v));
+
+  return (
+    <Card>
+      <CardContent>
+        <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ sm: 'center' }} justifyContent="space-between" gap={1} sx={{ mb: 2 }}>
+          <Typography variant="overline" sx={{ opacity: 0.6, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <ShieldCheck size={14} /> Forecast Calibration · should I trust this forecast?
+          </Typography>
+          <Chip
+            label={meta.label}
+            sx={{ fontWeight: 800, color: coverageColor, bgcolor: `${coverageColor}1a`, border: `1px solid ${coverageColor}55` }}
+          />
+        </Stack>
+
+        <Grid container spacing={3}>
+          {/* Coverage gauge — actual vs 80% target */}
+          <Grid size={{ xs: 12, md: 6 }}>
+            <Typography variant="caption" sx={{ opacity: 0.7 }}>
+              Band coverage — % of realized prices inside the forecast range
+            </Typography>
+            <Stack direction="row" alignItems="baseline" gap={1} sx={{ mt: 0.5, mb: 1.5 }}>
+              <Typography sx={{ fontSize: '2.4rem', fontWeight: 800, color: coverageColor, lineHeight: 1 }}>
+                {coverage.toFixed(0)}%
+              </Typography>
+              <Typography variant="body2" sx={{ opacity: 0.6 }}>vs {target.toFixed(0)}% target</Typography>
+            </Stack>
+
+            {/* Track + fill + target marker */}
+            <Box sx={{ position: 'relative', height: 16, borderRadius: 8, bgcolor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)' }}>
+              <Box sx={{ width: `${clampPct(coverage)}%`, height: '100%', borderRadius: 8, bgcolor: coverageColor, transition: 'width .4s ease' }} />
+              <Box sx={{ position: 'absolute', left: `${clampPct(target)}%`, top: -3, bottom: -3, width: 2, bgcolor: axis }} />
+              <Box sx={{ position: 'absolute', left: `${clampPct(target)}%`, top: -18, transform: 'translateX(-50%)' }}>
+                <Typography variant="caption" sx={{ color: axis, fontWeight: 600, whiteSpace: 'nowrap' }}>{target.toFixed(0)}%</Typography>
+              </Box>
+            </Box>
+            <Typography variant="caption" sx={{ opacity: 0.6, display: 'block', mt: 2 }}>{meta.blurb}</Typography>
+            <Typography variant="caption" sx={{ opacity: 0.5, display: 'block', mt: 0.5 }}>
+              {report.samples} resolved sample{report.samples === 1 ? '' : 's'}
+              {report.symbol === 'ALL' ? ' · all symbols' : ''}
+            </Typography>
+          </Grid>
+
+          {/* Directional edge + bias */}
+          <Grid size={{ xs: 12, md: 6 }}>
+            <Typography variant="caption" sx={{ opacity: 0.7 }}>Directional edge vs naive persistence</Typography>
+            {dir !== null && naive !== null && edge !== null ? (
+              <Box sx={{ mt: 0.5, mb: 2 }}>
+                <Typography sx={{ fontSize: '1.05rem', fontWeight: 700 }}>
+                  {dir.toFixed(0)}% <Box component="span" sx={{ opacity: 0.6, fontWeight: 400 }}>ensemble</Box>
+                  {' vs '}{naive.toFixed(0)}% <Box component="span" sx={{ opacity: 0.6, fontWeight: 400 }}>naive</Box>
+                </Typography>
+                <Chip
+                  size="small"
+                  icon={<TrendingUp size={14} />}
+                  label={`${edge >= 0 ? '+' : ''}${edge.toFixed(0)}% edge`}
+                  sx={{ mt: 1, fontWeight: 700, color: edge > 0 ? green : red, bgcolor: `${edge > 0 ? green : red}1a` }}
+                />
+                <Typography variant="caption" sx={{ opacity: 0.6, display: 'block', mt: 1 }}>
+                  {edge > 0 ? 'The ensemble beats simply assuming yesterday’s move repeats.' : 'The ensemble is not beating a naive persistence baseline.'}
+                </Typography>
+              </Box>
+            ) : (
+              <Typography variant="body2" sx={{ opacity: 0.5, mt: 1, mb: 2 }}>Not enough directional samples yet.</Typography>
+            )}
+
+            <Typography variant="caption" sx={{ opacity: 0.7 }}>Bias — mean signed error (forecast − actual)</Typography>
+            {bias !== null ? (
+              <Stack direction="row" alignItems="baseline" gap={1} sx={{ mt: 0.5 }}>
+                <Typography sx={{ fontSize: '1.4rem', fontWeight: 800, color: Math.abs(bias) < 0.5 ? axis : (bias > 0 ? amber : primaryColor) }}>
+                  {bias >= 0 ? '+' : ''}{bias.toFixed(2)}
+                </Typography>
+                <Typography variant="body2" sx={{ opacity: 0.6 }}>
+                  {Math.abs(bias) < 0.5 ? 'roughly unbiased' : bias > 0 ? 'forecasts run high' : 'forecasts run low'}
+                </Typography>
+              </Stack>
+            ) : (
+              <Typography variant="body2" sx={{ opacity: 0.5, mt: 0.5 }}>—</Typography>
+            )}
+          </Grid>
+        </Grid>
+      </CardContent>
+    </Card>
   );
 }
 

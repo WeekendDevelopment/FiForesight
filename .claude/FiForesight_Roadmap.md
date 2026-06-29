@@ -44,6 +44,7 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - Tool-using jury agents — Groq function calling; tools: `get_vix`, `get_put_call_ratio`, `get_insider_flow`, `get_macro_snapshot`; jury re-analysis UI (#220)
 - Jury quant lens swapped to `openai/gpt-oss-20b`; verdict parsing hardened; malformed output tracked (#226)
 - Forecast Accuracy & Sentiment Analytics Dashboard — `/insights` tab + `GET /analytics/{accuracy,sentiment}/{symbol}`; persists VADER compound to new `sentiment_score` measurement (Feature 12, PR #244)
+- Forecast Calibration Audit (Feature 30) — "should I trust this forecast?" — `GET /analytics/calibration/{symbol}` (+ `ALL` aggregate, read-only tier, 15-min Redis cache). Pure transform over the existing `forecast_record` + `price_outcome` InfluxDB history (`calibration_service.py`): **coverage** (% of realized prices inside the persisted forecast band vs the ~80% target → `well_calibrated`/`overconfident`/`underconfident`), **directional edge** (ensemble directional accuracy vs a naive persistence baseline → `edge_pct`), and **bias** (mean signed error). Surfaced as a new Calibration section on the `/insights` page (verdict chip + coverage gauge + edge stat); clean empty state on thin history. 8 new backend tests. (#pending-F30)
 - Portfolio Manager — real holdings + live P&L ("My Portfolio" tab) + `GET/POST/DELETE /portfolio/holdings` + `GET /portfolio/summary` (Supabase `holdings` + RLS); existing race sim renamed "Simulator" (Feature 10, PR #249)
 - Analyst price targets card — Wall St. mean/low/high range bar + rating breakdown (Feature 21, PR #267)
 - Gap Explainer — auto-detects ≥3% daily moves, surfaces top headlines + Groq one-sentence explanation in a banner above the chart (F22)
@@ -214,11 +215,9 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 > Recommended order: **calibration audit → driver attribution → component scorecard → math fixes →
 > self-tuning loop → AI meta-layer.**
 
-- **Forecast calibration audit** *(do first)* — is the core output even correct? Measure whether the
-  48h high/low range and Monte Carlo P10/P50/P90 are actually *calibrated* (does ~80% of realized
-  price land inside P10–P90? is directional accuracy > a naive/persistence baseline?). Pure analysis
-  over existing InfluxDB outcome data; surfaces a coverage/reliability report and the "is it currently
-  wrong?" gate everything else depends on. · `[Value: High]` `[Effort: Med]`
+- ~~**Forecast calibration audit** *(do first)*~~ — ✅ **Shipped** (Feature 30, see ### Intelligence):
+  `GET /analytics/calibration/{symbol}` (+ `ALL` aggregate). The "is it currently wrong?" gate the rest
+  of this theme depends on is now answerable.
 - **Prediction driver attribution** — quantify which inputs actually move each prediction and which
   correlate with *realized* accuracy (not just in-sample importance). Extend RF `feature_importances_`
   with an outcome-correlation pass over `price_outcome`; expose a "what drove this call" breakdown.

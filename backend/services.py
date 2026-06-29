@@ -729,6 +729,37 @@ class ForecastStore:
             logger.error(f"[RL] ✗ query_forecast_records error for {symbol}: {e}")
             return []
 
+    def query_forecast_symbols(self, days: int = 90) -> List[str]:
+        """Distinct symbols that have forecast_record history in the last N days.
+
+        Used by the calibration audit's "ALL" aggregate. Read-only; fails closed
+        (returns []) on any query error so the aggregate degrades to empty rather
+        than raising.
+        """
+        days = max(1, int(days))
+        query = f"""
+        from(bucket: "{Config.INFLUXDB_BUCKET}")
+          |> range(start: -{days}d)
+          |> filter(fn: (r) => r["_measurement"] == "forecast_record")
+          |> group(columns: ["symbol"])
+          |> distinct(column: "symbol")
+          |> keep(columns: ["_value"])
+        """
+        try:
+            tables = self._svc.query_api.query(query)
+            symbols = {
+                str(r.values.get("_value"))
+                for t in tables
+                for r in t.records
+                if r.values.get("_value")
+            }
+            out = sorted(symbols)
+            logger.info(f"[RL] query_forecast_symbols — {len(out)} symbols in last {days}d")
+            return out
+        except Exception as e:
+            logger.error(f"[RL] ✗ query_forecast_symbols error: {e}")
+            return []
+
     def query_price_outcomes(self, symbol: str, days: int = 15) -> Dict[object, float]:
         """Returns {date: actual_close} from price_outcome measurement."""
         try:
