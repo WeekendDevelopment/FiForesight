@@ -5,8 +5,9 @@ The math lives in pure helpers in calibration_service, so these feed synthetic
 forecast+outcome records straight to the transform — no network, no InfluxDB.
 A few endpoint smoke tests exercise the router with the store mocked.
 """
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 import importlib as _il
 
 from fastapi import FastAPI
@@ -144,8 +145,17 @@ def _patch_store(records=None, outcomes=None, symbols=None):
     return patch.object(calibration_service, "forecast_store", mock)
 
 
+@contextmanager
+def _no_redis():
+    """Stub the Redis cache so endpoint tests exercise the mocked store, never a
+    live/stale analytics:calibration:* key. Bare module path (tests run from backend/)."""
+    with patch("redis_cache.cache_get", AsyncMock(return_value=None)), \
+         patch("redis_cache.cache_set", AsyncMock(return_value=None)):
+        yield
+
+
 def test_calibration_endpoint_empty_200() -> None:
-    with _patch_store():  # no history
+    with _no_redis(), _patch_store():  # no history
         resp = client.get("/analytics/calibration/NVDA")
     assert resp.status_code == 200
     d = resp.json()
@@ -162,7 +172,7 @@ def test_calibration_endpoint_all_aggregate() -> None:
     mock.query_forecast_symbols.return_value = ["AAA", "BBB"]
     mock.query_forecast_records.return_value = records
     mock.query_price_outcomes.return_value = outcomes
-    with patch.object(calibration_service, "forecast_store", mock):
+    with _no_redis(), patch.object(calibration_service, "forecast_store", mock):
         resp = client.get("/analytics/calibration/ALL")
     assert resp.status_code == 200
     d = resp.json()

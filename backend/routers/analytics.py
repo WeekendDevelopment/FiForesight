@@ -211,12 +211,16 @@ async def calibration_analytics(request: Request, symbol: str):
             timeout=12.0,
         )
     except asyncio.TimeoutError:
+        # Don't cache the transient empty-state — a single slow query shouldn't
+        # keep serving samples:0 for 15 min after the backend recovers.
         logger.warning("[ANALYTICS] calibration query timed out for %s", symbol)
-        result = {
+        return {
+            "symbol": symbol,
             "samples": 0, "p10_p90_coverage_pct": None, "range_coverage_pct": None,
             "directional_accuracy_pct": None, "naive_accuracy_pct": None,
             "edge_pct": None, "mean_signed_error": None, "calibration_verdict": None,
             "coverage_target_pct": 80.0,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
         }
 
     payload = {

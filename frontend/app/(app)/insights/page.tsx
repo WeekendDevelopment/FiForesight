@@ -66,15 +66,18 @@ function InsightsContent() {
     setSentiment(null);
     setCalibration(null);
     router.replace(`/insights?symbol=${encodeURIComponent(sym)}`, { scroll: false });
+    // Calibration is a read-only add-on — fetch it best-effort so a failure
+    // there never blocks the core accuracy + sentiment views.
+    axios.get(`/api/analytics/calibration/${sym}`)
+      .then(res => setCalibration(res.data))
+      .catch(() => setCalibration(null));
     try {
-      const [accRes, sentRes, calRes] = await Promise.all([
+      const [accRes, sentRes] = await Promise.all([
         axios.get(`/api/analytics/accuracy/${sym}`),
         axios.get(`/api/analytics/sentiment/${sym}`),
-        axios.get(`/api/analytics/calibration/${sym}`),
       ]);
       setAccuracy(accRes.data);
       setSentiment(sentRes.data);
-      setCalibration(calRes.data);
     } catch (err: unknown) {
       const msg = axios.isAxiosError(err)
         ? (err.response?.data?.error ?? err.message)

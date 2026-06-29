@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from typing import Optional
 
 from dependencies import forecast_store
@@ -54,7 +55,7 @@ def _num(rec: dict, *keys) -> Optional[float]:
             f = float(v)
         except (TypeError, ValueError):
             continue
-        if f != f:  # NaN
+        if math.isnan(f):
             continue
         return f
     return None
@@ -231,12 +232,19 @@ async def compute_calibration(symbol: Optional[str]) -> dict:
     else:
         symbols = [symbol]
 
-    scored: list[dict] = []
-    for sym in symbols:
-        records, outcomes = await asyncio.gather(
-            asyncio.to_thread(forecast_store.query_forecast_records, sym, _LOOKBACK_DAYS),
-            asyncio.to_thread(forecast_store.query_price_outcomes, sym, _LOOKBACK_DAYS + 10),
-        )
-        scored.extend(_score_records(records, sorted(outcomes.items())))
+    # Fan out per-symbol reads with bounded concurrency so the "ALL" aggregate
+    # doesn't serialize 2×N blocking queries into the router's 12s timeout.
+    semaphore = asyncio.Semaphore(8)
+
+    async def _fetch_symbol(sym: str) -> list[dict]:
+        async with semaphore:
+            records, outcomes = await asyncio.gather(
+                asyncio.to_thread(forecast_store.query_forecast_records, sym, _LOOKBACK_DAYS),
+                asyncio.to_thread(forecast_store.query_price_outcomes, sym, _LOOKBACK_DAYS + 10),
+            )
+        return _score_records(records, sorted(outcomes.items()))
+
+    batches = await asyncio.gather(*(_fetch_symbol(sym) for sym in symbols))
+    scored = [entry for batch in batches for entry in batch]
 
     return _aggregate(scored)
