@@ -5,12 +5,12 @@ The math lives in pure helpers in calibration_service, so these feed synthetic
 forecast+outcome records straight to the transform — no network, no InfluxDB.
 A few endpoint smoke tests exercise the router with the store mocked.
 """
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 import importlib as _il
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
@@ -26,7 +26,7 @@ _test_app = FastAPI()
 _test_app.state.limiter = limiter
 
 
-async def _rl_handler(req, exc: RateLimitExceeded) -> JSONResponse:
+async def _rl_handler(req: Request, exc: RateLimitExceeded) -> JSONResponse:
     return JSONResponse(status_code=429, content={"detail": "slow down"})
 
 
@@ -137,7 +137,11 @@ def test_insufficient_history() -> None:
 # Endpoint smoke tests (store mocked)
 # ---------------------------------------------------------------------------
 
-def _patch_store(records=None, outcomes=None, symbols=None):
+def _patch_store(
+    records: list | None = None,
+    outcomes: dict | None = None,
+    symbols: list | None = None,
+) -> AbstractContextManager[MagicMock]:
     mock = MagicMock()
     mock.query_forecast_records.return_value = records or []
     mock.query_price_outcomes.return_value = outcomes or {}

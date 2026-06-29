@@ -187,7 +187,7 @@ async def accuracy_analytics(request: Request, symbol: str):
 
 @router.get("/analytics/calibration/{symbol}")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def calibration_analytics(request: Request, symbol: str):
+async def calibration_analytics(request: Request, symbol: str) -> dict:
     """Forecast calibration audit — band coverage, directional edge vs naive, bias.
 
     Accepts the literal "ALL" for the cross-symbol aggregate. Thin history returns

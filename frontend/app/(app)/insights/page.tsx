@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import axios from 'axios';
 import {
@@ -56,9 +56,14 @@ function InsightsContent() {
   const gridColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
   const axisColor = isDark ? '#94a3b8' : '#64748b';
 
+  // Tracks the most recently requested symbol so a slow in-flight calibration
+  // response from an older ticker can't overwrite the current card.
+  const latestSymbolRef = useRef<string | null>(null);
+
   const fetchInsights = useCallback(async (raw: string) => {
     const sym = raw.trim().toUpperCase().split(':')[0];
     if (!sym) return;
+    latestSymbolRef.current = sym;
     setSubmitted(sym);
     setLoading(true);
     setError(null);
@@ -67,10 +72,11 @@ function InsightsContent() {
     setCalibration(null);
     router.replace(`/insights?symbol=${encodeURIComponent(sym)}`, { scroll: false });
     // Calibration is a read-only add-on — fetch it best-effort so a failure
-    // there never blocks the core accuracy + sentiment views.
+    // there never blocks the core accuracy + sentiment views. Drop the result
+    // if a newer search has since started (stale-response guard).
     axios.get(`/api/analytics/calibration/${sym}`)
-      .then(res => setCalibration(res.data))
-      .catch(() => setCalibration(null));
+      .then(res => { if (latestSymbolRef.current === sym) setCalibration(res.data); })
+      .catch(() => { if (latestSymbolRef.current === sym) setCalibration(null); });
     try {
       const [accRes, sentRes] = await Promise.all([
         axios.get(`/api/analytics/accuracy/${sym}`),
