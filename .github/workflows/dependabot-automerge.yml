@@ -1,0 +1,33 @@
+name: Dependabot auto-merge
+
+# Arms GitHub auto-merge on Dependabot PRs that are patch- or minor-level bumps.
+# The server then squash-merges them once all required checks pass AND a human
+# code-owner has approved (the branch ruleset still requires that approval — this
+# workflow only enables auto-merge, it never approves). Major bumps are left
+# untouched for manual review. Runs 24/7, independent of any local machine.
+
+on:
+  pull_request_target
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    runs-on: ubuntu-latest
+    # Only act on Dependabot's own PRs.
+    if: ${{ github.actor == 'dependabot[bot]' }}
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable squash auto-merge for patch and minor updates
+        if: ${{ steps.meta.outputs.update-type == 'version-update:semver-patch' || steps.meta.outputs.update-type == 'version-update:semver-minor' }}
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

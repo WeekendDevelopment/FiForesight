@@ -2,33 +2,62 @@
 # package ecosystems to update and where the package manifests are located.
 # Please see the documentation for all configuration options:
 # https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# Each ecosystem groups its minor + patch bumps into a single combined PR
+# ("minor-and-patch") so one approval + one CI run + one merge clears them all.
+# Major bumps still open as individual PRs (left out of the group) for manual review.
 
 version: 2
 updates:
   - package-ecosystem: "npm"
-    directories: 
+    directories:
       - "/"
       - "/frontend"
     schedule:
       interval: "daily"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
   - package-ecosystem: "pip"
-    directories: 
+    directories:
       - "/backend"
     schedule:
       interval: "daily"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
   - package-ecosystem: "github-actions"
-    directories: 
+    directories:
       - "/"
     schedule:
       interval: "daily"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
   - package-ecosystem: "docker"
-    directories: 
+    directories:
       - "/"
     schedule:
       interval: "daily"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
   - package-ecosystem: "terraform"
-    directories: 
+    directories:
       - "/terraform"
       - "/terraform-preview"
     schedule:
       interval: "daily"
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
