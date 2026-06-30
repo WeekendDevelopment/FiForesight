@@ -19,6 +19,17 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 4. **API contract** — request/response shape documented in the PR description.
 5. **Tests** — each new endpoint ships ≥1 integration test (also closes the audit's coverage gaps).
 
+### Build standards (every feature, 2026-06-30 onward)
+
+Beyond the five docs above, every feature/fix PR must also satisfy:
+- **Branch from fresh main** — the first step of any implementation prompt is
+  `git checkout main && git pull` *before* creating the feature/fix branch, so it's always cut from
+  the latest main (avoids stale-base merge pain).
+- **Multi-screen responsive** — everything rendered must work across phone / tablet / desktop / 4K
+  (breakpoints 320 / 768 / 1280 / 2560); no element may overflow or disappear on small screens.
+  Enforced by the **Responsive QA harness** (Playwright "no horizontal overflow + key elements visible"
+  smoke test across viewports — see Backlog → Competitor-Gap Features, Tier 0).
+
 ---
 
 ## Shipped
@@ -275,6 +286,50 @@ Documentation is part of the feature, not an afterthought. A feature PR is **not
 - **F28 backtester enhancement** — add per-regime performance breakdown ("best/worst conditions",
   covering #2) + max-drawdown recovery time (#10); fold into F28 rather than a separate feature.
   · `[Value: Med]` `[Effort: Low]`
+
+### Competitor-Gap Features (2026-06-30 review — Koyfin / TradingView / TipRanks / Earnings Whisper)
+
+> Sourced from a competitor scan + user selection. FiFo is strong on AI/price analysis; these close the
+> "analyze the *company*" + daily-driver-UX gaps. All free-data (yfinance financials/estimates/holders,
+> SEC EDGAR, FRED). Tagged + tiered; F-numbers assigned on promotion to Next Up.
+> **First Next-Up batch (selected 2026-06-30): Responsive QA harness + H Stock Report Card + E Smart
+> Watchlist Columns.** Code-area clusters: A/B/C/F/H = analysis-page fundamentals cards (share one
+> yfinance fundamentals-service expansion); J/K/M = portfolio/holdings; G = `/macro`; I = options chain.
+
+**Tier 0 — infra (do first; enforces the responsive build standard)**
+- **Responsive QA harness** *(NEXT UP)* — Playwright smoke test: load every route at 320/768/1280/2560,
+  fail CI on horizontal overflow or a missing key element. · `[Value: High]` `[Effort: Med]`
+
+**Tier 1 — quick, high-value wins**
+- **H · Stock Report Card** *(NEXT UP)* — one-glance grade (Value / Growth / Profitability / Momentum /
+  Financial-Health) from data already pulled; Simply-Wall-St-style. · `[Value: High]` `[Effort: Low–Med]`
+- **E · Smart Watchlist Columns** *(NEXT UP)* — watchlist → live data table (price, %chg, P/E, RSI,
+  %-from-52wk-high, mkt cap, next earnings); Koyfin-style. · `[Value: High]` `[Effort: Med]`
+- **C · Institutional Ownership** — % institutional, top fund holders, float, ownership change (yfinance
+  `institutional_holders` / `major_holders`), beside the SEC insider card. · `[Value: Med]` `[Effort: Low–Med]`
+
+**Tier 2 — company-analysis depth (share a yfinance fundamentals-service expansion)**
+- **A · Fundamentals Time-Machine** — 10-yr revenue / EPS / margins / FCF + valuation multiples (P/E,
+  EV/EBITDA) vs the stock's own 5-yr average; the signature Koyfin gap. · `[Value: High]` `[Effort: Med]`
+- **B · Forward Estimates & Earnings Hub** — forward EPS/revenue consensus + estimate-revision trend +
+  next-earnings countdown (yfinance `earnings_estimate` / `eps_trend`), beside existing surprise history.
+  · `[Value: Med]` `[Effort: Med]`
+- **F · Peer Comparison 2.0** — upgrade the peer panel: up to 4 tickers, fundamentals table + normalized
+  % performance overlay + valuation multiples + rolling correlation. · `[Value: Med]` `[Effort: Med]`
+- **D · Market Mood Gauge** — Fear & Greed-style composite (VIX + breadth + put/call + momentum + VADER
+  sentiment) on the landing page. · `[Value: Med]` `[Effort: Med]`
+- **J · Dividend & Income Center** — ex-div calendar, payout history, yield-on-cost, projected annual
+  income from real holdings (yfinance dividends). · `[Value: Med]` `[Effort: Low–Med]`
+
+**Tier 3 — niche / heavier (portfolio + trading + events)**
+- **K · Portfolio Risk Analytics** — beta, volatility, correlation matrix, risk contribution, drawdown
+  vs SPY on real holdings (extends the HHI score). · `[Value: Med]` `[Effort: Med–High]`
+- **M · ETF Holdings & Overlap** — look inside any ETF + overlap with holdings ("14% NVDA across QQQ+SMH");
+  concentration risk. · `[Value: Med]` `[Effort: Med]`
+- **G · Economic Event Calendar** — upcoming CPI / FOMC / jobs / GDP with prior + forecast on the `/macro`
+  tab (FRED release schedule). · `[Value: Med]` `[Effort: Med]`
+- **I · Options Strategy Payoff** — payoff diagrams + breakeven / max-loss for covered call, vertical
+  spread, straddle on the existing options chain. · `[Value: Med]` `[Effort: Med]`
 
 ---
 
