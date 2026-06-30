@@ -35,7 +35,7 @@ FiForesight/
 │   │   ├── simulation.py       # /simulation/suggest /simulation/performance /simulation/state
 │   │   ├── trade.py            # /trade-setup /chat
 │   │   ├── market.py           # /dcf /options /ipo/calendar /earnings/calendar /sectors/heatmap (F23) /sectors/rotation (F27) /briefing /orderbook /macro/snapshot /insider/{symbol} (F15) /screener (F24)
-│   │   ├── analytics.py        # /analytics/accuracy/{symbol} /analytics/sentiment/{symbol}
+│   │   ├── analytics.py        # /analytics/accuracy/{symbol} /analytics/sentiment/{symbol} /analytics/calibration/{symbol} (F30, +ALL)
 │   │   ├── portfolio.py        # /portfolio/holdings (GET/POST/DELETE) /portfolio/summary (auth-gated)
 │   │   ├── alerts.py           # /alerts/rules (CRUD) /alerts/fires /alerts/subscribe /alerts/evaluate [cron] (Feature 9)
 │   │   └── watchlist.py        # /watchlist (GET/POST/DELETE) — Feature 13
@@ -44,6 +44,7 @@ FiForesight/
 │   ├── services.py             # YFinanceService, InfluxService, SerpService, SentimentService, AnalystJuryService, FREDService/InsiderService/ShortInterestService (F15), RegimeService (F16)
 │   ├── universe.py             # SCREENER_UNIVERSE — curated ~50-stock list for the screener (F24)
 │   ├── screener_service.py     # build_universe_snapshot() — on-demand yfinance fan-out per ticker (F24)
+│   ├── calibration_service.py  # compute_calibration() — coverage/edge/bias over forecast_record+price_outcome (F30)
 │   ├── supabase_rest.py        # RLS-scoped holdings + watchlist CRUD via caller's forwarded JWT
 │   ├── alerts_store.py         # Alerts/fires/push-subs storage — user-JWT (RLS) + service-role (evaluator) (Feature 9)
 │   ├── alerts_evaluator.py     # Scheduled rule evaluator + daily digest (pure evaluate_rule + orchestrator) (Feature 9)
@@ -228,6 +229,12 @@ Insights flow (/insights tab — read-only, Redis-cached 15min, samples:0 empty 
                                           directional accuracy %, forecast-vs-actual (from
                                           model_accuracy + forecast_record + price_outcome)
   GET /api/analytics/sentiment/{symbol} → 30-day VADER compound trend (from sentiment_score)
+  GET /api/analytics/calibration/{symbol} → Forecast Calibration Audit (Feature 30; accepts "ALL" for the
+                                          cross-symbol aggregate). Pure transform (calibration_service.py)
+                                          over forecast_record + price_outcome: band coverage % vs the ~80%
+                                          target (verdict well_calibrated/overconfident/underconfident),
+                                          directional accuracy vs a naive persistence baseline (edge_pct),
+                                          and mean signed error (bias). Thin history → samples + null metrics.
 
 Simulator flow (/simulation page — "Simulator" tab, backtest RACE vs S&P, NOT real holdings):
   POST /api/simulation/suggest     → ticker suggestions by risk level
@@ -334,6 +341,7 @@ See `.claude/FiForesight_Roadmap.md`. Recently shipped:
 - **Llama 3.1 8B Instant** (`llama-3.1-8b-instant`) is the Quant Lens analyst — chosen for its **14,400 RPD** free-tier limit (14.4× more than any other model). Rate limits: 30 RPM | 6K TPM | 14.4K RPD.
 - **VADER sentiment** (`SentimentService` in `services.py`) scores headlines before the jury runs; compound score + label passed in each analyst's context. Each `/predict` also persists the compound score (fire-and-forget) to the **`sentiment_score`** InfluxDB measurement (tags: `symbol`, `env=Config.APP_ENV`; fields: `compound` float, `label` string) — only when ≥1 headline was scored. `query_sentiment_history` reads it for the Insights tab's 30-day trend.
 - **Analytics / Insights** (`routers/analytics.py`) — read-only tier (60/min), 15-min Redis cache, 12s timeout. `/analytics/accuracy/{symbol}` is pure-transform over existing InfluxDB data (`query_model_accuracy` + `query_ensemble_mae` + `query_forecast_records` + `query_price_outcomes`): per-model MAE + best_model, ensemble MAE by horizon d1–d5, directional accuracy (`sign(pred−last)` vs `sign(actual−last)`, skips the `0.0` missing-prediction sentinel), and forecast-vs-actual (de-duped to one point per resolved date). Insufficient history → **`200` with `samples:0` + empty arrays** (NOT 404). `/analytics/sentiment/{symbol}` returns the 30-day trend + `current`. Frontend tab at `frontend/app/(app)/insights/page.tsx` (5 Recharts views, reads `isDark`/`primaryColor` from `AppShellContext`).
+- **Forecast Calibration Audit (Feature 30)** — `GET /analytics/calibration/{symbol}` (`routers/analytics.py`, read-only tier, 15-min Redis cache, accepts the literal **`ALL`** for the cross-symbol aggregate). Answers "should I trust this forecast?" entirely from data already collected — `calibration_service.py::compute_calibration(symbol)` is a **pure transform** (no new writes) over `forecast_store.query_forecast_records` + `query_price_outcomes` (and `query_forecast_symbols` — a new distinct-symbol tag query — for `ALL`). The math lives in side-effect-free helpers `_score_records`/`_aggregate` (tested directly). For each forecast joined to the earliest realized close strictly after its date it computes: **coverage** of the persisted 48h band (`e_d1_low`/`e_d1_high`) → `range_coverage_pct`; `p10_p90_coverage_pct` defaults to that same band since **MC P10/P90 are computed per `/predict` but NOT persisted** (synthetic records may supply explicit `p10`/`p90` to audit a tighter band); **directional** accuracy of the ensemble d1 median (`e_d1`) vs a **naive persistence** baseline (`sign(last−prev)`, `prev` reconstructed from the previous record's `last_price`) → `directional_accuracy_pct`, `naive_accuracy_pct`, `edge_pct`; and **bias** = mean(`p50−actual`) → `mean_signed_error`. `calibration_verdict` keys off coverage vs the 80% target (±10 → `well_calibrated`; >90 `underconfident`; <70 `overconfident`). **Thin history (< `MIN_CALIBRATION_SAMPLES`=5 matched) → `200` with `samples` + null metrics** (NOT 404), mirroring the analytics empty-state. Surfaced as a **Calibration** section on `/insights` (`CalibrationSection` — verdict chip + coverage gauge with an 80% target marker + edge stat; reuses the samples-thin empty pattern). `CalibrationReport` type + `/api/analytics/calibration/[symbol]` proxy. 8 tests in `test_calibration.py`.
 - **FastMCP server** — `fastmcp dev backend/mcp_server.py` exposes predict/sparklines/health as Claude Code tools.
 - **Backend router split** — `main.py` is now ~50 lines; all routes live in `backend/routers/`. Service singletons in `dependencies.py`.
 - **Supabase auth** — `frontend/lib/supabase.ts` + `frontend/contexts/AuthContext.tsx`. Falls back to placeholder strings if env vars not set (build succeeds without them).

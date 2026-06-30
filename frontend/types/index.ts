@@ -522,6 +522,30 @@ export interface AccuracyAnalytics {
   generated_at: string;
 }
 
+/** Forecast Calibration Audit (Feature 30) — `GET /analytics/calibration/{symbol}`.
+ *  symbol "ALL" returns the cross-symbol aggregate. Metrics are null on thin history. */
+export interface CalibrationReport {
+  symbol:                    string;
+  /** Resolved forecasts matched to a realized close. */
+  samples:                   number;
+  /** % of realized prices inside the P10–P90 band (defaults to the 48h range when MC percentiles weren't persisted). */
+  p10_p90_coverage_pct:      number | null;
+  /** % of realized prices inside the persisted 48h high/low range. */
+  range_coverage_pct:        number | null;
+  /** Ensemble directional accuracy %. */
+  directional_accuracy_pct:  number | null;
+  /** Naive persistence baseline directional accuracy %. */
+  naive_accuracy_pct:        number | null;
+  /** directional − naive (>0 ⇒ ensemble beats persistence). */
+  edge_pct:                  number | null;
+  /** mean(p50 − actual): >0 forecast runs high, <0 runs low. */
+  mean_signed_error:         number | null;
+  calibration_verdict:       'well_calibrated' | 'overconfident' | 'underconfident' | null;
+  /** Well-calibrated coverage target (≈80). */
+  coverage_target_pct:       number;
+  generated_at:              string;
+}
+
 export interface SentimentPoint {
   date:     string;
   compound: number;

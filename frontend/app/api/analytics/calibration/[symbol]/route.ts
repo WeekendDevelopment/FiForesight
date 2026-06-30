@@ -17,19 +17,19 @@ export async function GET(
   if (fwd) headers['x-forwarded-for'] = fwd;
 
   try {
-    const res = await fetch(`${BACKEND_URL}/analytics/accuracy/${encodeURIComponent(symbol)}`, {
+    const res = await fetch(`${BACKEND_URL}/analytics/calibration/${encodeURIComponent(symbol)}`, {
       headers,
       signal: AbortSignal.timeout(15000),
     });
     const data = await res.json().catch(() => null);
     if (!res.ok) {
       // Preserve upstream detail (e.g. 422 invalid symbol, 429 rate limit) + status.
-      const detail = (data && (data.detail ?? data.error)) ?? 'Accuracy analytics fetch failed';
+      const detail = (data && (data.detail ?? data.error)) ?? 'Calibration analytics fetch failed';
       return NextResponse.json({ error: detail }, { status: res.status });
     }
     return NextResponse.json(data);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json({ error: `Accuracy analytics unavailable: ${message}` }, { status: 502 });
+    return NextResponse.json({ error: `Calibration analytics unavailable: ${message}` }, { status: 502 });
   }
 }
