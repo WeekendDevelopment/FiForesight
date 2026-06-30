@@ -14,7 +14,7 @@
     "@emotion/styled": "^11.11.5",
     "@mui/icons-material": "^7.3.9",
     "@mui/material": "^7.3.9",
-    "@supabase/supabase-js": "^2.108.1",
+    "@supabase/supabase-js": "^2.110.0",
     "@types/react-plotly.js": "^2.6.4",
     "axios": "^1.18.1",
     "lightweight-charts": "^5.2.0",
