@@ -185,6 +185,53 @@ async def accuracy_analytics(request: Request, symbol: str):
     return payload
 
 
+@router.get("/analytics/calibration/{symbol}")
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def calibration_analytics(request: Request, symbol: str) -> dict:
+    """Forecast calibration audit — band coverage, directional edge vs naive, bias.
+
+    Accepts the literal "ALL" for the cross-symbol aggregate. Thin history returns
+    200 with samples + null metrics (never a 404).
+    """
+    from calibration_service import compute_calibration
+    from redis_cache import cache_get, cache_set
+
+    symbol = symbol.strip().upper()
+    if symbol != "ALL" and not _SYMBOL_RE.match(symbol):
+        raise HTTPException(status_code=422, detail="Invalid symbol.")
+
+    cache_key = f"analytics:calibration:{symbol}"
+    cached = await cache_get(cache_key)
+    if cached:
+        return cached
+
+    try:
+        result = await asyncio.wait_for(
+            compute_calibration(None if symbol == "ALL" else symbol),
+            timeout=12.0,
+        )
+    except asyncio.TimeoutError:
+        # Don't cache the transient empty-state — a single slow query shouldn't
+        # keep serving samples:0 for 15 min after the backend recovers.
+        logger.warning("[ANALYTICS] calibration query timed out for %s", symbol)
+        return {
+            "symbol": symbol,
+            "samples": 0, "p10_p90_coverage_pct": None, "range_coverage_pct": None,
+            "directional_accuracy_pct": None, "naive_accuracy_pct": None,
+            "edge_pct": None, "mean_signed_error": None, "calibration_verdict": None,
+            "coverage_target_pct": 80.0,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    payload = {
+        "symbol":       symbol,
+        **result,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await cache_set(cache_key, payload, ttl_seconds=900)
+    return payload
+
+
 @router.get("/analytics/sentiment/{symbol}")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
 async def sentiment_analytics(request: Request, symbol: str):
