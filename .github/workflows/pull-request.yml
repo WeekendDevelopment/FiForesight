@@ -81,6 +81,54 @@ jobs:
           NEXT_PUBLIC_APP_ENV: preview
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+  responsive-qa:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        working-directory: frontend
+        shell: bash
+        run: npm install --global pnpm
+
+      - name: Setup node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 'latest'
+
+      - name: Install Dependencies
+        working-directory: frontend
+        shell: bash
+        run: pnpm install --lockfile
+
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        shell: bash
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Layout-only smoke test: loads every route at 320/768/1280/2560 and
+      # fails on horizontal overflow or a missing app shell. Tolerates empty/
+      # error states, so it never depends on live yfinance/Groq success. The
+      # webServer block builds the prod bundle itself.
+      - name: Run Responsive QA Harness
+        working-directory: frontend
+        shell: bash
+        run: pnpm run test:responsive
+        env:
+          CI: 'true'
+          NEXT_PUBLIC_APP_ENV: preview
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
+
   build-backend:
     runs-on: ubuntu-latest
     steps:
