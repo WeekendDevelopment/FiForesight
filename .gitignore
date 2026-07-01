@@ -26,3 +26,10 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Playwright (responsive QA harness)
+test-results/
+playwright-report/
+frontend/test-results/
+frontend/playwright-report/
+frontend/playwright/.cache/

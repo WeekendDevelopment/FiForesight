@@ -493,7 +493,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   const { watchlist } = useWatchlistContext();
 
   return (
-    <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+    <Box data-testid="app-shell" sx={{ display: 'flex', minHeight: '100vh' }}>
       <Sidebar />
       <Box
         component="main"

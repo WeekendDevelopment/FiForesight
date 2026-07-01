@@ -1245,7 +1245,7 @@ export default function SimulationPage() {
   return (
     <ThemeProvider theme={darkTheme}>
       <CssBaseline />
-      <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
+      <Box data-testid="app-shell" sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
         {/* Top bar */}
         <Box sx={{
           borderBottom: '1px solid rgba(255,255,255,0.06)',
