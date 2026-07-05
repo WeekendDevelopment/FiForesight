@@ -114,6 +114,7 @@ Beyond the five docs above, every feature/fix PR must also satisfy:
 - HTTPS, Docker multi-stage, Koyeb + Oracle Cloud deploys
 - GitHub Actions: PR preview + prod deploy; Alpaca API keys wired through deploy pipeline (#209 + workflow updates)
 - FastMCP server (`mcp_server.py`)
+- Responsive QA harness — Playwright smoke test (`frontend/tests/e2e/responsive.spec.ts`, `pnpm run test:responsive`) loading every app route at 320/768/1280/2560 and failing on horizontal overflow or a missing app shell; enforces the "multi-screen responsive" build standard. Layout-only (tolerates empty/error states), runs logged-out so AuthGates are covered.
 
 ---
 
@@ -297,8 +298,8 @@ Beyond the five docs above, every feature/fix PR must also satisfy:
 > yfinance fundamentals-service expansion); J/K/M = portfolio/holdings; G = `/macro`; I = options chain.
 
 **Tier 0 — infra (do first; enforces the responsive build standard)**
-- **Responsive QA harness** *(NEXT UP)* — Playwright smoke test: load every route at 320/768/1280/2560,
-  fail CI on horizontal overflow or a missing key element. · `[Value: High]` `[Effort: Med]`
+- **Responsive QA harness** — ✅ **Shipped** (see Shipped → Infra). Playwright smoke test loading every
+  route at 320/768/1280/2560, failing on horizontal overflow or a missing app shell. `pnpm run test:responsive`.
 
 **Tier 1 — quick, high-value wins**
 - **H · Stock Report Card** *(NEXT UP)* — one-glance grade (Value / Growth / Profitability / Momentum /

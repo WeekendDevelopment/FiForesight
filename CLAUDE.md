@@ -123,7 +123,23 @@ ruff check backend/                   # linter
 # Frontend
 pnpm run lint    # ESLint
 pnpm run build   # Next.js production build
+
+# Responsive QA harness (Playwright) — builds a prod bundle + smoke-tests every route
+cd frontend && pnpm run test:responsive
 ```
+
+### Responsive QA
+`pnpm run test:responsive` (`frontend/tests/e2e/responsive.spec.ts`, `frontend/playwright.config.ts`) is the
+enforcement mechanism for the "multi-screen responsive" build standard. It loads **every** app route at four
+viewports — **320 (phone) / 768 (tablet) / 1280 (desktop) / 2560 (4K)** — and, per route×viewport, asserts
+(a) the app shell (`data-testid="app-shell"`) is visible and (b) **no horizontal overflow** at both the document
+level *and* the `<main>` content container (the layout gives `<main>` `overflowY:auto` → computed `overflow-x:auto`,
+so content overflow is absorbed by main's own scrollbar and would escape a document-only check). It's **layout-only**
+— tolerates empty/error states, never asserts fetched content — and runs **logged-out**, so the AuthGates on
+`/portfolio` `/alerts` `/simulation` are covered too. The `webServer` block runs `pnpm run build && pnpm run start`.
+**New pages must pass it:** add the route to `ROUTES` (kept in sync with `NAV_ITEMS`); if you introduce a new
+top-level shell area outside the `(app)` layout, give its root `data-testid="app-shell"`. Artifacts
+(`test-results/`, `playwright-report/`, `playwright/.cache/`) are gitignored.
 
 ---
 
