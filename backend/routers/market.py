@@ -1321,6 +1321,120 @@ async def analyst_targets(request: Request, symbol: str) -> Dict[str, Any]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Stock Report Card
+# ---------------------------------------------------------------------------
+def _band(value: Optional[float], points: List[Tuple[float, int]]) -> Optional[int]:
+    """Map ``value`` to a 0-100 score via ascending ``[(threshold, score)]`` pairs.
+
+    Returns the score of the first threshold ``>= value``; falls through to the
+    last (worst/most-lenient) bucket above every threshold. None-safe."""
+    if value is None:
+        return None
+    for thr, sc in points:
+        if value <= thr:
+            return sc
+    return points[-1][1]
+
+
+def _avg(scores: List[Optional[int]]) -> Optional[int]:
+    vals = [s for s in scores if s is not None]
+    return round(sum(vals) / len(vals)) if vals else None
+
+
+@router.get("/report-card/{symbol}")
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def report_card(request: Request, symbol: str) -> Dict[str, Any]:
+    """Value/Growth/Profitability/Momentum/Financial-Health 0-100 sub-scores +
+    overall grade for ``symbol``, heuristically derived from yfinance ``.info``.
+
+    Each category averages 1-2 banded sub-metrics (see ``_band``); a category is
+    null when none of its inputs are available (never a 500). Redis-cached 6h;
+    502 when the upstream fetch fails entirely. 60/min via the read-only limiter.
+    """
+    from redis_cache import cache_get, cache_set
+
+    sym = symbol.strip().upper()
+    if not _SYMBOL_RE.match(sym):
+        raise HTTPException(status_code=422, detail="Invalid symbol.")
+
+    cache_key = f"report_card:{sym}"
+    cached = await cache_get(cache_key)
+    if cached:
+        return cached
+
+    def _fetch() -> Dict[str, Any]:
+        info: Dict[str, Any] = {}
+        try:
+            info = yf.Ticker(sym).info or {}
+        except Exception:
+            info = {}
+
+        pe = info.get("trailingPE")
+        pb = info.get("priceToBook")
+        peg = info.get("pegRatio")
+        value = _avg([
+            _band(pe, [(10, 100), (15, 85), (25, 65), (40, 40), (80, 20), (1e9, 5)]),
+            _band(pb, [(1, 100), (3, 80), (6, 55), (10, 30), (1e9, 10)]),
+            _band(peg, [(1, 100), (1.5, 80), (2, 60), (3, 35), (1e9, 15)]),
+        ])
+
+        rev_g = info.get("revenueGrowth")
+        earn_g = info.get("earningsGrowth")
+        growth = _avg([
+            _band(-(rev_g) if rev_g is not None else None,
+                  [(-0.25, 100), (-0.10, 80), (0, 55), (0.05, 30), (1e9, 10)]),
+            _band(-(earn_g) if earn_g is not None else None,
+                  [(-0.25, 100), (-0.10, 80), (0, 55), (0.05, 30), (1e9, 10)]),
+        ])
+
+        pm = info.get("profitMargins")
+        roe = info.get("returnOnEquity")
+        profit = _avg([
+            _band(-(pm) if pm is not None else None,
+                  [(-0.25, 100), (-0.15, 80), (-0.05, 55), (0, 30), (1e9, 10)]),
+            _band(-(roe) if roe is not None else None,
+                  [(-0.25, 100), (-0.15, 80), (-0.05, 55), (0, 30), (1e9, 10)]),
+        ])
+
+        price = info.get("currentPrice") or info.get("regularMarketPrice")
+        hi = info.get("fiftyTwoWeekHigh")
+        lo = info.get("fiftyTwoWeekLow")
+        pct_range = ((price - lo) / (hi - lo)) if (price and hi and lo and hi > lo) else None
+        momentum = _band(-(pct_range) if pct_range is not None else None,
+                          [(-0.9, 100), (-0.7, 80), (-0.5, 60), (-0.3, 40), (1e9, 20)])
+
+        d2e = info.get("debtToEquity")
+        cr = info.get("currentRatio")
+        health = _avg([
+            _band(d2e, [(40, 100), (80, 80), (150, 55), (250, 30), (1e9, 10)]),
+            _band(-(cr) if cr is not None else None,
+                  [(-2, 100), (-1.5, 80), (-1, 55), (-0.5, 30), (1e9, 10)]),
+        ])
+
+        cats = {
+            "value": value,
+            "growth": growth,
+            "profitability": profit,
+            "momentum": momentum,
+            "financialHealth": health,
+        }
+        overall = _avg(list(cats.values()))
+        grade = (None if overall is None else
+                 "A" if overall >= 80 else "B" if overall >= 65 else
+                 "C" if overall >= 50 else "D" if overall >= 35 else "F")
+        return {"symbol": sym, "overall": overall, "grade": grade, "categories": cats}
+
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=12.0)
+    except Exception as e:
+        logger.error(f"report_card {sym}: {e}")
+        raise HTTPException(status_code=502, detail="Could not build report card")
+
+    await cache_set(cache_key, result, ttl_seconds=21600)  # 6h TTL
+    return result
+
+
 @router.get("/dividends/{symbol}")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
 async def dividends(request: Request, symbol: str) -> Dict[str, Any]:

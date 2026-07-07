@@ -88,6 +88,7 @@ Beyond the five docs above, every feature/fix PR must also satisfy:
 - Dividend & Income card (Feature 26): `GET /dividends/{symbol}` (yfinance, Redis 6h) + `DividendIncomeCard` — forward yield, annual rate, payout ratio, 5-yr avg yield, ex-date, YoY growth; clean non-payer empty state.
 - Sector Rotation leaderboard (Feature 27): `GET /sectors/rotation` (11 GICS ETFs' relative strength vs SPY over 1M/3M/6M + RRG-lite quadrant, Redis 1h) + `/rotation` page (leaderboard table + quadrant scatter, click-to-analyze). Reuses the heatmap batch-download machinery.
 - Analysis Chart Controls & Legend (F29): unified toggleable overlays (indicators, S/R, projections, VWAP, Fibonacci) + 'Clean view', colour-coded indicator legend, restored VWAP, intraday-freshness fix. Closes #284/#285/#287.
+- Stock Report Card (F31): `GET /report-card/{symbol}` (yfinance `.info` heuristics, Redis 6h) + `StockReportCard` — Value/Growth/Profitability/Momentum/Financial-Health 0-100 sub-scores averaged into an overall score + A-F grade badge; null-safe per category, self-fetching card on the analysis page.
 
 ### Navigation & Architecture
 - App Shell sidebar — collapsible, mobile bottom nav, `AppShellContext`, theme + auth in footer (#223)
@@ -302,8 +303,7 @@ Beyond the five docs above, every feature/fix PR must also satisfy:
   route at 320/768/1280/2560, failing on horizontal overflow or a missing app shell. `pnpm run test:responsive`.
 
 **Tier 1 — quick, high-value wins**
-- **H · Stock Report Card** *(NEXT UP)* — one-glance grade (Value / Growth / Profitability / Momentum /
-  Financial-Health) from data already pulled; Simply-Wall-St-style. · `[Value: High]` `[Effort: Low–Med]`
+- **H · Stock Report Card** — ✅ **Shipped** (see Shipped → Data & UX, F31).
 - **E · Smart Watchlist Columns** *(NEXT UP)* — watchlist → live data table (price, %chg, P/E, RSI,
   %-from-52wk-high, mkt cap, next earnings); Koyfin-style. · `[Value: High]` `[Effort: Med]`
 - **C · Institutional Ownership** — % institutional, top fund holders, float, ownership change (yfinance
