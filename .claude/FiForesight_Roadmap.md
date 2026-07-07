@@ -89,6 +89,7 @@ Beyond the five docs above, every feature/fix PR must also satisfy:
 - Sector Rotation leaderboard (Feature 27): `GET /sectors/rotation` (11 GICS ETFs' relative strength vs SPY over 1M/3M/6M + RRG-lite quadrant, Redis 1h) + `/rotation` page (leaderboard table + quadrant scatter, click-to-analyze). Reuses the heatmap batch-download machinery.
 - Analysis Chart Controls & Legend (F29): unified toggleable overlays (indicators, S/R, projections, VWAP, Fibonacci) + 'Clean view', colour-coded indicator legend, restored VWAP, intraday-freshness fix. Closes #284/#285/#287.
 - Stock Report Card (F31): `GET /report-card/{symbol}` (yfinance `.info` heuristics, Redis 6h) + `StockReportCard` — Value/Growth/Profitability/Momentum/Financial-Health 0-100 sub-scores averaged into an overall score + A-F grade badge; null-safe per category, self-fetching card on the analysis page.
+- Smart Watchlist Columns (F-watchlist-columns): watchlist (`/watchlist` page) upgraded from a card grid to a sortable Koyfin-style data table — price, %chg, P/E, RSI, %-from-52wk-high, market cap, next earnings. `GET /watchlist/metrics?symbols=` (public, `watchlist_metrics_service.py` mirrors the screener's yfinance fan-out, per-symbol Redis cache 5min, ≤30 symbols, bad symbols skipped). Sortable columns, a column-visibility picker persisted in `localStorage` (`fiforesight:watchlist:cols`), 60s auto-refresh, click-through to `/analysis`, remove-from-watchlist per row. Responsive: horizontal-scroll wrapper, mobile hides P/E/Mkt Cap/Next Earnings.
 
 ### Navigation & Architecture
 - App Shell sidebar — collapsible, mobile bottom nav, `AppShellContext`, theme + auth in footer (#223)
@@ -304,8 +305,7 @@ Beyond the five docs above, every feature/fix PR must also satisfy:
 
 **Tier 1 — quick, high-value wins**
 - **H · Stock Report Card** — ✅ **Shipped** (see Shipped → Data & UX, F31).
-- **E · Smart Watchlist Columns** *(NEXT UP)* — watchlist → live data table (price, %chg, P/E, RSI,
-  %-from-52wk-high, mkt cap, next earnings); Koyfin-style. · `[Value: High]` `[Effort: Med]`
+- **E · Smart Watchlist Columns** — ✅ **Shipped** (see Shipped → Data & UX).
 - **C · Institutional Ownership** — % institutional, top fund holders, float, ownership change (yfinance
   `institutional_holders` / `major_holders`), beside the SEC insider card. · `[Value: Med]` `[Effort: Low–Med]`
 
