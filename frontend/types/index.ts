@@ -701,6 +701,20 @@ export interface DividendInfo {
   dividendGrowthPct: number | null;   // YoY %
 }
 
+// ── Stock Report Card (F31) ──────────────────────────────────────────────────
+export interface ReportCard {
+  symbol:     string;
+  overall:    number | null;   // 0-100
+  grade:      'A' | 'B' | 'C' | 'D' | 'F' | null;
+  categories: {
+    value:           number | null;   // 0-100
+    growth:          number | null;
+    profitability:   number | null;
+    momentum:        number | null;
+    financialHealth: number | null;
+  };
+}
+
 // ── Equity Screener (F24) ────────────────────────────────────────────────────
 export interface ScreenerFilter {
   sector?: string;
