@@ -623,6 +623,19 @@ export interface SparklineTicker {
   bars:       SparklineBar[];
 }
 
+// ── Smart Watchlist Columns ─────────────────────────────────────────────────
+
+export interface WatchlistMetricRow {
+  symbol:         string;
+  price:          number | null;
+  changePct:      number | null;
+  peRatio:        number | null;
+  rsi:            number | null;
+  pctFrom52wHigh: number | null;
+  marketCap:      number | null;
+  nextEarnings:   string | null;
+}
+
 export interface PortfolioSummary {
   holdings:             PortfolioHolding[];
   totalMarketValue:     number;
