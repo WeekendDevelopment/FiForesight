@@ -1654,6 +1654,9 @@ async def market_treemap(request: Request) -> List[Dict[str, Any]]:
         return out
 
     try:
+        # Intentional exception to the 12s per-fetch guideline: this is ONE
+        # batched ~50-ticker download (heavier than the single-symbol fetches
+        # the guideline targets); 12s produced spurious 502s under load.
         changes = await asyncio.wait_for(asyncio.to_thread(_fetch_changes), timeout=15.0)
     except Exception as e:
         logger.error(f"market treemap: {e}")

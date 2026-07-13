@@ -75,6 +75,14 @@ function TreemapTile(props: Record<string, unknown>) {
   return (
     <g
       onClick={() => onSelect(d.symbol as string)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSelect(d.symbol as string);
+        }
+      }}
+      role="button"
+      tabIndex={0}
       style={{ cursor: 'pointer' }}
       aria-label={`Load ${d.symbol} in the main chart`}
     >

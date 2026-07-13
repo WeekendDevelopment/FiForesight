@@ -10,7 +10,11 @@ export async function GET(req: NextRequest) {
       next: { revalidate: 600 },
       signal: AbortSignal.timeout(25000),
     });
-    const data = await res.json();
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      const detail = (data && (data.detail || data.error)) || 'Failed to load market treemap data';
+      return NextResponse.json({ error: detail }, { status: res.status });
+    }
     return NextResponse.json(data, { status: res.status });
   } catch (err: unknown) {
     console.error('[market/treemap] proxy error:', err);
