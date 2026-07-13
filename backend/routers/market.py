@@ -1591,6 +1591,95 @@ async def run_screener(request: Request, filters: ScreenerFilter) -> Dict[str, A
     return {"results": rows[:limit], "total": len(rows)}
 
 
+# ---------------------------------------------------------------------------
+# Market Treemap (F32)
+# ---------------------------------------------------------------------------
+# Cap-weighting is meaningless for the index proxies, so they're excluded
+# from the map (the rest of the screener universe is real single names).
+_TREEMAP_ETF_PROXIES = {"SPY", "QQQ", "IWM"}
+
+
+@router.get("/market/treemap")
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def market_treemap(request: Request) -> List[Dict[str, Any]]:
+    """Stock-level market map rows: {symbol, name, sector, marketCap, changePct}.
+
+    Universe/fundamentals come from the (1h-cached) screener snapshot; fresh 1d
+    % change from one batched yf.download. ETF proxies (SPY/QQQ/IWM) and rows
+    without a market cap are excluded — tile size is the cap. A symbol missing
+    from the price batch keeps ``changePct: null`` (grey tile), never a 500.
+    Result Redis-cached 10 min; 502 on total failure. 60/min.
+    """
+    CACHE_KEY = "market:treemap"
+    cached = await cache_get(CACHE_KEY)
+    if cached:
+        return cached
+
+    # Reuse the screener's universe snapshot (same cache key + TTL as /screener)
+    # so the map never triggers a second ~50-ticker fundamentals fan-out.
+    snapshot = await cache_get("screener:universe")
+    if not isinstance(snapshot, list) or not snapshot:
+        snapshot = await build_universe_snapshot()
+        if snapshot:
+            await cache_set("screener:universe", snapshot, ttl_seconds=3600)  # 1h TTL
+
+    rows = [
+        r for r in (snapshot or [])
+        if r.get("marketCap") and r.get("symbol") not in _TREEMAP_ETF_PROXIES
+    ]
+    if not rows:
+        raise HTTPException(status_code=502, detail="Could not build market map")
+
+    symbols = [r["symbol"] for r in rows]
+
+    def _fetch_changes() -> Dict[str, float]:
+        raw = yf.download(
+            " ".join(symbols), period="5d", interval="1d",
+            auto_adjust=True, progress=False, group_by="ticker",
+        )
+        out: Dict[str, float] = {}
+        for sym in symbols:
+            try:
+                closes = raw[sym]["Close"].dropna()
+            except KeyError:
+                # A single-ticker download isn't grouped by ticker; in a grouped
+                # frame a dropped symbol raises again and is simply skipped.
+                try:
+                    closes = raw["Close"].dropna()
+                except KeyError:
+                    continue
+            if len(closes) < 2:
+                continue
+            out[sym] = round(float(closes.iloc[-1] / closes.iloc[-2] - 1) * 100, 2)
+        return out
+
+    try:
+        # Intentional exception to the 12s per-fetch guideline: this is ONE
+        # batched ~50-ticker download (heavier than the single-symbol fetches
+        # the guideline targets); 12s produced spurious 502s under load.
+        changes = await asyncio.wait_for(asyncio.to_thread(_fetch_changes), timeout=15.0)
+    except Exception as e:
+        logger.error(f"market treemap: {e}")
+        raise HTTPException(status_code=502, detail="Could not fetch market map data")
+
+    result = sorted(
+        (
+            {
+                "symbol": r["symbol"],
+                "name": r.get("name") or r["symbol"],
+                "sector": r.get("sector") or "—",
+                "marketCap": r["marketCap"],
+                "changePct": changes.get(r["symbol"]),
+            }
+            for r in rows
+        ),
+        key=lambda x: x["marketCap"],
+        reverse=True,
+    )
+    await cache_set(CACHE_KEY, result, ttl_seconds=600)  # 10 min TTL
+    return result
+
+
 class BacktestRequest(BaseModel):
     """Body for the rule-based strategy backtester (F28)."""
     symbol: str

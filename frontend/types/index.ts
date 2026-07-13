@@ -221,6 +221,15 @@ export interface SectorRow {
   source?: string;   // data provider, e.g. "yfinance"
 }
 
+/** One stock tile on the Market Treemap (F32) — size = marketCap, colour = changePct. */
+export interface TreemapRow {
+  symbol: string;
+  name: string;
+  sector: string;
+  marketCap: number;
+  changePct: number | null;
+}
+
 export interface SectorRotationRow {
   sector: string;
   etf: string;
