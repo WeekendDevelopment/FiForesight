@@ -8,12 +8,9 @@ import {
 import { BarChart2, Search } from 'lucide-react';
 import { useAppShell } from '../../../contexts/AppShellContext';
 import OptionsChainPanel from '../../../components/OptionsChainPanel';
-
-const POPULAR_TICKERS = [
-  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'JPM', 'V', 'UNH',
-  'MA', 'XOM', 'LLY', 'JNJ', 'PG', 'HD', 'AVGO', 'COST', 'AMD', 'NFLX',
-  'SPY', 'QQQ', 'DIA', 'IWM',
-];
+// Shared ticker suggestion source (lib/tickerSearch.ts) — also feeds the
+// analysis page Autocomplete and the Ctrl+K command palette (Feature 33).
+import { POPULAR_TICKERS } from '../../../lib/tickerSearch';
 
 export default function OptionsPage() {
   const { isDark, primaryColor } = useAppShell();

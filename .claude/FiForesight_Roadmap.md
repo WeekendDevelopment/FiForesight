@@ -93,6 +93,7 @@ Beyond the five docs above, every feature/fix PR must also satisfy:
 - Smart Watchlist Columns (F-watchlist-columns): watchlist (`/watchlist` page) upgraded from a card grid to a sortable Koyfin-style data table — price, %chg, P/E, RSI, %-from-52wk-high, market cap, next earnings. `GET /watchlist/metrics?symbols=` (public, `watchlist_metrics_service.py` mirrors the screener's yfinance fan-out, per-symbol Redis cache 5min, ≤30 symbols, bad symbols skipped). Sortable columns, a column-visibility picker persisted in `localStorage` (`fiforesight:watchlist:cols`), 60s auto-refresh, click-through to `/analysis`, remove-from-watchlist per row. Responsive: horizontal-scroll wrapper, mobile hides P/E/Mkt Cap/Next Earnings.
 
 ### Navigation & Architecture
+- Command Palette (Feature 33): global Ctrl/Cmd+K (and '/') palette — fuzzy ticker search (reuses the shared ticker source) → /analysis?symbol=, page jump (shared NAV_ITEMS), quick actions (theme toggle, watchlist add/remove), recent tickers in localStorage. MUI-native (no cmdk dep); mobile full-width sheet via Search button; e2e open+search spec.
 - App Shell sidebar — collapsible, mobile bottom nav, `AppShellContext`, theme + auth in footer (#223)
 - Landing page — lightweight: MorningBriefingPanel + SectorHeatmap + TrendingSparklines + search (#223)
 - Standalone Options Chain tab (`/options`) — self-fetching `OptionsChainPanel`, symbol search (#225)

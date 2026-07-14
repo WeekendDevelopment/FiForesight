@@ -13,6 +13,7 @@ import {
   Star, StarOff,
 } from 'lucide-react';
 import AuthGate from '../../../components/AuthGate';
+import { POPULAR_TICKERS } from '../../../lib/tickerSearch';
 import { useWatchlist } from '../../../hooks/useWatchlist';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useAppShell } from '../../../contexts/AppShellContext';
@@ -57,12 +58,8 @@ const EXCHANGES = [
   { value: 'FRA',    label: 'Frankfurt'    },
 ];
 
-const POPULAR_TICKERS = [
-  'AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','BRK.B','JPM','V',
-  'UNH','MA','XOM','LLY','JNJ','PG','HD','MRK','AVGO','CVX',
-  'KO','PEP','ABBV','COST','MCD','CSCO','TMO','WMT','ACN','ABT',
-  'SPY','QQQ','DIA','IWM','GLD','SLV','TLT','BTC-USD','ETH-USD',
-];
+// Shared ticker suggestion source (lib/tickerSearch.ts) — also feeds the
+// options page Autocomplete and the Ctrl+K command palette (Feature 33).
 
 // ── Analysis content ────────────────────────────────────────────────────────────
 

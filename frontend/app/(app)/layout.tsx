@@ -8,46 +8,18 @@ import {
   Stack, Typography, IconButton, Tooltip, useMediaQuery,
 } from '@mui/material';
 import {
-  BrainCircuit, Home, Search, BarChart2, Calendar, Rocket, LineChart,
-  Activity, Wallet, Bell, ChevronLeft, ChevronRight, Sun, Moon, LogIn, LogOut,
-  Star, ChevronDown, ChevronUp, MoreHorizontal, Globe, Grid2X2, SlidersHorizontal,
-  RefreshCw, FlaskConical,
+  BrainCircuit, Search, ChevronLeft, ChevronRight, Sun, Moon, LogIn, LogOut,
+  Star, ChevronDown, ChevronUp, MoreHorizontal,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AppShellProvider, useAppShell } from '../../contexts/AppShellContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useWatchlistContext } from '../../contexts/WatchlistContext';
 import AuthModal from '../../components/AuthModal';
-
-// ── Navigation model ────────────────────────────────────────────────────────
-interface NavItem {
-  label: string;
-  href:  string;
-  icon:  React.ComponentType<{ size?: number | string; color?: string }>;
-  /** Shown in the mobile bottom nav (Insights/Simulator/My Portfolio are desktop-only / secondary). */
-  mobile: boolean;
-}
-
-// "Simulator" is the backtest race engine (/simulation). "My Portfolio" is the
-// real-holdings P&L tracker (/portfolio) — kept clearly distinct so the two
-// never get confused.
-const NAV_ITEMS: NavItem[] = [
-  { label: 'Home',         href: '/',           icon: Home,      mobile: true  },
-  { label: 'Analysis',     href: '/analysis',   icon: Search,    mobile: true  },
-  { label: 'Options',      href: '/options',    icon: BarChart2, mobile: true  },
-  { label: 'Earnings',     href: '/earnings',   icon: Calendar,  mobile: true  },
-  { label: 'IPO Tracker',  href: '/ipo',        icon: Rocket,    mobile: false },
-  { label: 'Macro',        href: '/macro',      icon: Globe,     mobile: false },
-  { label: 'Sectors',      href: '/sectors',    icon: Grid2X2,   mobile: false },
-  { label: 'Rotation',     href: '/rotation',   icon: RefreshCw, mobile: false },
-  { label: 'Screener',     href: '/screener',   icon: SlidersHorizontal, mobile: false },
-  { label: 'Backtest',     href: '/backtest',   icon: FlaskConical, mobile: false },
-  { label: 'Watchlist',    href: '/watchlist',  icon: Star,      mobile: false },
-  { label: 'Insights',     href: '/insights',   icon: Activity,  mobile: false },
-  { label: 'Simulator',    href: '/simulation', icon: LineChart, mobile: false },
-  { label: 'My Portfolio', href: '/portfolio',  icon: Wallet,    mobile: false },
-  { label: 'Alerts',       href: '/alerts',     icon: Bell,      mobile: false },
-];
+import CommandPalette, { openCommandPalette, Kbd } from '../../components/CommandPalette';
+// Navigation model lives in lib/navItems.ts (shared with the command palette,
+// Feature 33) — add/remove routes THERE, not here.
+import { NAV_ITEMS } from '../../lib/navItems';
 
 const EXPANDED_WIDTH  = 220;
 const COLLAPSED_WIDTH = 64;
@@ -170,6 +142,39 @@ function Sidebar() {
   const hoverBg    = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
   const activeBg   = `${primaryColor}1a`;
 
+  // ⌘ on Apple platforms, Ctrl elsewhere — resolved client-side to stay SSR-safe.
+  const [modKey, setModKey] = useState('Ctrl');
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time platform detection
+    if (/Mac|iPhone|iPad/i.test(navigator.userAgent)) setModKey('⌘');
+  }, []);
+
+  const searchButton = (
+    <Box
+      onClick={openCommandPalette}
+      onKeyDown={onActivate(openCommandPalette)}
+      role="button"
+      tabIndex={0}
+      aria-label="Search (command palette)"
+      data-testid="palette-sidebar-search"
+      sx={{
+        display: 'flex', alignItems: 'center', gap: 1.5, cursor: 'pointer',
+        mx: 1, px: 1.5, py: 1, borderRadius: 2, color: 'text.secondary',
+        justifyContent: collapsed ? 'center' : 'flex-start',
+        border: `1px solid ${borderCol}`,
+        '&:hover': { bgcolor: hoverBg, color: 'text.primary', borderColor: `${primaryColor}55` },
+      }}
+    >
+      <Search size={18} color={primaryColor} style={{ flexShrink: 0 }} />
+      {!collapsed && (
+        <>
+          <Typography sx={{ fontSize: 13, flexGrow: 1 }}>Search</Typography>
+          <Kbd>{modKey} K</Kbd>
+        </>
+      )}
+    </Box>
+  );
+
   return (
     <Box
       component="nav"
@@ -192,6 +197,11 @@ function Sidebar() {
           </Typography>
         )}
       </Box>
+
+      {/* Search / command palette (Ctrl+K) */}
+      {collapsed
+        ? <Tooltip title="Search (Ctrl+K)" placement="right">{searchButton}</Tooltip>
+        : searchButton}
 
       {/* Nav items */}
       <Stack spacing={0.5} sx={{ px: 1, mt: 1, flexGrow: 1 }}>
@@ -375,6 +385,23 @@ function MobileNav() {
           );
         })}
 
+        {/* Search — opens the command palette as a top sheet (Ctrl+K has no mobile equivalent) */}
+        <Box
+          onClick={openCommandPalette}
+          role="button"
+          tabIndex={0}
+          aria-label="Search"
+          data-testid="palette-search-button"
+          sx={{
+            flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
+            justifyContent: 'center', gap: 0.25, cursor: 'pointer',
+            color: 'text.secondary', minHeight: 44,
+          }}
+        >
+          <Search size={20} />
+          <Typography sx={{ fontSize: 10, fontWeight: 500 }}>Search</Typography>
+        </Box>
+
         {/* More — opens secondary nav + auth drawer */}
         <Box
           onClick={() => setMoreOpen(true)}
@@ -518,6 +545,7 @@ function Shell({ children }: { children: React.ReactNode }) {
       </Box>
       <MobileWatchlistBar />
       <MobileNav />
+      <CommandPalette />
     </Box>
   );
 }
