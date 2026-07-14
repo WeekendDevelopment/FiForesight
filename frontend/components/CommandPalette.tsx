@@ -13,7 +13,7 @@
  * `openCommandPalette()` — a window CustomEvent, no prop threading.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Box, Chip, Dialog, InputBase, Typography, useMediaQuery, useTheme,
@@ -377,13 +377,17 @@ export default function CommandPalette() {
           const watched = item.symbol ? isWatched(item.symbol) : false;
 
           return (
-            <Box component="span" key={item.id} sx={{ display: 'block' }}>
+            // Direct <li> children of the <ul role="listbox"> — no wrapper
+            // element (span/div between ul and li is invalid HTML and breaks
+            // the listbox's accessible structure).
+            <Fragment key={item.id}>
               {header && (
                 <Typography
-                  component="div"
+                  component="li"
                   role="presentation"
                   sx={{ px: 1.5, pt: i === 0 ? 0.5 : 1.5, pb: 0.5, fontSize: 10, fontWeight: 700,
-                        letterSpacing: 1, textTransform: 'uppercase', color: dimColor }}
+                        letterSpacing: 1, textTransform: 'uppercase', color: dimColor,
+                        listStyle: 'none' }}
                 >
                   {header === 'Recent' ? 'Recent tickers' : header}
                 </Typography>
@@ -428,10 +432,16 @@ export default function CommandPalette() {
                   </Typography>
                 )}
 
-                {/* Watchlist affordance on ticker rows (signed-in only) */}
+                {/* Watchlist affordance on ticker rows (signed-in only).
+                    Pointer-only by design: an option's sole a11y interaction
+                    must be its selection, so the chip is removed from the
+                    accessibility tree and tab order (keyboard/AT users toggle
+                    the watchlist from the analysis page's star instead). */}
                 {item.symbol && user && (
                   <Chip
                     size="small"
+                    aria-hidden
+                    tabIndex={-1}
                     label={watched ? 'Remove' : '+ Watchlist'}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -455,7 +465,7 @@ export default function CommandPalette() {
                   </Box>
                 )}
               </Box>
-            </Box>
+            </Fragment>
           );
         })}
       </Box>

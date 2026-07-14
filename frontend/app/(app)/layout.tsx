@@ -335,9 +335,9 @@ function MobileWatchlistBar() {
 }
 
 // ── Mobile bottom navigation ────────────────────────────────────────────────
-// Base items always in the primary bar; extended items only on phones > 375px.
-const _BASE_HREFS     = ['/', '/analysis'];
-const _EXTENDED_HREFS = ['/options', '/earnings'];
+// How many `mobile: true` NAV_ITEMS fit in the primary bar on small phones
+// (≤375px — iPhone SE and older 320px devices); the rest go to the More drawer.
+const SMALL_PHONE_PRIMARY_COUNT = 2;
 
 function MobileNav() {
   const pathname                 = usePathname();
@@ -345,13 +345,14 @@ function MobileNav() {
   const { user, signOut }        = useAuth();
   const [moreOpen,  setMoreOpen] = useState(false);
   const [authOpen,  setAuthOpen] = useState(false);
-  // ≤375px covers iPhone SE (2nd/3rd gen) and older 320px phones
   const isSmallPhone             = useMediaQuery('(max-width:375px)');
   const borderCol = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
 
-  const primaryHrefs = isSmallPhone ? _BASE_HREFS : [..._BASE_HREFS, ..._EXTENDED_HREFS];
-  const primaryNav   = NAV_ITEMS.filter(i => primaryHrefs.includes(i.href));
-  const secondaryNav = NAV_ITEMS.filter(i => !primaryHrefs.includes(i.href));
+  // NAV_ITEMS.mobile (lib/navItems.ts) is the single source of mobile-nav
+  // classification — no separate href lists to keep in sync.
+  const mobileItems  = NAV_ITEMS.filter(i => i.mobile);
+  const primaryNav   = isSmallPhone ? mobileItems.slice(0, SMALL_PHONE_PRIMARY_COUNT) : mobileItems;
+  const secondaryNav = NAV_ITEMS.filter(i => !primaryNav.includes(i));
   const moreActive   = secondaryNav.some(i => isActive(pathname, i.href));
 
   return (
@@ -388,6 +389,7 @@ function MobileNav() {
         {/* Search — opens the command palette as a top sheet (Ctrl+K has no mobile equivalent) */}
         <Box
           onClick={openCommandPalette}
+          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCommandPalette(); } }}
           role="button"
           tabIndex={0}
           aria-label="Search"

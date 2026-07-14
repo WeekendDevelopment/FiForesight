@@ -3,13 +3,16 @@ import { test, expect, type Page } from '@playwright/test';
 /**
  * Command Palette (Feature 33) — open + search smoke test.
  *
- * Desktop (1280px): open via Ctrl+K keyboard shortcut.
- * Phone (320px):    open via the bottom-nav Search button (no keyboard on phones).
- * Both: type "AAP", assert an AAPL ticker result renders, and assert the open
- * palette introduces NO horizontal overflow (the responsive build standard).
+ * Open path per viewport (all four project widths):
+ *   320 / 768  (below MUI md): bottom-nav Search button → full-width top sheet.
+ *   1280 / 2560 (md+):         Ctrl+K → centered modal.
+ * Each: type "AAP", assert an AAPL ticker result renders, assert the open
+ * palette introduces NO horizontal overflow (the responsive build standard),
+ * and Esc closes. A separate test covers the analysis-page search trigger +
+ * live multi-exchange results (route-mocked).
  *
- * Results come from the static shared ticker universe (lib/tickerSearch.ts) —
- * no network involved, so this can't flake on a data outage.
+ * Static results come from the shared ticker universe (lib/tickerSearch.ts) —
+ * no network involved, so these can't flake on a data outage.
  */
 
 async function expectNoHorizontalOverflow(page: Page, label: string) {
@@ -36,23 +39,39 @@ async function typeAndAssertTickerResult(page: Page, label: string) {
   ).toBeVisible();
 }
 
-test('opens via Ctrl+K on desktop (1280px), finds AAPL, no overflow', async ({ page }) => {
-  await page.setViewportSize({ width: 1280, height: 900 });
-  try {
-    await page.goto('/', { waitUntil: 'networkidle', timeout: 30_000 });
-  } catch { /* layout-only — proceed */ }
-  await expect(page.getByTestId('app-shell')).toBeVisible({ timeout: 15_000 });
+// All four project viewports (mirrors responsive.spec.ts). Below MUI's md
+// breakpoint (900px) the palette is a top sheet opened from the bottom-nav
+// Search button; at md+ it's a centered modal opened with Ctrl+K.
+const OPEN_VIEWPORTS = [
+  { w: 320,  h: 740,  name: 'phone',   via: 'button'   },
+  { w: 768,  h: 1024, name: 'tablet',  via: 'button'   },
+  { w: 1280, h: 900,  name: 'desktop', via: 'keyboard' },
+  { w: 2560, h: 1440, name: '4k',      via: 'keyboard' },
+] as const;
 
-  await page.keyboard.press('Control+k');
-  await expect(page.getByTestId('command-palette')).toBeVisible();
+for (const vp of OPEN_VIEWPORTS) {
+  test(`opens via ${vp.via} @ ${vp.name} (${vp.w}px), finds AAPL, no overflow`, async ({ page }) => {
+    await page.setViewportSize({ width: vp.w, height: vp.h });
+    try {
+      await page.goto('/', { waitUntil: 'networkidle', timeout: 30_000 });
+    } catch { /* layout-only — proceed */ }
+    await expect(page.getByTestId('app-shell')).toBeVisible({ timeout: 15_000 });
 
-  await typeAndAssertTickerResult(page, 'desktop');
-  await expectNoHorizontalOverflow(page, 'desktop 1280px');
+    if (vp.via === 'keyboard') {
+      await page.keyboard.press('Control+k');
+    } else {
+      await page.getByTestId('palette-search-button').click();
+    }
+    await expect(page.getByTestId('command-palette')).toBeVisible();
 
-  // Esc closes.
-  await page.keyboard.press('Escape');
-  await expect(page.getByTestId('command-palette')).not.toBeVisible();
-});
+    await typeAndAssertTickerResult(page, vp.name);
+    await expectNoHorizontalOverflow(page, `${vp.name} ${vp.w}px`);
+
+    // Esc closes (hardware keyboards exist on tablets too).
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('command-palette')).not.toBeVisible();
+  });
+}
 
 test('analysis search trigger opens the palette; live search lists exchange listings', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -84,18 +103,4 @@ test('analysis search trigger opens the palette; live search lists exchange list
   await expect(options.filter({ hasText: 'BP.L' }).first()).toBeVisible();
 
   await expectNoHorizontalOverflow(page, 'analysis trigger 1280px');
-});
-
-test('opens via the Search button on phone (320px), finds AAPL, no overflow', async ({ page }) => {
-  await page.setViewportSize({ width: 320, height: 740 });
-  try {
-    await page.goto('/', { waitUntil: 'networkidle', timeout: 30_000 });
-  } catch { /* layout-only — proceed */ }
-  await expect(page.getByTestId('app-shell')).toBeVisible({ timeout: 15_000 });
-
-  await page.getByTestId('palette-search-button').click();
-  await expect(page.getByTestId('command-palette')).toBeVisible();
-
-  await typeAndAssertTickerResult(page, 'phone');
-  await expectNoHorizontalOverflow(page, 'phone 320px');
 });
