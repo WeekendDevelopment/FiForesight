@@ -221,6 +221,15 @@ export interface SectorRow {
   source?: string;   // data provider, e.g. "yfinance"
 }
 
+/** One stock tile on the Market Treemap (F32) — size = marketCap, colour = changePct. */
+export interface TreemapRow {
+  symbol: string;
+  name: string;
+  sector: string;
+  marketCap: number;
+  changePct: number | null;
+}
+
 export interface SectorRotationRow {
   sector: string;
   etf: string;
@@ -623,6 +632,19 @@ export interface SparklineTicker {
   bars:       SparklineBar[];
 }
 
+// ── Smart Watchlist Columns ─────────────────────────────────────────────────
+
+export interface WatchlistMetricRow {
+  symbol:         string;
+  price:          number | null;
+  changePct:      number | null;
+  peRatio:        number | null;
+  rsi:            number | null;
+  pctFrom52wHigh: number | null;
+  marketCap:      number | null;
+  nextEarnings:   string | null;
+}
+
 export interface PortfolioSummary {
   holdings:             PortfolioHolding[];
   totalMarketValue:     number;
@@ -699,6 +721,20 @@ export interface DividendInfo {
   fiveYearAvgYield:  number | null;   // percent
   exDividendDate:    string | null;   // YYYY-MM-DD
   dividendGrowthPct: number | null;   // YoY %
+}
+
+// ── Stock Report Card (F31) ──────────────────────────────────────────────────
+export interface ReportCard {
+  symbol:     string;
+  overall:    number | null;   // 0-100
+  grade:      'A' | 'B' | 'C' | 'D' | 'F' | null;
+  categories: {
+    value:           number | null;   // 0-100
+    growth:          number | null;
+    profitability:   number | null;
+    momentum:        number | null;
+    financialHealth: number | null;
+  };
 }
 
 // ── Equity Screener (F24) ────────────────────────────────────────────────────

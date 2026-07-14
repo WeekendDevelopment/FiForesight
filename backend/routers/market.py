@@ -1321,6 +1321,120 @@ async def analyst_targets(request: Request, symbol: str) -> Dict[str, Any]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Stock Report Card
+# ---------------------------------------------------------------------------
+def _band(value: Optional[float], points: List[Tuple[float, int]]) -> Optional[int]:
+    """Map ``value`` to a 0-100 score via ascending ``[(threshold, score)]`` pairs.
+
+    Returns the score of the first threshold ``>= value``; falls through to the
+    last (worst/most-lenient) bucket above every threshold. None-safe."""
+    if value is None:
+        return None
+    for thr, sc in points:
+        if value <= thr:
+            return sc
+    return points[-1][1]
+
+
+def _avg(scores: List[Optional[int]]) -> Optional[int]:
+    vals = [s for s in scores if s is not None]
+    return round(sum(vals) / len(vals)) if vals else None
+
+
+@router.get("/report-card/{symbol}")
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def report_card(request: Request, symbol: str) -> Dict[str, Any]:
+    """Value/Growth/Profitability/Momentum/Financial-Health 0-100 sub-scores +
+    overall grade for ``symbol``, heuristically derived from yfinance ``.info``.
+
+    Each category averages 1-2 banded sub-metrics (see ``_band``); a category is
+    null when none of its inputs are available (never a 500). Redis-cached 6h;
+    502 when the upstream fetch fails entirely. 60/min via the read-only limiter.
+    """
+    from redis_cache import cache_get, cache_set
+
+    sym = symbol.strip().upper()
+    if not _SYMBOL_RE.match(sym):
+        raise HTTPException(status_code=422, detail="Invalid symbol.")
+
+    cache_key = f"report_card:{sym}"
+    cached = await cache_get(cache_key)
+    if cached:
+        return cached
+
+    def _fetch() -> Dict[str, Any]:
+        info: Dict[str, Any] = {}
+        try:
+            info = yf.Ticker(sym).info or {}
+        except Exception:
+            info = {}
+
+        pe = info.get("trailingPE")
+        pb = info.get("priceToBook")
+        peg = info.get("pegRatio")
+        value = _avg([
+            _band(pe, [(10, 100), (15, 85), (25, 65), (40, 40), (80, 20), (1e9, 5)]),
+            _band(pb, [(1, 100), (3, 80), (6, 55), (10, 30), (1e9, 10)]),
+            _band(peg, [(1, 100), (1.5, 80), (2, 60), (3, 35), (1e9, 15)]),
+        ])
+
+        rev_g = info.get("revenueGrowth")
+        earn_g = info.get("earningsGrowth")
+        growth = _avg([
+            _band(-(rev_g) if rev_g is not None else None,
+                  [(-0.25, 100), (-0.10, 80), (0, 55), (0.05, 30), (1e9, 10)]),
+            _band(-(earn_g) if earn_g is not None else None,
+                  [(-0.25, 100), (-0.10, 80), (0, 55), (0.05, 30), (1e9, 10)]),
+        ])
+
+        pm = info.get("profitMargins")
+        roe = info.get("returnOnEquity")
+        profit = _avg([
+            _band(-(pm) if pm is not None else None,
+                  [(-0.25, 100), (-0.15, 80), (-0.05, 55), (0, 30), (1e9, 10)]),
+            _band(-(roe) if roe is not None else None,
+                  [(-0.25, 100), (-0.15, 80), (-0.05, 55), (0, 30), (1e9, 10)]),
+        ])
+
+        price = info.get("currentPrice") or info.get("regularMarketPrice")
+        hi = info.get("fiftyTwoWeekHigh")
+        lo = info.get("fiftyTwoWeekLow")
+        pct_range = ((price - lo) / (hi - lo)) if (price and hi and lo and hi > lo) else None
+        momentum = _band(-(pct_range) if pct_range is not None else None,
+                          [(-0.9, 100), (-0.7, 80), (-0.5, 60), (-0.3, 40), (1e9, 20)])
+
+        d2e = info.get("debtToEquity")
+        cr = info.get("currentRatio")
+        health = _avg([
+            _band(d2e, [(40, 100), (80, 80), (150, 55), (250, 30), (1e9, 10)]),
+            _band(-(cr) if cr is not None else None,
+                  [(-2, 100), (-1.5, 80), (-1, 55), (-0.5, 30), (1e9, 10)]),
+        ])
+
+        cats = {
+            "value": value,
+            "growth": growth,
+            "profitability": profit,
+            "momentum": momentum,
+            "financialHealth": health,
+        }
+        overall = _avg(list(cats.values()))
+        grade = (None if overall is None else
+                 "A" if overall >= 80 else "B" if overall >= 65 else
+                 "C" if overall >= 50 else "D" if overall >= 35 else "F")
+        return {"symbol": sym, "overall": overall, "grade": grade, "categories": cats}
+
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=12.0)
+    except Exception as e:
+        logger.error(f"report_card {sym}: {e}")
+        raise HTTPException(status_code=502, detail="Could not build report card")
+
+    await cache_set(cache_key, result, ttl_seconds=21600)  # 6h TTL
+    return result
+
+
 @router.get("/dividends/{symbol}")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
 async def dividends(request: Request, symbol: str) -> Dict[str, Any]:
@@ -1475,6 +1589,95 @@ async def run_screener(request: Request, filters: ScreenerFilter) -> Dict[str, A
 
     limit = max(1, min(filters.limit, 50))
     return {"results": rows[:limit], "total": len(rows)}
+
+
+# ---------------------------------------------------------------------------
+# Market Treemap (F32)
+# ---------------------------------------------------------------------------
+# Cap-weighting is meaningless for the index proxies, so they're excluded
+# from the map (the rest of the screener universe is real single names).
+_TREEMAP_ETF_PROXIES = {"SPY", "QQQ", "IWM"}
+
+
+@router.get("/market/treemap")
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def market_treemap(request: Request) -> List[Dict[str, Any]]:
+    """Stock-level market map rows: {symbol, name, sector, marketCap, changePct}.
+
+    Universe/fundamentals come from the (1h-cached) screener snapshot; fresh 1d
+    % change from one batched yf.download. ETF proxies (SPY/QQQ/IWM) and rows
+    without a market cap are excluded — tile size is the cap. A symbol missing
+    from the price batch keeps ``changePct: null`` (grey tile), never a 500.
+    Result Redis-cached 10 min; 502 on total failure. 60/min.
+    """
+    CACHE_KEY = "market:treemap"
+    cached = await cache_get(CACHE_KEY)
+    if cached:
+        return cached
+
+    # Reuse the screener's universe snapshot (same cache key + TTL as /screener)
+    # so the map never triggers a second ~50-ticker fundamentals fan-out.
+    snapshot = await cache_get("screener:universe")
+    if not isinstance(snapshot, list) or not snapshot:
+        snapshot = await build_universe_snapshot()
+        if snapshot:
+            await cache_set("screener:universe", snapshot, ttl_seconds=3600)  # 1h TTL
+
+    rows = [
+        r for r in (snapshot or [])
+        if r.get("marketCap") and r.get("symbol") not in _TREEMAP_ETF_PROXIES
+    ]
+    if not rows:
+        raise HTTPException(status_code=502, detail="Could not build market map")
+
+    symbols = [r["symbol"] for r in rows]
+
+    def _fetch_changes() -> Dict[str, float]:
+        raw = yf.download(
+            " ".join(symbols), period="5d", interval="1d",
+            auto_adjust=True, progress=False, group_by="ticker",
+        )
+        out: Dict[str, float] = {}
+        for sym in symbols:
+            try:
+                closes = raw[sym]["Close"].dropna()
+            except KeyError:
+                # A single-ticker download isn't grouped by ticker; in a grouped
+                # frame a dropped symbol raises again and is simply skipped.
+                try:
+                    closes = raw["Close"].dropna()
+                except KeyError:
+                    continue
+            if len(closes) < 2:
+                continue
+            out[sym] = round(float(closes.iloc[-1] / closes.iloc[-2] - 1) * 100, 2)
+        return out
+
+    try:
+        # Intentional exception to the 12s per-fetch guideline: this is ONE
+        # batched ~50-ticker download (heavier than the single-symbol fetches
+        # the guideline targets); 12s produced spurious 502s under load.
+        changes = await asyncio.wait_for(asyncio.to_thread(_fetch_changes), timeout=15.0)
+    except Exception as e:
+        logger.error(f"market treemap: {e}")
+        raise HTTPException(status_code=502, detail="Could not fetch market map data")
+
+    result = sorted(
+        (
+            {
+                "symbol": r["symbol"],
+                "name": r.get("name") or r["symbol"],
+                "sector": r.get("sector") or "—",
+                "marketCap": r["marketCap"],
+                "changePct": changes.get(r["symbol"]),
+            }
+            for r in rows
+        ),
+        key=lambda x: x["marketCap"],
+        reverse=True,
+    )
+    await cache_set(CACHE_KEY, result, ttl_seconds=600)  # 10 min TTL
+    return result
 
 
 class BacktestRequest(BaseModel):

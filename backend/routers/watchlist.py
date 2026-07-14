@@ -9,6 +9,8 @@ Endpoints:
 
 Write endpoints (POST/DELETE) are auth-gated via require_user.
 GET is public — anonymous callers receive an empty list without a 401.
+
+  GET    /watchlist/metrics — live fundamentals/technicals for a CSV of symbols (public)
 """
 import logging
 import re
@@ -16,11 +18,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, field_validator
+from slowapi.util import get_remote_address
 
 import supabase_rest
 from config import Config
 from dependencies import limiter, require_user, get_user_id, _user_rate_key
 from redis_cache import cache_get, cache_set, get_redis
+from watchlist_metrics_service import fetch_watchlist_metrics
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -137,3 +141,34 @@ async def remove_from_watchlist(
     if not removed:
         raise HTTPException(status_code=404, detail="Symbol not in watchlist.")
     await _invalidate(user_id)
+
+
+@router.get("/watchlist/metrics")
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def watchlist_metrics(request: Request, symbols: str = "") -> list[dict[str, Any]]:
+    """Live table columns (price/%chg/PE/RSI/52w/mktcap/earnings) for a CSV of symbols.
+
+    Public (no auth) — same pattern as /sparklines. Each symbol is cached in
+    Redis independently for 5 min so a shared watchlist across users is cheap.
+    """
+    syms = [s.strip().upper() for s in symbols.split(",") if s.strip()][:30]
+    syms = [s for s in syms if _SYMBOL_RE.match(s)]
+    if not syms:
+        return []
+
+    out: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for s in syms:
+        cached = await cache_get(f"wl_metrics:{s}")
+        if cached:
+            out.append(cached)
+        else:
+            missing.append(s)
+
+    if missing:
+        for row in await fetch_watchlist_metrics(missing):
+            await cache_set(f"wl_metrics:{row['symbol']}", row, ttl_seconds=300)
+            out.append(row)
+
+    order = {s: i for i, s in enumerate(syms)}
+    return sorted(out, key=lambda r: order.get(r["symbol"], 999))

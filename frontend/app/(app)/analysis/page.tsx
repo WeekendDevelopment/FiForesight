@@ -36,6 +36,7 @@ import OrderBookPanel    from '../../../components/OrderBookPanel';
 import StockChatPanel    from '../../../components/StockChatPanel';
 import { useIndicatorSignals } from '../../../hooks/useIndicatorSignals';
 import DCFCard               from '../../../components/DCFCard';
+import StockReportCard        from '../../../components/StockReportCard';
 import AnalystTargetsCard     from '../../../components/AnalystTargetsCard';
 import DividendIncomeCard      from '../../../components/DividendIncomeCard';
 import InsiderTransactionsCard from '../../../components/InsiderTransactionsCard';
@@ -498,6 +499,11 @@ function AnalysisContent() {
                     primaryColor={primaryColor}
                   />
                 )}
+
+                {/* ── Stock Report Card (F31) ───────────────────────── */}
+                {/* Self-fetches /api/report-card/{symbol} on symbol change; renders
+                    its own loading / unavailable empty states. */}
+                <StockReportCard key={`report-card-${prediction.symbol}`} symbol={prediction.symbol} />
 
                 {/* ── Wall St. Analyst Price Targets ────────────────── */}
                 {/* Always rendered (like InsiderTransactionsCard) so the card's
