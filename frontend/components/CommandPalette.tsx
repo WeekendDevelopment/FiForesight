@@ -23,7 +23,10 @@ import {
   TrendingUp, History, CornerDownLeft,
 } from 'lucide-react';
 import { NAV_ITEMS } from '../lib/navItems';
-import { TICKER_UNIVERSE, searchTickers, randomTicker, type TickerEntry } from '../lib/tickerSearch';
+import {
+  TICKER_UNIVERSE, searchTickers, randomTicker, searchSymbolsRemote,
+  ANALYZABLE_SYMBOL_RE, type TickerEntry, type SymbolSearchResult,
+} from '../lib/tickerSearch';
 import { matchTier } from '../lib/fuzzy';
 import { useAppShell } from '../contexts/AppShellContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -66,6 +69,8 @@ interface PaletteItem {
   icon:      IconType;
   /** Set on ticker rows — enables the watchlist affordance. */
   symbol?:   string;
+  /** Exchange badge on live-search rows (BP → NYSE, BP.L → London). */
+  exchange?: string;
   run:       () => void;
 }
 
@@ -101,6 +106,7 @@ export default function CommandPalette() {
   const [query,       setQuery]       = useState('');
   const [activeIndex, setActiveIndex] = useState(0);
   const [recent,      setRecent]      = useState<string[]>([]);
+  const [remote,      setRemote]      = useState<SymbolSearchResult[]>([]);
   const listRef = useRef<HTMLUListElement>(null);
 
   const close = useCallback(() => setOpen(false), []);
@@ -108,6 +114,7 @@ export default function CommandPalette() {
   const openPalette = useCallback(() => {
     setQuery('');
     setActiveIndex(0);
+    setRemote([]);
     setRecent(loadRecent());
     setOpen(true);
   }, []);
@@ -121,7 +128,7 @@ export default function CommandPalette() {
         setOpen(prev => {
           if (prev) return false;
           // openPalette resets state; do it inline since we're in a reducer
-          setQuery(''); setActiveIndex(0); setRecent(loadRecent());
+          setQuery(''); setActiveIndex(0); setRemote([]); setRecent(loadRecent());
           return true;
         });
         return;
@@ -140,6 +147,22 @@ export default function CommandPalette() {
     };
   }, [openPalette]);
 
+  // Live symbol search (debounced 250ms, aborted on every keystroke/close).
+  // Failures resolve to [] — the palette degrades to its static universe.
+  // (`remote` is cleared in the input onChange / openPalette handlers, not
+  // here — a synchronous setState inside an effect is a lint error.)
+  useEffect(() => {
+    const q = query.trim();
+    if (!open || q.length < 2) return;
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => {
+      void searchSymbolsRemote(q, ctrl.signal).then(rows => {
+        if (!ctrl.signal.aborted) setRemote(rows);
+      });
+    }, 250);
+    return () => { clearTimeout(timer); ctrl.abort(); };
+  }, [query, open]);
+
   const selectTicker = useCallback((symbol: string) => {
     setRecent(pushRecent(symbol));
     setOpen(false);
@@ -156,7 +179,10 @@ export default function CommandPalette() {
     const q = query.trim();
     const out: PaletteItem[] = [];
 
-    const tickerItem = (t: TickerEntry, group: 'Recent' | 'Tickers'): PaletteItem => ({
+    const tickerItem = (
+      t: TickerEntry & { exchange?: string },
+      group: 'Recent' | 'Tickers',
+    ): PaletteItem => ({
       id: `${group.toLowerCase()}-${t.symbol}`,
       group,
       label: t.symbol,
@@ -164,11 +190,39 @@ export default function CommandPalette() {
       hint: 'Analyze',
       icon: group === 'Recent' ? History : TrendingUp,
       symbol: t.symbol,
+      exchange: t.exchange,
       run: () => selectTicker(t.symbol),
     });
 
     if (q) {
-      for (const t of searchTickers(q, 8)) out.push(tickerItem(t, 'Tickers'));
+      // Static universe first (instant), then live Yahoo hits deduped by
+      // symbol — each remote row carries its exchange so multi-listing names
+      // (BP NYSE vs BP.L London) are individually pickable.
+      const statics = searchTickers(q, 8);
+      const seen = new Set(statics.map(t => t.symbol));
+      const merged: Array<TickerEntry & { exchange?: string }> = [...statics];
+      for (const r of remote) {
+        // Guard against stale results from a previous (aborted-late) query.
+        if (seen.has(r.symbol) || (matchTier(q, r.symbol) === 0 && matchTier(q, r.name) === 0)) continue;
+        seen.add(r.symbol);
+        merged.push(r);
+      }
+      for (const t of merged.slice(0, 10)) out.push(tickerItem(t, 'Tickers'));
+
+      // Free-typed fallback: any regex-valid symbol is analyzable even when
+      // neither the universe nor the live search knows it (e.g. Yahoo down).
+      const upper = q.toUpperCase();
+      if (ANALYZABLE_SYMBOL_RE.test(upper) && !seen.has(upper)) {
+        out.push({
+          id: 'ticker-raw',
+          group: 'Tickers',
+          label: `Analyze "${upper}"`,
+          hint: 'Analyze',
+          icon: TrendingUp,
+          symbol: upper,
+          run: () => selectTicker(upper),
+        });
+      }
     } else {
       for (const sym of recent) {
         const known = TICKER_UNIVERSE.find(t => t.symbol === sym);
@@ -210,7 +264,7 @@ export default function CommandPalette() {
     }
 
     return out;
-  }, [query, recent, isDark, toggleTheme, close, selectTicker, navigateTo]);
+  }, [query, recent, remote, isDark, toggleTheme, close, selectTicker, navigateTo]);
 
   // Clamp at render time — the list can shrink while open (typing, watchlist
   // changes) and a stale index must never point past the end.
@@ -278,7 +332,13 @@ export default function CommandPalette() {
           fullWidth
           placeholder="Search tickers, pages, actions…"
           value={query}
-          onChange={e => { setQuery(e.target.value); setActiveIndex(0); }}
+          onChange={e => {
+            const value = e.target.value;
+            setQuery(value);
+            setActiveIndex(0);
+            // Below the fetch threshold any previous live results are stale.
+            if (value.trim().length < 2) setRemote([]);
+          }}
           onKeyDown={onInputKeyDown}
           inputProps={{
             'data-testid': 'palette-input',
@@ -355,6 +415,18 @@ export default function CommandPalette() {
                     </Typography>
                   )}
                 </Box>
+
+                {/* Exchange badge on live-search rows (BP → NYSE, BP.L → London) */}
+                {item.exchange && (
+                  <Typography
+                    sx={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.5, flexShrink: 0,
+                          px: 0.75, py: 0.1, borderRadius: 1, color: dimColor,
+                          border: `1px solid ${borderCol}`, textTransform: 'uppercase',
+                          whiteSpace: 'nowrap' }}
+                  >
+                    {item.exchange}
+                  </Typography>
+                )}
 
                 {/* Watchlist affordance on ticker rows (signed-in only) */}
                 {item.symbol && user && (

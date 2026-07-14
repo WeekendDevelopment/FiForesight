@@ -54,6 +54,38 @@ test('opens via Ctrl+K on desktop (1280px), finds AAPL, no overflow', async ({ p
   await expect(page.getByTestId('command-palette')).not.toBeVisible();
 });
 
+test('analysis search trigger opens the palette; live search lists exchange listings', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  // Mock the live symbol search (F33) so this never depends on the backend or
+  // Yahoo — the point is the palette UI: one name, multiple exchange listings.
+  await page.route('**/api/symbols/search**', route =>
+    route.fulfill({
+      json: [
+        { symbol: 'BP',   name: 'BP p.l.c.', exchange: 'NYSE',   type: 'EQUITY' },
+        { symbol: 'BP.L', name: 'BP PLC',    exchange: 'London', type: 'EQUITY' },
+      ],
+    }));
+
+  try {
+    await page.goto('/analysis', { waitUntil: 'networkidle', timeout: 30_000 });
+  } catch { /* layout-only — proceed */ }
+  await expect(page.getByTestId('app-shell')).toBeVisible({ timeout: 15_000 });
+
+  // The analysis page's search bar is now a palette trigger (no inline
+  // Autocomplete / exchange dropdown any more).
+  await page.getByTestId('analysis-search-trigger').click();
+  await expect(page.getByTestId('command-palette')).toBeVisible();
+
+  await page.getByTestId('palette-input').fill('BP');
+  const options = page.locator('#palette-listbox [role="option"]');
+  await expect(options.filter({ hasText: 'NYSE' }).first()).toBeVisible();
+  await expect(options.filter({ hasText: 'London' }).first()).toBeVisible();
+  await expect(options.filter({ hasText: 'BP.L' }).first()).toBeVisible();
+
+  await expectNoHorizontalOverflow(page, 'analysis trigger 1280px');
+});
+
 test('opens via the Search button on phone (320px), finds AAPL, no overflow', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 740 });
   try {

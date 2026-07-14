@@ -78,3 +78,33 @@ export function searchTickers(query: string, cap = 8): TickerEntry[] {
 export function randomTicker(): TickerEntry {
   return TICKER_UNIVERSE[Math.floor(Math.random() * TICKER_UNIVERSE.length)];
 }
+
+/** A live search hit from GET /api/symbols/search (Yahoo, keyless) — carries
+ * the exchange so multi-listing names (BP NYSE vs BP.L London) are pickable. */
+export interface SymbolSearchResult extends TickerEntry {
+  exchange: string;
+  type:     string;
+}
+
+/** Anything the /predict symbol validator would accept (sans ":EXCHANGE"). */
+export const ANALYZABLE_SYMBOL_RE = /^[A-Za-z0-9.\-]{1,15}$/;
+
+/**
+ * Live symbol search across exchanges. Debounce + abort are the caller's job.
+ * Resolves [] on any failure so callers can degrade to the static universe.
+ */
+export async function searchSymbolsRemote(
+  query: string,
+  signal?: AbortSignal,
+): Promise<SymbolSearchResult[]> {
+  const q = query.trim();
+  if (q.length < 2) return [];
+  try {
+    const res = await fetch(`/api/symbols/search?q=${encodeURIComponent(q)}`, { signal });
+    if (!res.ok) return [];
+    const rows = (await res.json()) as unknown;
+    return Array.isArray(rows) ? (rows as SymbolSearchResult[]) : [];
+  } catch {
+    return [];
+  }
+}
