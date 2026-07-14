@@ -16,7 +16,7 @@ import { AppShellProvider, useAppShell } from '../../contexts/AppShellContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useWatchlistContext } from '../../contexts/WatchlistContext';
 import AuthModal from '../../components/AuthModal';
-import CommandPalette, { openCommandPalette, Kbd } from '../../components/CommandPalette';
+import CommandPalette, { openCommandPalette } from '../../components/CommandPalette';
 // Navigation model lives in lib/navItems.ts (shared with the command palette,
 // Feature 33) — add/remove routes THERE, not here.
 import { NAV_ITEMS } from '../../lib/navItems';
@@ -142,39 +142,6 @@ function Sidebar() {
   const hoverBg    = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
   const activeBg   = `${primaryColor}1a`;
 
-  // ⌘ on Apple platforms, Ctrl elsewhere — resolved client-side to stay SSR-safe.
-  const [modKey, setModKey] = useState('Ctrl');
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time platform detection
-    if (/Mac|iPhone|iPad/i.test(navigator.userAgent)) setModKey('⌘');
-  }, []);
-
-  const searchButton = (
-    <Box
-      onClick={openCommandPalette}
-      onKeyDown={onActivate(openCommandPalette)}
-      role="button"
-      tabIndex={0}
-      aria-label="Search (command palette)"
-      data-testid="palette-sidebar-search"
-      sx={{
-        display: 'flex', alignItems: 'center', gap: 1.5, cursor: 'pointer',
-        mx: 1, px: 1.5, py: 1, borderRadius: 2, color: 'text.secondary',
-        justifyContent: collapsed ? 'center' : 'flex-start',
-        border: `1px solid ${borderCol}`,
-        '&:hover': { bgcolor: hoverBg, color: 'text.primary', borderColor: `${primaryColor}55` },
-      }}
-    >
-      <Search size={18} color={primaryColor} style={{ flexShrink: 0 }} />
-      {!collapsed && (
-        <>
-          <Typography sx={{ fontSize: 13, flexGrow: 1 }}>Search</Typography>
-          <Kbd>{modKey} K</Kbd>
-        </>
-      )}
-    </Box>
-  );
-
   return (
     <Box
       component="nav"
@@ -197,11 +164,6 @@ function Sidebar() {
           </Typography>
         )}
       </Box>
-
-      {/* Search / command palette (Ctrl+K) */}
-      {collapsed
-        ? <Tooltip title="Search (Ctrl+K)" placement="right">{searchButton}</Tooltip>
-        : searchButton}
 
       {/* Nav items */}
       <Stack spacing={0.5} sx={{ px: 1, mt: 1, flexGrow: 1 }}>

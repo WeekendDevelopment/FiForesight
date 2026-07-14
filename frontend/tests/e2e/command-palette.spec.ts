@@ -73,6 +73,20 @@ for (const vp of OPEN_VIEWPORTS) {
   });
 }
 
+test('home hero search trigger opens the palette', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  try {
+    await page.goto('/', { waitUntil: 'networkidle', timeout: 30_000 });
+  } catch { /* layout-only — proceed */ }
+  await expect(page.getByTestId('app-shell')).toBeVisible({ timeout: 15_000 });
+
+  // The landing hero's search bar is a palette trigger too (no inline
+  // Autocomplete / exchange dropdown any more).
+  await page.getByTestId('home-search-trigger').click();
+  await expect(page.getByTestId('command-palette')).toBeVisible();
+  await expect(page.getByTestId('palette-input')).toBeFocused();
+});
+
 test('analysis search trigger opens the palette; live search lists exchange listings', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
 
