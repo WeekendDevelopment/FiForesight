@@ -216,6 +216,17 @@ Beyond the five docs above, every feature/fix PR must also satisfy:
 - "Setups today" hint — scan the user's watchlist and flag which tickers have a *clean* (actionable) swing and/or day-trade setup, so users aren't hunting ticker-by-ticker. The coherence gate (PR #288/#289) correctly returns "no clean trade" on most choppy-day tickers (~3/10 actionable in a basket scan), so this surfaces the few that pass without loosening the gate. Likely a small badge/count in the Watchlist panel + an endpoint that fans out `/trade-setup` + `/day-trade-setup` per watchlist symbol (reuse Redis cache; one row each). · `[Value: High]` `[Effort: Med]`
 
 ### Architecture & Infra
+- Authenticated E2E test user for the CI/daily Playwright run — the responsive-qa harness
+  (`.github/workflows/pull-request.yml` → `pnpm run test:responsive`, `frontend/tests/e2e/responsive.spec.ts`)
+  runs **logged out**, so auth-gated routes (`/portfolio`, `/alerts`, authenticated `/watchlist`
+  writes) are only exercised through their AuthGate, never their real signed-in UI. Add a Playwright
+  auth setup (global-setup `storageState`) that logs in a dedicated Supabase test user before the
+  auth-gated specs so their real content renders and is smoke-tested. Signup is currently open (any
+  email/password creates an account), so the setup can self-provision a fixed test account via the
+  Supabase JS client, or use seeded creds from GH secrets `E2E_TEST_EMAIL` / `E2E_TEST_PASSWORD`;
+  degrade gracefully (skip authed specs) when creds/Supabase envs are absent so logged-out coverage
+  still runs. (Related: open unverified signup is itself a security smell worth a separate look.)
+  · `[Value: Med]` `[Effort: Med]` `[Needs: a test Supabase account or 2 GH secrets]`
 - Custom alert rule builder — price cross, RSI threshold, % move triggers; needs auth + background worker + notification channel · `[Value: High]` `[Effort: High]`
 - Daily briefing email / push — scheduled Supabase edge function; morning summary digest · `[Value: High]` `[Effort: High]`
 - Pattern detection (`scipy.signal.find_peaks`) — head & shoulders, double top/bottom, flag/pennant; annotate chart · `[Value: Med]` `[Effort: Med]`
