@@ -59,7 +59,7 @@ jobs:
         run: npm install --global pnpm
 
       - name: Setup node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 'latest'
 
@@ -93,7 +93,7 @@ jobs:
         run: npm install --global pnpm
 
       - name: Setup node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 'latest'
 
