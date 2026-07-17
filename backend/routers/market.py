@@ -1720,3 +1720,69 @@ async def backtest(request: Request, body: BacktestRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=502, detail="Backtest failed")
     await cache_set(key, result, ttl_seconds=3600)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Symbol Search (Feature 33 — command palette live ticker search)
+# ---------------------------------------------------------------------------
+# Yahoo Finance's keyless symbol-search endpoint. Returns every listing of a
+# name across exchanges (BP → BP NYSE, BP.L LSE, …) so the palette can offer
+# the exchange choice directly — this replaced the analysis page's manual
+# exchange dropdown (which yfinance ignored anyway: _to_yf_symbol strips
+# ":EXCHANGE"; Yahoo dot-suffix symbols like BP.L are the real mechanism).
+_YAHOO_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
+_SEARCH_QUOTE_TYPES = {"EQUITY", "ETF", "CRYPTOCURRENCY", "INDEX"}
+# (MUTUALFUND deliberately excluded — Yahoo returns opaque "0P0001E1JQ.ST"-style
+# fund ids whose names are just the id; pure noise in the palette.)
+# Bare symbols only — carets (^GSPC) and other chars the /predict validator
+# rejects are filtered out so every returned row is actually analyzable.
+_SEARCH_SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-]{1,15}$")
+
+
+@router.get("/symbols/search")
+@limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
+async def symbol_search(request: Request, q: str = "") -> List[Dict[str, Any]]:
+    """Live ticker search across exchanges for the command palette.
+
+    Proxies Yahoo's keyless search endpoint, keeping only analyzable quote
+    types/symbols. Returns ``[{symbol, name, exchange, type}]`` (max 10),
+    Redis-cached 6h per query; ``[]`` on any upstream failure (never a 500 —
+    the palette degrades to its static universe).
+    """
+    query = q.strip()
+    if not (1 <= len(query) <= 20):
+        raise HTTPException(status_code=422, detail="Query must be 1-20 characters.")
+
+    cache_key = f"symsearch:{query.lower()}"
+    cached = await cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    results: List[Dict[str, Any]] = []
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get(
+                _YAHOO_SEARCH_URL,
+                params={"q": query, "quotesCount": 10, "newsCount": 0, "listsCount": 0},
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+            )
+            resp.raise_for_status()
+            quotes = (resp.json() or {}).get("quotes", []) or []
+        for quote in quotes:
+            symbol = str(quote.get("symbol") or "").strip().upper()
+            if not _SEARCH_SYMBOL_RE.match(symbol):
+                continue
+            if str(quote.get("quoteType") or "").upper() not in _SEARCH_QUOTE_TYPES:
+                continue
+            results.append({
+                "symbol":   symbol,
+                "name":     str(quote.get("shortname") or quote.get("longname") or "").strip(),
+                "exchange": str(quote.get("exchDisp") or quote.get("exchange") or "").strip(),
+                "type":     str(quote.get("quoteType") or "").upper(),
+            })
+    except Exception as e:  # noqa: BLE001 — degrade to [] (palette falls back to static list)
+        logger.warning(f"[SYMSEARCH] '{query}' failed: {e}")
+        return []
+
+    await cache_set(cache_key, results, ttl_seconds=6 * 3600)
+    return results

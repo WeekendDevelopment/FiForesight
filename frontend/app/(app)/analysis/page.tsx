@@ -4,15 +4,16 @@ import React, { useState, useMemo, useEffect, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import axios from 'axios';
 import {
-  Box, Container, Typography, TextField, Button, Card, CardContent,
-  Grid, CircularProgress, Alert, Paper, Chip, Stack, MenuItem, Select, Avatar, Link,
-  Skeleton, IconButton, Autocomplete, Fab,
+  Box, Container, Typography, Card, CardContent,
+  Grid, CircularProgress, Alert, Paper, Chip, Stack, Avatar, Link,
+  Skeleton, IconButton, Fab,
 } from '@mui/material';
 import {
   Search, BrainCircuit, Newspaper, BarChart2, MessageCircle,
   Star, StarOff,
 } from 'lucide-react';
 import AuthGate from '../../../components/AuthGate';
+import { openCommandPalette, Kbd } from '../../../components/CommandPalette';
 import { useWatchlist } from '../../../hooks/useWatchlist';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useAppShell } from '../../../contexts/AppShellContext';
@@ -47,22 +48,9 @@ import DirectionForecastCard  from '../../../components/DirectionForecastCard';
 import MorningBriefingPanel   from '../../../components/MorningBriefingPanel';
 import type { PredictionData, IndicatorKey, TradeSetupResponse, DayTradeSetup, DCFResult, AnalystTargets } from '../../../types';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const EXCHANGES = [
-  { value: '',       label: 'Auto'         },
-  { value: 'NASDAQ', label: 'NASDAQ'       },
-  { value: 'NYSE',   label: 'NYSE'         },
-  { value: 'LSE',    label: 'London (LSE)' },
-  { value: 'FRA',    label: 'Frankfurt'    },
-];
-
-const POPULAR_TICKERS = [
-  'AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','BRK.B','JPM','V',
-  'UNH','MA','XOM','LLY','JNJ','PG','HD','MRK','AVGO','CVX',
-  'KO','PEP','ABBV','COST','MCD','CSCO','TMO','WMT','ACN','ABT',
-  'SPY','QQQ','DIA','IWM','GLD','SLV','TLT','BTC-USD','ETH-USD',
-];
+// Ticker search lives in the command palette (Ctrl+K / the search-bar trigger
+// below) — live multi-exchange symbol search replaced the old inline
+// Autocomplete + manual exchange dropdown (F33).
 
 // ── Analysis content ────────────────────────────────────────────────────────────
 
@@ -76,7 +64,6 @@ function AnalysisContent() {
   const lastLoadedRef = useRef<string | null>(null);
 
   const [ticker,           setTicker]           = useState('NVDA');
-  const [exchange,         setExchange]         = useState('');
   const [prediction,       setPrediction]       = useState<PredictionData | null>(null);
   const [loading,          setLoading]          = useState(false);
   const [error,            setError]            = useState<string | null>(null);
@@ -139,18 +126,12 @@ function AnalysisContent() {
   };
 
   const handlePredict = async (overrideSymbol?: string) => {
-    // Determine the full symbol (may carry an exchange suffix, e.g. "AAPL:NASDAQ").
-    let fullSymbol: string;
-    if (overrideSymbol) {
-      const upper = overrideSymbol.toUpperCase();
-      const [sym, exch] = upper.split(':');
-      setTicker(sym);
-      if (exch) setExchange(exch);
-      fullSymbol = upper;
-    } else {
-      fullSymbol = exchange ? `${ticker}:${exchange}` : ticker;
-    }
+    // Exchange listings are picked in the command palette and arrive as
+    // Yahoo-format symbols (BP, BP.L, BPCL.NS…) — no manual ":EXCHANGE"
+    // suffix any more. A legacy colon suffix is still tolerated (stripped).
+    const fullSymbol = (overrideSymbol ?? ticker).trim().toUpperCase();
     const baseSymbol = fullSymbol.split(':')[0];
+    setTicker(baseSymbol);
     // Record before fetching so the router.replace below (which changes the URL,
     // and therefore symbolFromUrl) doesn't bounce back into a duplicate fetch.
     lastLoadedRef.current = baseSymbol;
@@ -259,52 +240,41 @@ function AnalysisContent() {
     <Box>
       <Container maxWidth="xl" disableGutters>
 
-        {/* ── Search bar ──────────────────────────────────────────────── */}
+        {/* ── Search bar — opens the command palette (F33). The old inline
+               Autocomplete + exchange dropdown were consolidated into the
+               palette's live multi-exchange symbol search. ─────────────── */}
         <Stack direction="row" justifyContent="flex-end" sx={{ mb: 4 }}>
-          <Paper sx={{
-            p: 0.5, display: 'flex', gap: 1, alignItems: 'center',
-            width: { xs: '100%', md: 520 },
-            background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)',
-            backdropFilter: 'blur(20px)', borderRadius: 4,
-          }}>
-            <Autocomplete
-              freeSolo
-              options={POPULAR_TICKERS}
-              value={ticker}
-              onInputChange={(_, v) => setTicker(v.toUpperCase())}
-              onChange={(_, v) => v && setTicker(String(v).toUpperCase())}
-              sx={{ flexGrow: 1 }}
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  placeholder="Search Ticker…"
-                  variant="standard"
-                  onKeyDown={e => e.key === 'Enter' && handlePredict()}
-                  InputProps={{ ...params.InputProps, disableUnderline: true, sx: { px: 2, fontWeight: 700 } }}
-                />
-              )}
-            />
-            <Select
-              value={exchange}
-              onChange={e => setExchange(e.target.value)}
-              variant="standard"
-              disableUnderline
-              sx={{ minWidth: 100, fontWeight: 600, fontSize: '0.8rem' }}
-            >
-              {EXCHANGES.map(ex => <MenuItem key={ex.value} value={ex.value}>{ex.label}</MenuItem>)}
-            </Select>
-            <Button
-              variant="contained"
-              onClick={() => handlePredict()}
-              disabled={loading}
-              sx={{ borderRadius: 3, minWidth: 50, py: 1, boxShadow: `0 0 20px ${primaryColor}4d` }}
-            >
-              {loading ? <CircularProgress size={20} color="inherit" /> : <Search size={20} />}
-            </Button>
+          <Paper
+            onClick={openCommandPalette}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCommandPalette(); } }}
+            role="button"
+            tabIndex={0}
+            aria-label="Search any ticker (opens the command palette)"
+            data-testid="analysis-search-trigger"
+            sx={{
+              p: 0.5, display: 'flex', gap: 1, alignItems: 'center',
+              width: { xs: '100%', md: 520 }, cursor: 'pointer',
+              background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)',
+              backdropFilter: 'blur(20px)', borderRadius: 4,
+              border: '1px solid transparent',
+              '&:hover': { borderColor: `${primaryColor}55` },
+            }}
+          >
+            <Box sx={{ pl: 1.5, display: 'flex', alignItems: 'center' }}>
+              {loading
+                ? <CircularProgress size={18} sx={{ color: primaryColor }} />
+                : <Search size={18} color={primaryColor} />}
+            </Box>
+            <Typography sx={{ flexGrow: 1, px: 1, py: 1, fontWeight: 700, minWidth: 0,
+                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                              color: (prediction?.symbol ?? ticker) ? 'text.primary' : 'text.secondary' }}>
+              {prediction?.symbol ?? ticker ?? 'Search any ticker…'}
+            </Typography>
+            <Kbd>Ctrl K</Kbd>
             {user && prediction && (
               <IconButton
                 size="small"
-                onClick={() => void toggleWatchlist(prediction.symbol)}
+                onClick={(e) => { e.stopPropagation(); void toggleWatchlist(prediction.symbol); }}
                 disabled={watchlistToggling}
                 aria-label={currentIsSaved ? 'Remove from watchlist' : 'Save to watchlist'}
                 title={currentIsSaved ? 'Remove from watchlist' : 'Save to watchlist'}
