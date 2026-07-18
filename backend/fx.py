@@ -38,11 +38,14 @@ async def get_usd_rate(currency: str | None) -> float | None:
     if isinstance(cached, dict) and cached.get("rate") is not None:
         return cached["rate"]
 
-    def _fetch():
+    def _fetch() -> float | None:
         h = yf.Ticker(pair).history(period="1d")
         return float(h["Close"].iloc[-1]) if h is not None and len(h) else None
 
     try:
+        # Deliberately tighter than the 12s external-fetch standard: /predict
+        # awaits this inline, and a single FX pair either answers fast or the
+        # response ships with fxToUsd=null (native display) — no need to wait.
         raw = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=8.0)
     except Exception as e:
         logger.warning(f"fx {currency}: {e}")

@@ -432,7 +432,7 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol, r
                   }}>
                     <Typography sx={{ fontSize: 11 }}>{icon} {label}</Typography>
                     <Typography sx={{ fontSize: 13, fontWeight: 800, color }}>
-                      ${val.toFixed(2)}
+                      {money(val)}
                     </Typography>
                     <Typography sx={{ fontSize: 9, color, opacity: 0.7 }}>
                       {sign}{pctChange.toFixed(1)}% from now

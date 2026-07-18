@@ -123,7 +123,7 @@ export default function MonteCarloProbabilitySurface({
         backgroundcolor: '#0d1117',
       },
       yaxis: {
-        title:     { text: 'Price ($)', font: { color: '#64748b', size: 11 } },
+        title:     { text: `Price (${currency ?? 'USD'})`, font: { color: '#64748b', size: 11 } },
         tickfont:  { color: '#64748b', size: 10 },
         gridcolor: '#1e293b',
         tickprefix: tickPrefix,
