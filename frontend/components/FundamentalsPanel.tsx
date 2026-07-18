@@ -6,15 +6,19 @@ import {
 } from '@mui/material';
 import { ChevronDown } from 'lucide-react';
 import type { PredictionData } from '../types';
+import { formatPrice } from '../lib/currency';
 
 interface Props {
   prediction:   PredictionData;
   rsiInfo:      { label: string; color: 'error' | 'success' | 'primary' } | null;
   isDark:       boolean;
   primaryColor: string;
+  currency?:    string | null;  // active display currency (F35)
+  fx?:          number | null;  // display-time multiplier (1 = native)
 }
 
-export default function FundamentalsPanel({ prediction, rsiInfo, isDark, primaryColor }: Props) {
+export default function FundamentalsPanel({ prediction, rsiInfo, isDark, primaryColor, currency = 'USD', fx }: Props) {
+  const money = (v: string) => formatPrice(parseFloat(v) * (fx ?? 1), currency);
   return (
     <>
       {/* Forecast summary */}
@@ -24,11 +28,11 @@ export default function FundamentalsPanel({ prediction, rsiInfo, isDark, primary
           <Stack spacing={2} sx={{ mt: 2 }}>
             <Box>
               <Typography variant="caption" sx={{ opacity: 0.4 }}>5-DAY HIGH TARGET</Typography>
-              <Typography variant="h4" color="success.main">${prediction.prediction.highRange}</Typography>
+              <Typography variant="h4" color="success.main">{money(prediction.prediction.highRange)}</Typography>
             </Box>
             <Box>
               <Typography variant="caption" sx={{ opacity: 0.4 }}>5-DAY LOW TARGET</Typography>
-              <Typography variant="h4" color="error.main">${prediction.prediction.lowRange}</Typography>
+              <Typography variant="h4" color="error.main">{money(prediction.prediction.lowRange)}</Typography>
             </Box>
           </Stack>
           <Divider sx={{ my: 2, opacity: 0.1 }} />

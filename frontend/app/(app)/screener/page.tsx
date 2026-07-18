@@ -10,6 +10,7 @@ import {
 } from '@mui/material';
 import { SlidersHorizontal } from 'lucide-react';
 import type { ScreenerFilter, ScreenerResult, ScreenerRow } from '../../../types';
+import { formatPrice } from '../../../lib/currency';
 
 // ── Formatting helpers ───────────────────────────────────────────────────────
 function fmtNum(v: number | null | undefined, digits = 2): string {
@@ -281,7 +282,7 @@ export default function ScreenerPage() {
                   </TableCell>
                 )}
                 {!isMobile && <TableCell>{row.sector}</TableCell>}
-                <TableCell align="right">{row.price !== null ? `$${fmtNum(row.price)}` : '—'}</TableCell>
+                <TableCell align="right">{row.price !== null ? formatPrice(row.price, row.currency) : '—'}</TableCell>
                 <TableCell align="right">{fmtNum(row.peRatio)}</TableCell>
                 {!isMobile && <TableCell align="right">{fmtNum(row.forwardPE)}</TableCell>}
                 <TableCell align="right">{fmtNum(row.beta)}</TableCell>

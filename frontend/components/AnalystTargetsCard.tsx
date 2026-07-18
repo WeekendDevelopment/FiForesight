@@ -5,10 +5,13 @@ import {
 } from '@mui/material';
 import { Target } from 'lucide-react';
 import type { AnalystTargets } from '../types';
+import { formatPrice } from '../lib/currency';
 
 interface Props {
-  data:    AnalystTargets | null;
-  loading: boolean;
+  data:     AnalystTargets | null;
+  loading:  boolean;
+  currency?: string | null;  // active display currency (F35)
+  fx?:       number | null;  // display-time multiplier (1 = native)
 }
 
 const RATINGS = [
@@ -19,15 +22,17 @@ const RATINGS = [
   { key: 'strongSell' as const, label: 'Strong Sell', color: '#c62828' },
 ] as const;
 
-const fmt = (v: number | null | undefined) =>
-  v == null ? '—' : `$${v.toFixed(v >= 100 ? 0 : 2)}`;
-
 // Clamp a 0–100 position so absolutely-positioned markers never escape the track.
 const clamp = (n: number) => Math.max(0, Math.min(100, n));
 
-export default function AnalystTargetsCard({ data, loading }: Props) {
+export default function AnalystTargetsCard({ data, loading, currency = 'USD', fx }: Props) {
   const theme        = useTheme();
   const warningColor = theme.palette.warning.main;
+  const fmt = (v: number | null | undefined) => {
+    if (v == null) return '—';
+    const scaled = v * (fx ?? 1);
+    return formatPrice(scaled, currency, { decimals: scaled >= 100 ? 0 : 2 });
+  };
 
   const header = (
     <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>

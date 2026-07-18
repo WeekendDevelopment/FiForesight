@@ -8,6 +8,7 @@ import {
 import { MessageCircle, Send, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import type { ChatMessage, PredictionData } from '../types';
+import { formatPrice } from '../lib/currency';
 
 const BEGINNER_CHIPS = [
   "What does RSI mean for this stock?",
@@ -23,20 +24,25 @@ function buildContext(prediction: PredictionData) {
   const ind  = prediction.indicators;
   const last = prediction.history?.[prediction.history.length - 1];
   const fib  = ind?.fibonacci ?? null;
+  // Prices in the chat context carry the instrument's real quote currency (F35)
+  // so the assistant doesn't reason about a GBp (pence) name in dollars.
+  const cur = prediction.currency ?? prediction.metrics?.currency ?? 'USD';
+  const money = (n: number | null | undefined, d = 2): string =>
+    n == null || !Number.isFinite(n) ? 'N/A' : formatPrice(Number(n), cur, { decimals: d });
 
   // Fibonacci levels the chart actually draws — so the assistant can explain the
   // specific retracements the user is looking at, not just the concept.
   const fibStr = fib
-    ? `${fib.direction === 'up' ? 'uptrend' : 'downtrend'} swing $${fmt(fib.swing_low)}–$${fmt(fib.swing_high)}; ` +
+    ? `${fib.direction === 'up' ? 'uptrend' : 'downtrend'} swing ${money(fib.swing_low)}–${money(fib.swing_high)}; ` +
       Object.entries(fib.levels)
         .sort((a, b) => Number(a[0]) - Number(b[0]))
-        .map(([r, p]) => `${(Number(r) * 100).toFixed(1)}%=$${fmt(p)}`)
+        .map(([r, p]) => `${(Number(r) * 100).toFixed(1)}%=${money(p)}`)
         .join(', ')
     : 'N/A';
 
   const maStr = last
-    ? `SMA20 $${fmt(prediction.modelStats?.sma_20)}, SMA50 $${fmt(last.sma50)}, ` +
-      `SMA200 $${fmt(last.sma200)}, EMA20 $${fmt(last.ema20)}, EMA50 $${fmt(last.ema50)}`
+    ? `SMA20 ${money(prediction.modelStats?.sma_20)}, SMA50 ${money(last.sma50)}, ` +
+      `SMA200 ${money(last.sma200)}, EMA20 ${money(last.ema20)}, EMA50 ${money(last.ema50)}`
     : 'N/A';
 
   const macdStr = last && last.macd != null && last.macd_signal != null
@@ -45,22 +51,22 @@ function buildContext(prediction: PredictionData) {
     : 'N/A';
 
   const bbStr = last && last.bb_upper != null && last.bb_lower != null
-    ? `upper $${fmt(last.bb_upper)}, mid $${fmt(last.bb_middle)}, lower $${fmt(last.bb_lower)}`
+    ? `upper ${money(last.bb_upper)}, mid ${money(last.bb_middle)}, lower ${money(last.bb_lower)}`
     : 'N/A';
 
   return {
     symbol:          prediction.symbol,
-    currentPrice:    prediction.currentPrice,
+    currentPrice:    `${prediction.currentPrice} ${cur}`,
     rsi:             prediction.rsi,
     trend:           prediction.prediction.trend,
-    forecast:        `48h range $${prediction.prediction.lowRange}–$${prediction.prediction.highRange} (${prediction.confidence}% confidence)`,
-    support:         ind?.support?.length    ? ind.support.map(s => `$${s}`).join(', ')    : 'N/A',
-    resistance:      ind?.resistance?.length ? ind.resistance.map(r => `$${r}`).join(', ') : 'N/A',
+    forecast:        `48h range ${money(parseFloat(prediction.prediction.lowRange))}–${money(parseFloat(prediction.prediction.highRange))} (${prediction.confidence}% confidence)`,
+    support:         ind?.support?.length    ? ind.support.map(s => money(s)).join(', ')    : 'N/A',
+    resistance:      ind?.resistance?.length ? ind.resistance.map(r => money(r)).join(', ') : 'N/A',
     fibonacci:       fibStr,
     moving_averages: maStr,
     macd:            macdStr,
     bollinger:       bbStr,
-    atr_14:          ind?.atr_14 != null ? `$${fmt(ind.atr_14)}` : 'N/A',
+    atr_14:          ind?.atr_14 != null ? money(ind.atr_14) : 'N/A',
     regime:          prediction.regime?.regime
                        ? `${prediction.regime.regime} (${Math.round((prediction.regime.confidence ?? 0) * 100)}% conf)`
                        : 'N/A',

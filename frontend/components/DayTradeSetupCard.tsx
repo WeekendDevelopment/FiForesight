@@ -3,33 +3,37 @@
 import { Box, Card, CardContent, Chip, Skeleton, Stack, Typography } from '@mui/material';
 import { AlertTriangle, Banknote, CheckCircle2, Clock, Shield, Target, Zap } from 'lucide-react';
 import type { DayTradeSetup } from '../types';
+import { formatPrice } from '../lib/currency';
 
 interface Props {
   setup:        DayTradeSetup | null;
   loading:      boolean;
   isDark:       boolean;
   primaryColor: string;
+  currency?:    string | null;  // active display currency (F35)
+  fx?:          number | null;  // display-time multiplier (1 = native)
 }
 
 /** A single intraday level cell (OR high/low, VWAP, last). Module-scoped so it's
  *  a stable component, not re-created on every render. */
-function Level({ label, value, color }: { label: string; value: number; color?: string }) {
+function Level({ label, value, color, money }: { label: string; value: number; color?: string; money: (v: number) => string }) {
   return (
     <Box sx={{ textAlign: 'center', flex: 1 }}>
       <Typography sx={{ fontSize: '0.55rem', opacity: 0.5, letterSpacing: '0.05em', fontWeight: 700 }}>
         {label}
       </Typography>
       <Typography sx={{ fontSize: '0.72rem', fontWeight: 800, color: color ?? 'inherit' }}>
-        ${value.toFixed(2)}
+        {money(value)}
       </Typography>
     </Box>
   );
 }
 
-export default function DayTradeSetupCard({ setup, loading, isDark, primaryColor }: Props) {
+export default function DayTradeSetupCard({ setup, loading, isDark, primaryColor, currency = 'USD', fx }: Props) {
   const green = isDark ? '#00ffa3' : '#16a34a';
   const red   = isDark ? '#ff0055' : '#dc2626';
   const amber = isDark ? '#ffb020' : '#b45309';
+  const money = (v: number) => formatPrice(v * (fx ?? 1), currency);
 
   if (loading) {
     return <Skeleton variant="rectangular" height={140} sx={{ borderRadius: 2 }} />;
@@ -103,7 +107,7 @@ export default function DayTradeSetupCard({ setup, loading, isDark, primaryColor
                   <Typography sx={{ fontSize: '0.6rem', opacity: 0.5, letterSpacing: '0.07em', fontWeight: 700 }}>ENTRY</Typography>
                 </Stack>
                 <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, color: primaryColor }}>
-                  ${setup.entry!.toFixed(2)}
+                  {money(setup.entry!)}
                 </Typography>
                 <Typography sx={{ fontSize: '0.55rem', opacity: 0.6 }}>OR breakout</Typography>
               </Box>
@@ -113,7 +117,7 @@ export default function DayTradeSetupCard({ setup, loading, isDark, primaryColor
                   <Typography sx={{ fontSize: '0.6rem', opacity: 0.5, letterSpacing: '0.07em', fontWeight: 700 }}>STOP</Typography>
                 </Stack>
                 <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, color: red }}>
-                  ${setup.stop!.toFixed(2)}
+                  {money(setup.stop!)}
                 </Typography>
                 <Typography sx={{ fontSize: '0.55rem', opacity: 0.6 }}>VWAP / OR edge</Typography>
               </Box>
@@ -124,7 +128,7 @@ export default function DayTradeSetupCard({ setup, loading, isDark, primaryColor
                 </Stack>
                 {(setup.targets ?? []).map((t, i) => (
                   <Typography key={i} sx={{ fontSize: '0.7rem', fontWeight: i === 0 ? 800 : 600, color: green, opacity: 1 - i * 0.2 }}>
-                    T{i + 1} ${t.toFixed(2)}
+                    T{i + 1} {money(t)}
                   </Typography>
                 ))}
               </Box>
@@ -137,10 +141,10 @@ export default function DayTradeSetupCard({ setup, loading, isDark, primaryColor
                 background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)',
                 border: '1px solid rgba(255,255,255,0.06)',
               }}>
-                <Level label="OR HIGH" value={setup.levels.or_high} />
-                <Level label="VWAP" value={setup.levels.vwap} color={primaryColor} />
-                <Level label="OR LOW" value={setup.levels.or_low} />
-                <Level label="LAST" value={setup.levels.last} />
+                <Level label="OR HIGH" value={setup.levels.or_high} money={money} />
+                <Level label="VWAP" value={setup.levels.vwap} color={primaryColor} money={money} />
+                <Level label="OR LOW" value={setup.levels.or_low} money={money} />
+                <Level label="LAST" value={setup.levels.last} money={money} />
               </Stack>
             )}
 

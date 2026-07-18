@@ -3,18 +3,22 @@
 import { Box, Card, CardContent, Chip, Skeleton, Stack, Typography } from '@mui/material';
 import { AlertTriangle, Banknote, CheckCircle2, Clock, Shield, Target, TrendingUp } from 'lucide-react';
 import type { TradeSetupResponse } from '../types';
+import { formatPrice } from '../lib/currency';
 
 interface Props {
   setup:        TradeSetupResponse | null;
   loading:      boolean;
   isDark:       boolean;
   primaryColor: string;
+  currency?:    string | null;  // active display currency (F35)
+  fx?:          number | null;  // display-time multiplier (1 = native)
 }
 
-export default function TradeSetupCard({ setup, loading, isDark, primaryColor }: Props) {
+export default function TradeSetupCard({ setup, loading, isDark, primaryColor, currency = 'USD', fx }: Props) {
   const green = isDark ? '#00ffa3' : '#16a34a';
   const red   = isDark ? '#ff0055' : '#dc2626';
   const amber = isDark ? '#ffb020' : '#b45309';
+  const money = (v: number) => formatPrice(v * (fx ?? 1), currency);
 
   if (loading) {
     return <Skeleton variant="rectangular" height={140} sx={{ borderRadius: 2 }} />;
@@ -95,7 +99,7 @@ export default function TradeSetupCard({ setup, loading, isDark, primaryColor }:
               border: '1px solid rgba(255,255,255,0.06)', opacity: 0.75,
             }}>
               <Typography sx={{ fontSize: '0.65rem', opacity: 0.7, fontFamily: 'monospace' }}>
-                Watch range ${setup.entry_low.toFixed(2)}–${setup.entry_high.toFixed(2)}
+                Watch range {money(setup.entry_low)}–{money(setup.entry_high)}
               </Typography>
               <Typography sx={{ fontSize: '0.6rem', opacity: 0.45, letterSpacing: '0.05em', fontWeight: 700 }}>
                 REFERENCE ONLY · NO POSITION
@@ -114,10 +118,10 @@ export default function TradeSetupCard({ setup, loading, isDark, primaryColor }:
                   <Typography sx={{ fontSize: '0.6rem', opacity: 0.5, letterSpacing: '0.07em', fontWeight: 700 }}>ENTRY</Typography>
                 </Stack>
                 <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, color: primaryColor }}>
-                  ${setup.entry_low.toFixed(2)}
+                  {money(setup.entry_low)}
                 </Typography>
                 <Typography sx={{ fontSize: '0.7rem', color: primaryColor, opacity: 0.7 }}>
-                  – ${setup.entry_high.toFixed(2)}
+                  – {money(setup.entry_high)}
                 </Typography>
               </Box>
 
@@ -128,7 +132,7 @@ export default function TradeSetupCard({ setup, loading, isDark, primaryColor }:
                   <Typography sx={{ fontSize: '0.6rem', opacity: 0.5, letterSpacing: '0.07em', fontWeight: 700 }}>STOP</Typography>
                 </Stack>
                 <Typography sx={{ fontSize: '0.8rem', fontWeight: 800, color: red }}>
-                  ${setup.stop_loss.toFixed(2)}
+                  {money(setup.stop_loss)}
                 </Typography>
                 {setup.atr_14 != null && setup.atr_multiplier != null && (
                   <Typography sx={{ fontSize: '0.55rem', color: red, opacity: 0.65, mt: 0.25, lineHeight: 1.3 }}>
@@ -143,9 +147,9 @@ export default function TradeSetupCard({ setup, loading, isDark, primaryColor }:
                   <Target size={12} color={green} />
                   <Typography sx={{ fontSize: '0.6rem', opacity: 0.5, letterSpacing: '0.07em', fontWeight: 700 }}>TARGETS</Typography>
                 </Stack>
-                <Typography sx={{ fontSize: '0.75rem', fontWeight: 800, color: green }}>T1 ${setup.target_1.toFixed(2)}</Typography>
-                <Typography sx={{ fontSize: '0.7rem', color: green, opacity: 0.8 }}>T2 ${setup.target_2.toFixed(2)}</Typography>
-                <Typography sx={{ fontSize: '0.65rem', color: green, opacity: 0.6 }}>T3 ${setup.target_3.toFixed(2)}</Typography>
+                <Typography sx={{ fontSize: '0.75rem', fontWeight: 800, color: green }}>T1 {money(setup.target_1)}</Typography>
+                <Typography sx={{ fontSize: '0.7rem', color: green, opacity: 0.8 }}>T2 {money(setup.target_2)}</Typography>
+                <Typography sx={{ fontSize: '0.65rem', color: green, opacity: 0.6 }}>T3 {money(setup.target_3)}</Typography>
               </Box>
             </Box>
 

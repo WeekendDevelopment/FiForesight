@@ -9,6 +9,7 @@ import {
 import { Info, ChevronDown, ChevronUp, Eraser, RotateCcw } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import type { PredictionData, IndicatorKey, ChartOverlayKey, ChartOverlayState, ChartStats, IndicatorSignals, IntervalHistoryData } from '../types';
+import { formatPrice, usdRateCaption } from '../lib/currency';
 import SignalPanels from './SignalPanels';
 
 const AdvancedChart = dynamic(() => import('./AdvancedChart'), { ssr: false });
@@ -74,13 +75,24 @@ interface Props {
   trendColor:      string;
   chartStats:      ChartStats | null;
   indicatorSignals: IndicatorSignals;
+  // Currency-aware display (F35). `currency`/`fx` are the ACTIVE display pair
+  // (already 'USD' + the rate when the toggle is on); the native* props drive
+  // the toggle itself, which only renders for non-USD names with a live rate.
+  currency?:       string | null;
+  fx?:             number | null;
+  nativeCurrency?: string | null;
+  fxToUsd?:        number | null;
+  showUsd?:        boolean;
+  onToggleUsd?:    (v: boolean) => void;
 }
 
 export default function PriceChartCard({
   prediction, symbol, indicators, setIndicators,
   chartMode, setChartMode,
   isDark, primaryColor, trendColor, chartStats, indicatorSignals,
+  currency = 'USD', fx, nativeCurrency, fxToUsd, showUsd = false, onToggleUsd,
 }: Props) {
+  const fxRate   = fx ?? 1;   // display-time multiplier (1 = native currency)
   const theme    = useTheme();
   const isXs     = useMediaQuery(theme.breakpoints.down('sm'));
   const isSm     = useMediaQuery(theme.breakpoints.between('sm', 'md'));
@@ -251,11 +263,28 @@ export default function PriceChartCard({
           </Box>
           <Box sx={{ textAlign: 'right' }}>
             <Typography color="primary.main" sx={{ fontWeight: 700, fontSize: { xs: '1.5rem', sm: '2rem', md: '3rem' }, lineHeight: 1.1 }}>
-              ${prediction.currentPrice}
+              {formatPrice(parseFloat(prediction.currentPrice) * fxRate, currency)}
             </Typography>
-            <Typography variant="caption" sx={{ opacity: 0.4 }}>
-              {prediction.metrics.currency ?? 'USD'} · LIVE FEED
+            <Typography variant="caption" sx={{ opacity: 0.4, display: 'block' }}>
+              {currency || 'USD'} · LIVE FEED
             </Typography>
+            {/* "Show in USD" toggle — only for non-USD names with a live FX rate */}
+            {nativeCurrency && nativeCurrency !== 'USD' && fxToUsd != null && onToggleUsd && (
+              <Box sx={{ mt: 0.75, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 0.25 }}>
+                <ToggleButtonGroup
+                  exclusive size="small" aria-label="display currency"
+                  value={showUsd ? 'usd' : 'native'}
+                  onChange={(_e, val) => val && onToggleUsd(val === 'usd')}
+                  sx={toggleSx}
+                >
+                  <ToggleButton value="native">{nativeCurrency}</ToggleButton>
+                  <ToggleButton value="usd">USD</ToggleButton>
+                </ToggleButtonGroup>
+                <Typography variant="caption" sx={{ opacity: 0.35, fontSize: '0.6rem' }}>
+                  {usdRateCaption(nativeCurrency, fxToUsd)}
+                </Typography>
+              </Box>
+            )}
           </Box>
         </Box>
 
@@ -268,9 +297,9 @@ export default function PriceChartCard({
                 val: `${activeStats.isUp ? '+' : ''}${activeStats.changePct.toFixed(2)}%`,
                 col: activeStats.color,
               },
-              { label: 'PERIOD HIGH', val: activeStats.high != null && activeStats.high > 0 ? `$${Number(activeStats.high).toFixed(2)}` : '—', col: isDark ? '#00ffa3' : '#16a34a' },
-              { label: 'PERIOD LOW',  val: activeStats.low  != null && activeStats.low  > 0 ? `$${Number(activeStats.low).toFixed(2)}`  : '—', col: isDark ? '#ff0055' : '#dc2626' },
-              { label: 'SMA 20',      val: activeStats.sma20 != null ? `$${Number(activeStats.sma20).toFixed(2)}` : '—', col: '#f59e0b' },
+              { label: 'PERIOD HIGH', val: activeStats.high != null && activeStats.high > 0 ? formatPrice(Number(activeStats.high) * fxRate, currency) : '—', col: isDark ? '#00ffa3' : '#16a34a' },
+              { label: 'PERIOD LOW',  val: activeStats.low  != null && activeStats.low  > 0 ? formatPrice(Number(activeStats.low) * fxRate, currency)  : '—', col: isDark ? '#ff0055' : '#dc2626' },
+              { label: 'SMA 20',      val: activeStats.sma20 != null ? formatPrice(Number(activeStats.sma20) * fxRate, currency) : '—', col: '#f59e0b' },
               { label: 'ANN. VOL',    val: activeStats.annVol != null ? `${Number(activeStats.annVol).toFixed(2)}%` : '—', col: 'text.secondary' },
             ].map(s => (
               <Box key={s.label}>

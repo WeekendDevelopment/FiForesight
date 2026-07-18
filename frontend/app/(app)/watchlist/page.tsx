@@ -12,6 +12,7 @@ import { useWatchlistContext } from '../../../contexts/WatchlistContext';
 import { useAuth } from '../../../contexts/AuthContext';
 import AuthModal from '../../../components/AuthModal';
 import type { WatchlistMetricRow } from '../../../types';
+import { formatPrice } from '../../../lib/currency';
 
 const COLS_KEY = 'fiforesight:watchlist:cols';
 
@@ -49,8 +50,10 @@ function saveVisibleCols(cols: Record<ColumnKey, boolean>) {
   window.localStorage.setItem(COLS_KEY, JSON.stringify(enabled));
 }
 
-function fmtPrice(v: number | null): string {
-  return v === null || v === undefined ? '—' : `$${v.toFixed(2)}`;
+// Label prices in the row's own quote currency (F35) — LSE rows quote GBp
+// (pence), so a hardcoded '$' would be wrong-symbol AND ~75× off.
+function fmtPrice(v: number | null, currency?: string | null): string {
+  return v === null || v === undefined ? '—' : formatPrice(v, currency);
 }
 
 function fmtPct(v: number | null): string {
@@ -279,7 +282,7 @@ export default function WatchlistPage() {
                     }
                     switch (c.key) {
                       case 'price':
-                        return <TableCell key={c.key} align="right">{fmtPrice(val as number | null)}</TableCell>;
+                        return <TableCell key={c.key} align="right">{fmtPrice(val as number | null, row?.currency)}</TableCell>;
                       case 'changePct':
                         return (
                           <TableCell key={c.key} align="right" sx={{ color: chgColor(val as number | null), fontWeight: 600 }}>
