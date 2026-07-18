@@ -8,46 +8,18 @@ import {
   Stack, Typography, IconButton, Tooltip, useMediaQuery,
 } from '@mui/material';
 import {
-  BrainCircuit, Home, Search, BarChart2, Calendar, Rocket, LineChart,
-  Activity, Wallet, Bell, ChevronLeft, ChevronRight, Sun, Moon, LogIn, LogOut,
-  Star, ChevronDown, ChevronUp, MoreHorizontal, Globe, Grid2X2, SlidersHorizontal,
-  RefreshCw, FlaskConical,
+  BrainCircuit, Search, ChevronLeft, ChevronRight, Sun, Moon, LogIn, LogOut,
+  Star, ChevronDown, ChevronUp, MoreHorizontal,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { AppShellProvider, useAppShell } from '../../contexts/AppShellContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useWatchlistContext } from '../../contexts/WatchlistContext';
 import AuthModal from '../../components/AuthModal';
-
-// ── Navigation model ────────────────────────────────────────────────────────
-interface NavItem {
-  label: string;
-  href:  string;
-  icon:  React.ComponentType<{ size?: number | string; color?: string }>;
-  /** Shown in the mobile bottom nav (Insights/Simulator/My Portfolio are desktop-only / secondary). */
-  mobile: boolean;
-}
-
-// "Simulator" is the backtest race engine (/simulation). "My Portfolio" is the
-// real-holdings P&L tracker (/portfolio) — kept clearly distinct so the two
-// never get confused.
-const NAV_ITEMS: NavItem[] = [
-  { label: 'Home',         href: '/',           icon: Home,      mobile: true  },
-  { label: 'Analysis',     href: '/analysis',   icon: Search,    mobile: true  },
-  { label: 'Options',      href: '/options',    icon: BarChart2, mobile: true  },
-  { label: 'Earnings',     href: '/earnings',   icon: Calendar,  mobile: true  },
-  { label: 'IPO Tracker',  href: '/ipo',        icon: Rocket,    mobile: false },
-  { label: 'Macro',        href: '/macro',      icon: Globe,     mobile: false },
-  { label: 'Sectors',      href: '/sectors',    icon: Grid2X2,   mobile: false },
-  { label: 'Rotation',     href: '/rotation',   icon: RefreshCw, mobile: false },
-  { label: 'Screener',     href: '/screener',   icon: SlidersHorizontal, mobile: false },
-  { label: 'Backtest',     href: '/backtest',   icon: FlaskConical, mobile: false },
-  { label: 'Watchlist',    href: '/watchlist',  icon: Star,      mobile: false },
-  { label: 'Insights',     href: '/insights',   icon: Activity,  mobile: false },
-  { label: 'Simulator',    href: '/simulation', icon: LineChart, mobile: false },
-  { label: 'My Portfolio', href: '/portfolio',  icon: Wallet,    mobile: false },
-  { label: 'Alerts',       href: '/alerts',     icon: Bell,      mobile: false },
-];
+import CommandPalette, { openCommandPalette } from '../../components/CommandPalette';
+// Navigation model lives in lib/navItems.ts (shared with the command palette,
+// Feature 33) — add/remove routes THERE, not here.
+import { NAV_ITEMS } from '../../lib/navItems';
 
 const EXPANDED_WIDTH  = 220;
 const COLLAPSED_WIDTH = 64;
@@ -325,9 +297,9 @@ function MobileWatchlistBar() {
 }
 
 // ── Mobile bottom navigation ────────────────────────────────────────────────
-// Base items always in the primary bar; extended items only on phones > 375px.
-const _BASE_HREFS     = ['/', '/analysis'];
-const _EXTENDED_HREFS = ['/options', '/earnings'];
+// How many `mobile: true` NAV_ITEMS fit in the primary bar on small phones
+// (≤375px — iPhone SE and older 320px devices); the rest go to the More drawer.
+const SMALL_PHONE_PRIMARY_COUNT = 2;
 
 function MobileNav() {
   const pathname                 = usePathname();
@@ -335,13 +307,14 @@ function MobileNav() {
   const { user, signOut }        = useAuth();
   const [moreOpen,  setMoreOpen] = useState(false);
   const [authOpen,  setAuthOpen] = useState(false);
-  // ≤375px covers iPhone SE (2nd/3rd gen) and older 320px phones
   const isSmallPhone             = useMediaQuery('(max-width:375px)');
   const borderCol = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
 
-  const primaryHrefs = isSmallPhone ? _BASE_HREFS : [..._BASE_HREFS, ..._EXTENDED_HREFS];
-  const primaryNav   = NAV_ITEMS.filter(i => primaryHrefs.includes(i.href));
-  const secondaryNav = NAV_ITEMS.filter(i => !primaryHrefs.includes(i.href));
+  // NAV_ITEMS.mobile (lib/navItems.ts) is the single source of mobile-nav
+  // classification — no separate href lists to keep in sync.
+  const mobileItems  = NAV_ITEMS.filter(i => i.mobile);
+  const primaryNav   = isSmallPhone ? mobileItems.slice(0, SMALL_PHONE_PRIMARY_COUNT) : mobileItems;
+  const secondaryNav = NAV_ITEMS.filter(i => !primaryNav.includes(i));
   const moreActive   = secondaryNav.some(i => isActive(pathname, i.href));
 
   return (
@@ -374,6 +347,24 @@ function MobileNav() {
             </Box>
           );
         })}
+
+        {/* Search — opens the command palette as a top sheet (Ctrl+K has no mobile equivalent) */}
+        <Box
+          onClick={openCommandPalette}
+          onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCommandPalette(); } }}
+          role="button"
+          tabIndex={0}
+          aria-label="Search"
+          data-testid="palette-search-button"
+          sx={{
+            flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center',
+            justifyContent: 'center', gap: 0.25, cursor: 'pointer',
+            color: 'text.secondary', minHeight: 44,
+          }}
+        >
+          <Search size={20} />
+          <Typography sx={{ fontSize: 10, fontWeight: 500 }}>Search</Typography>
+        </Box>
 
         {/* More — opens secondary nav + auth drawer */}
         <Box
@@ -518,6 +509,7 @@ function Shell({ children }: { children: React.ReactNode }) {
       </Box>
       <MobileWatchlistBar />
       <MobileNav />
+      <CommandPalette />
     </Box>
   );
 }

@@ -1,10 +1,8 @@
 'use client';
 
-import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Box, Typography, Paper, TextField, Button, Select, MenuItem, Autocomplete,
-  Stack, Chip, CircularProgress, Grid,
+  Box, Typography, Paper, Stack, Chip, Grid,
 } from '@mui/material';
 import { Search } from 'lucide-react';
 import { useAppShell } from '../../contexts/AppShellContext';
@@ -12,21 +10,9 @@ import { useWatchlistContext } from '../../contexts/WatchlistContext';
 import MorningBriefingPanel from '../../components/MorningBriefingPanel';
 import SectorHeatmapPanel from '../../components/SectorHeatmapPanel';
 import TrendingSparklines from '../../components/TrendingSparklines';
-
-const EXCHANGES = [
-  { value: '',       label: 'Auto'         },
-  { value: 'NASDAQ', label: 'NASDAQ'       },
-  { value: 'NYSE',   label: 'NYSE'         },
-  { value: 'LSE',    label: 'London (LSE)' },
-  { value: 'FRA',    label: 'Frankfurt'    },
-];
-
-const POPULAR_TICKERS = [
-  'AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','BRK.B','JPM','V',
-  'UNH','MA','XOM','LLY','JNJ','PG','HD','MRK','AVGO','CVX',
-  'KO','PEP','ABBV','COST','MCD','CSCO','TMO','WMT','ACN','ABT',
-  'SPY','QQQ','DIA','IWM','GLD','SLV','TLT','BTC-USD','ETH-USD',
-];
+// Ticker search lives in the command palette (Ctrl+K / the hero trigger
+// below) — the old inline Autocomplete + exchange dropdown are gone (F33).
+import { openCommandPalette, Kbd } from '../../components/CommandPalette';
 
 // Curated trending list for the landing page (TrendingSparklines fetches /api/sparklines).
 const TRENDING = ['NVDA','AAPL','MSFT','TSLA','AMZN','META','GOOGL','AMD','AVGO','SPY','QQQ','BTC-USD'];
@@ -54,22 +40,11 @@ export default function LandingPage() {
   const router = useRouter();
   const { isDark, primaryColor } = useAppShell();
   const { watchlist } = useWatchlistContext();
-  const [ticker, setTicker]     = useState('');
-  const [exchange, setExchange] = useState('');
-  const [navigating, setNavigating] = useState(false);
 
   const market = getMarketStatus();
   const today  = new Date().toLocaleDateString('en-US', {
     weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
   });
-
-  const handleSearch = () => {
-    const sym = ticker.trim().toUpperCase();
-    if (!sym) return;
-    setNavigating(true);
-    const q = exchange ? `${sym}:${exchange}` : sym;
-    router.push(`/analysis?symbol=${encodeURIComponent(q)}`);
-  };
 
   return (
     <Box sx={{ maxWidth: 1400, mx: 'auto' }}>
@@ -128,47 +103,33 @@ export default function LandingPage() {
               Run a full AI-driven forecast and analysis.
             </Typography>
 
+            {/* Palette trigger (F33) — the old inline Autocomplete + exchange
+                dropdown were consolidated into the command palette's live
+                multi-exchange symbol search. */}
             <Paper
+              onClick={openCommandPalette}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCommandPalette(); } }}
+              role="button"
+              tabIndex={0}
+              aria-label="Search any ticker (opens the command palette)"
+              data-testid="home-search-trigger"
               sx={{
                 p: 0.75, display: 'flex', gap: 1, alignItems: 'center',
                 borderRadius: 4, mx: 'auto', width: '100%', maxWidth: 560,
                 background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
+                cursor: 'pointer', border: '1px solid transparent',
+                '&:hover': { borderColor: `${primaryColor}55` },
               }}
             >
-              <Autocomplete
-                freeSolo
-                options={POPULAR_TICKERS}
-                value={ticker}
-                onInputChange={(_, v) => setTicker(v.toUpperCase())}
-                onChange={(_, v) => v && setTicker(String(v).toUpperCase())}
-                sx={{ flexGrow: 1 }}
-                renderInput={(params) => (
-                  <TextField
-                    {...params}
-                    placeholder="Search a ticker…"
-                    variant="standard"
-                    onKeyDown={e => e.key === 'Enter' && handleSearch()}
-                    InputProps={{ ...params.InputProps, disableUnderline: true, sx: { px: 2, fontWeight: 700 } }}
-                  />
-                )}
-              />
-              <Select
-                value={exchange}
-                onChange={e => setExchange(e.target.value)}
-                variant="standard"
-                disableUnderline
-                sx={{ minWidth: 100, fontWeight: 600, fontSize: '0.8rem' }}
-              >
-                {EXCHANGES.map(ex => <MenuItem key={ex.value} value={ex.value}>{ex.label}</MenuItem>)}
-              </Select>
-              <Button
-                variant="contained"
-                onClick={handleSearch}
-                disabled={navigating}
-                sx={{ borderRadius: 3, minWidth: 50, py: 1, boxShadow: `0 0 20px ${primaryColor}4d` }}
-              >
-                {navigating ? <CircularProgress size={20} color="inherit" /> : <Search size={20} />}
-              </Button>
+              <Box sx={{ pl: 1.5, display: 'flex', alignItems: 'center' }}>
+                <Search size={18} color={primaryColor} />
+              </Box>
+              <Typography sx={{ flexGrow: 1, px: 1, py: 1, fontWeight: 700, color: 'text.secondary' }}>
+                Search any ticker…
+              </Typography>
+              <Box sx={{ pr: 1, display: { xs: 'none', md: 'block' } }}>
+                <Kbd>Ctrl K</Kbd>
+              </Box>
             </Paper>
           </Paper>
         </Grid>

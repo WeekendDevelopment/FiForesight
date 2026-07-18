@@ -4,15 +4,16 @@ import React, { useState, useMemo, useEffect, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import axios from 'axios';
 import {
-  Box, Container, Typography, TextField, Button, Card, CardContent,
-  Grid, CircularProgress, Alert, Paper, Chip, Stack, MenuItem, Select, Avatar, Link,
-  Skeleton, IconButton, Autocomplete, Fab,
+  Box, Container, Typography, Card, CardContent,
+  Grid, CircularProgress, Alert, Paper, Chip, Stack, Avatar, Link,
+  Skeleton, IconButton, Fab,
 } from '@mui/material';
 import {
   Search, BrainCircuit, Newspaper, BarChart2, MessageCircle,
   Star, StarOff,
 } from 'lucide-react';
 import AuthGate from '../../../components/AuthGate';
+import { openCommandPalette, Kbd } from '../../../components/CommandPalette';
 import { useWatchlist } from '../../../hooks/useWatchlist';
 import { useAuth } from '../../../contexts/AuthContext';
 import { useAppShell } from '../../../contexts/AppShellContext';
@@ -45,24 +46,41 @@ import GapExplainerBanner    from '../../../components/GapExplainerBanner';
 import ReversalRiskCard       from '../../../components/ReversalRiskCard';
 import DirectionForecastCard  from '../../../components/DirectionForecastCard';
 import MorningBriefingPanel   from '../../../components/MorningBriefingPanel';
+import AnalysisSectionNav     from '../../../components/AnalysisSectionNav';
+import AnalysisSection        from '../../../components/AnalysisSection';
 import type { PredictionData, IndicatorKey, TradeSetupResponse, DayTradeSetup, DCFResult, AnalystTargets } from '../../../types';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// Ticker search lives in the command palette (Ctrl+K / the search-bar trigger
+// below) — live multi-exchange symbol search replaced the old inline
+// Autocomplete + manual exchange dropdown (F33).
 
-const EXCHANGES = [
-  { value: '',       label: 'Auto'         },
-  { value: 'NASDAQ', label: 'NASDAQ'       },
-  { value: 'NYSE',   label: 'NYSE'         },
-  { value: 'LSE',    label: 'London (LSE)' },
-  { value: 'FRA',    label: 'Frankfurt'    },
-];
+// ── Section groups (Feature 34 — Analysis Navigator) ────────────────────────
+// Every left-column card lives in exactly one group; the sticky chip nav jumps
+// between them and each group collapses (cards stay MOUNTED — see
+// AnalysisSection). The right-column sidebar (Fundamentals, Order Book, Peers,
+// news) is deliberately outside the groups: on desktop it sits beside the
+// content, so folding it into a vertical section would move it for existing
+// users.
+const ANALYSIS_SECTIONS = [
+  { id: 'overview',  label: 'Overview'  },
+  { id: 'forecast',  label: 'Forecast'  },
+  { id: 'jury',      label: 'AI Jury'   },
+  { id: 'trade',     label: 'Trade'     },
+  { id: 'valuation', label: 'Valuation' },
+  { id: 'data',      label: 'Data'      },
+] as const;
 
-const POPULAR_TICKERS = [
-  'AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','BRK.B','JPM','V',
-  'UNH','MA','XOM','LLY','JNJ','PG','HD','MRK','AVGO','CVX',
-  'KO','PEP','ABBV','COST','MCD','CSCO','TMO','WMT','ACN','ABT',
-  'SPY','QQQ','DIA','IWM','GLD','SLV','TLT','BTC-USD','ETH-USD',
-];
+const SECTIONS_KEY = 'fiforesight:analysis:sections';
+
+function loadCollapsedSections(): Record<string, boolean> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SECTIONS_KEY) ?? '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 // ── Analysis content ────────────────────────────────────────────────────────────
 
@@ -76,7 +94,6 @@ function AnalysisContent() {
   const lastLoadedRef = useRef<string | null>(null);
 
   const [ticker,           setTicker]           = useState('NVDA');
-  const [exchange,         setExchange]         = useState('');
   const [prediction,       setPrediction]       = useState<PredictionData | null>(null);
   const [loading,          setLoading]          = useState(false);
   const [error,            setError]            = useState<string | null>(null);
@@ -91,6 +108,26 @@ function AnalysisContent() {
   const [analystTargetsLoading, setAnalystTargetsLoading] = useState(false);
   const [chatOpen,         setChatOpen]         = useState(false);
   const [authOpen,         setAuthOpen]         = useState(false);
+
+  // ── Analysis Navigator (F34) ────────────────────────────────────────────
+  const [activeSection,     setActiveSection]     = useState<string>('overview');
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(loadCollapsedSections);
+
+  const toggleSection = (id: string) => {
+    setCollapsedSections(prev => {
+      const next = { ...prev, [id]: !prev[id] };
+      try { window.localStorage.setItem(SECTIONS_KEY, JSON.stringify(next)); } catch { /* private mode */ }
+      return next;
+    });
+  };
+
+  const jumpToSection = (id: string) => {
+    const el = document.getElementById(`analysis-section-${id}`);
+    if (!el) return;
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    // scroll-margin-top on the section root keeps the target below the sticky nav.
+    el.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' });
+  };
 
   const { user, session } = useAuth();
   const { watchlist, currentIsSaved, toggle: toggleWatchlist, toggling: watchlistToggling } = useWatchlist(prediction?.symbol ?? ticker);
@@ -139,18 +176,12 @@ function AnalysisContent() {
   };
 
   const handlePredict = async (overrideSymbol?: string) => {
-    // Determine the full symbol (may carry an exchange suffix, e.g. "AAPL:NASDAQ").
-    let fullSymbol: string;
-    if (overrideSymbol) {
-      const upper = overrideSymbol.toUpperCase();
-      const [sym, exch] = upper.split(':');
-      setTicker(sym);
-      if (exch) setExchange(exch);
-      fullSymbol = upper;
-    } else {
-      fullSymbol = exchange ? `${ticker}:${exchange}` : ticker;
-    }
+    // Exchange listings are picked in the command palette and arrive as
+    // Yahoo-format symbols (BP, BP.L, BPCL.NS…) — no manual ":EXCHANGE"
+    // suffix any more. A legacy colon suffix is still tolerated (stripped).
+    const fullSymbol = (overrideSymbol ?? ticker).trim().toUpperCase();
     const baseSymbol = fullSymbol.split(':')[0];
+    setTicker(baseSymbol);
     // Record before fetching so the router.replace below (which changes the URL,
     // and therefore symbolFromUrl) doesn't bounce back into a duplicate fetch.
     lastLoadedRef.current = baseSymbol;
@@ -225,6 +256,46 @@ function AnalysisContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.access_token, prediction]);
 
+  // Track which section is under the sticky nav. rootMargin: top band starts
+  // just below the nav (~56px) and the bottom is pulled up 55% so the section
+  // occupying the upper part of the viewport wins, not the one entering at the
+  // bottom.
+  useEffect(() => {
+    if (!prediction) return;
+    const visible = new Set<string>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          const id = e.target.id.replace('analysis-section-', '');
+          if (e.isIntersecting) visible.add(id);
+          else visible.delete(id);
+        }
+        const first = ANALYSIS_SECTIONS.find(s => visible.has(s.id));
+        if (first) setActiveSection(first.id);
+      },
+      { rootMargin: '-56px 0px -55% 0px', threshold: 0 },
+    );
+    for (const s of ANALYSIS_SECTIONS) {
+      const el = document.getElementById(`analysis-section-${s.id}`);
+      if (el) observer.observe(el);
+    }
+    return () => observer.disconnect();
+  }, [prediction]);
+
+  // Best-effort card counts per section, mirroring the render conditions below.
+  const sectionCounts = useMemo<Record<string, number>>(() => {
+    if (!prediction) return {};
+    return {
+      overview:  1 + (prediction.gap_alert ? 1 : 0) + (prediction.metrics?.sector ? 1 : 0),
+      forecast:  (prediction.modelWeights ? 1 : 0) + (prediction.forecastDays?.length ? 1 : 0)
+               + (prediction.directionForecast ? 1 : 0) + (prediction.monteCarlo ? 1 : 0),
+      jury:      1,
+      trade:     2 + (user ? 1 : 0) + (prediction.reversalRisk ? 1 : 0),
+      valuation: 3 + (dcfData ? 1 : 0),
+      data:      2,
+    };
+  }, [prediction, user, dcfData]);
+
   const rsiInfo = useMemo(() => {
     if (!prediction) return null;
     const val = parseFloat(prediction.rsi);
@@ -259,52 +330,41 @@ function AnalysisContent() {
     <Box>
       <Container maxWidth="xl" disableGutters>
 
-        {/* ── Search bar ──────────────────────────────────────────────── */}
+        {/* ── Search bar — opens the command palette (F33). The old inline
+               Autocomplete + exchange dropdown were consolidated into the
+               palette's live multi-exchange symbol search. ─────────────── */}
         <Stack direction="row" justifyContent="flex-end" sx={{ mb: 4 }}>
-          <Paper sx={{
-            p: 0.5, display: 'flex', gap: 1, alignItems: 'center',
-            width: { xs: '100%', md: 520 },
-            background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)',
-            backdropFilter: 'blur(20px)', borderRadius: 4,
-          }}>
-            <Autocomplete
-              freeSolo
-              options={POPULAR_TICKERS}
-              value={ticker}
-              onInputChange={(_, v) => setTicker(v.toUpperCase())}
-              onChange={(_, v) => v && setTicker(String(v).toUpperCase())}
-              sx={{ flexGrow: 1 }}
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  placeholder="Search Ticker…"
-                  variant="standard"
-                  onKeyDown={e => e.key === 'Enter' && handlePredict()}
-                  InputProps={{ ...params.InputProps, disableUnderline: true, sx: { px: 2, fontWeight: 700 } }}
-                />
-              )}
-            />
-            <Select
-              value={exchange}
-              onChange={e => setExchange(e.target.value)}
-              variant="standard"
-              disableUnderline
-              sx={{ minWidth: 100, fontWeight: 600, fontSize: '0.8rem' }}
-            >
-              {EXCHANGES.map(ex => <MenuItem key={ex.value} value={ex.value}>{ex.label}</MenuItem>)}
-            </Select>
-            <Button
-              variant="contained"
-              onClick={() => handlePredict()}
-              disabled={loading}
-              sx={{ borderRadius: 3, minWidth: 50, py: 1, boxShadow: `0 0 20px ${primaryColor}4d` }}
-            >
-              {loading ? <CircularProgress size={20} color="inherit" /> : <Search size={20} />}
-            </Button>
+          <Paper
+            onClick={openCommandPalette}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCommandPalette(); } }}
+            role="button"
+            tabIndex={0}
+            aria-label="Search any ticker (opens the command palette)"
+            data-testid="analysis-search-trigger"
+            sx={{
+              p: 0.5, display: 'flex', gap: 1, alignItems: 'center',
+              width: { xs: '100%', md: 520 }, cursor: 'pointer',
+              background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)',
+              backdropFilter: 'blur(20px)', borderRadius: 4,
+              border: '1px solid transparent',
+              '&:hover': { borderColor: `${primaryColor}55` },
+            }}
+          >
+            <Box sx={{ pl: 1.5, display: 'flex', alignItems: 'center' }}>
+              {loading
+                ? <CircularProgress size={18} sx={{ color: primaryColor }} />
+                : <Search size={18} color={primaryColor} />}
+            </Box>
+            <Typography sx={{ flexGrow: 1, px: 1, py: 1, fontWeight: 700, minWidth: 0,
+                              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                              color: (prediction?.symbol ?? ticker) ? 'text.primary' : 'text.secondary' }}>
+              {prediction?.symbol ?? ticker ?? 'Search any ticker…'}
+            </Typography>
+            <Kbd>Ctrl K</Kbd>
             {user && prediction && (
               <IconButton
                 size="small"
-                onClick={() => void toggleWatchlist(prediction.symbol)}
+                onClick={(e) => { e.stopPropagation(); void toggleWatchlist(prediction.symbol); }}
                 disabled={watchlistToggling}
                 aria-label={currentIsSaved ? 'Remove from watchlist' : 'Save to watchlist'}
                 title={currentIsSaved ? 'Remove from watchlist' : 'Save to watchlist'}
@@ -337,193 +397,236 @@ function AnalysisContent() {
             ) : prediction ? (
               <Stack spacing={3}>
 
-                {/* ── Gap Explainer banner (>=3% daily move, F22) ──── */}
-                <GapExplainerBanner alert={prediction.gap_alert ?? null} symbol={prediction.symbol} />
-
-                {/* ── Sector context — links the stock to its sector ETF ── */}
-                <SectorContextChip
-                  sector={prediction.metrics?.sector}
-                  onSelectTicker={(etf) => handlePredict(etf)}
-                  isDark={isDark}
+                {/* ── Sticky section navigator (F34) ───────────────── */}
+                <AnalysisSectionNav
+                  sections={ANALYSIS_SECTIONS}
+                  activeId={activeSection}
+                  onJump={jumpToSection}
+                  collapsed={collapsedSections}
+                  onToggleCollapse={toggleSection}
                 />
 
-                {/* ── Signal Coherence — one honest net read across the cards ── */}
-                <SignalCoherencePanel
-                  prediction={prediction}
-                  isDark={isDark}
-                  primaryColor={primaryColor}
-                />
+                {/* ── Overview — gap banner + sector context + chart ── */}
+                <AnalysisSection
+                  id="overview" label="Overview" count={sectionCounts.overview}
+                  collapsed={!!collapsedSections.overview} onToggle={() => toggleSection('overview')}
+                >
+                  {/* Gap Explainer banner (>=3% daily move, F22) */}
+                  <GapExplainerBanner alert={prediction.gap_alert ?? null} symbol={prediction.symbol} />
 
-                {/* Price chart card */}
-                <PriceChartCard
-                  prediction={prediction}
-                  symbol={prediction.symbol}
-                  indicators={indicators}
-                  setIndicators={setIndicators}
-                  chartMode={chartMode}
-                  setChartMode={setChartMode}
-                  isDark={isDark}
-                  primaryColor={primaryColor}
-                  trendColor={trendColor}
-                  chartStats={chartStats}
-                  indicatorSignals={indicatorSignals}
-                />
+                  {/* Sector context — links the stock to its sector ETF */}
+                  <SectorContextChip
+                    sector={prediction.metrics?.sector}
+                    onSelectTicker={(etf) => handlePredict(etf)}
+                    isDark={isDark}
+                  />
 
-                {/* ── Ensemble model weights + RF feature importance ─── */}
-                {prediction.modelWeights && (
-                  <Box>
-                    <ModelWeightBar weights={prediction.modelWeights} isDark={isDark} />
-                    <ModelFeatureImportanceBar
-                      importances={prediction.indicators?.rf_feature_importance ?? []}
+                  {/* Price chart card */}
+                  <PriceChartCard
+                    prediction={prediction}
+                    symbol={prediction.symbol}
+                    indicators={indicators}
+                    setIndicators={setIndicators}
+                    chartMode={chartMode}
+                    setChartMode={setChartMode}
+                    isDark={isDark}
+                    primaryColor={primaryColor}
+                    trendColor={trendColor}
+                    chartStats={chartStats}
+                    indicatorSignals={indicatorSignals}
+                  />
+                </AnalysisSection>
+
+                {/* ── Forecast — ensemble weights + 5-day path + Monte Carlo ── */}
+                <AnalysisSection
+                  id="forecast" label="Forecast" count={sectionCounts.forecast}
+                  collapsed={!!collapsedSections.forecast} onToggle={() => toggleSection('forecast')}
+                >
+                  {/* Ensemble model weights + RF feature importance */}
+                  {prediction.modelWeights && (
+                    <Box>
+                      <ModelWeightBar weights={prediction.modelWeights} isDark={isDark} />
+                      <ModelFeatureImportanceBar
+                        importances={prediction.indicators?.rf_feature_importance ?? []}
+                        isDark={isDark}
+                        primaryColor={primaryColor}
+                      />
+                    </Box>
+                  )}
+
+                  {/* Price Forecast */}
+                  {prediction.forecastDays?.length > 0 && (
+                    <Card>
+                      <CardContent>
+                        <Typography variant="overline" sx={{ opacity: 0.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <BarChart2 size={14} /> Price Forecast
+                        </Typography>
+                        <Box sx={{ mt: 2, display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)', md: 'repeat(5, 1fr)' }, gap: 1.5 }}>
+                          {prediction.forecastDays.map((day, i) => {
+                            const isUp = day.predicted >= parseFloat(prediction.currentPrice);
+                            const col  = isUp ? (isDark ? '#00ffa3' : '#16a34a') : (isDark ? '#ff0055' : '#dc2626');
+                            return (
+                              <Box key={i} sx={{
+                                textAlign: 'center', p: 1.5, borderRadius: 2,
+                                border: `1px solid ${col}22`, background: `${col}08`,
+                              }}>
+                                <Typography sx={{ fontSize: '0.65rem', opacity: 0.5, letterSpacing: 1, display: 'block' }}>
+                                  DAY {i + 1} · {day.date}
+                                </Typography>
+                                <Typography sx={{ fontSize: '1rem', fontWeight: 800, color: col, my: 0.5 }}>
+                                  ${day.predicted}
+                                </Typography>
+                                <Typography sx={{ fontSize: '0.6rem', color: isDark ? '#00ffa3' : '#16a34a', display: 'block' }}>↑ ${day.high}</Typography>
+                                <Typography sx={{ fontSize: '0.6rem', color: isDark ? '#ff0055' : '#dc2626', display: 'block', mb: 1 }}>↓ ${day.low}</Typography>
+                                <ConfidenceBadge pct={day.confidence_pct} />
+                              </Box>
+                            );
+                          })}
+                        </Box>
+                      </CardContent>
+                    </Card>
+                  )}
+
+                  {/* Next-day Direction */}
+                  {prediction.directionForecast && (
+                    <DirectionForecastCard
+                      forecast={prediction.directionForecast}
                       isDark={isDark}
                       primaryColor={primaryColor}
                     />
-                  </Box>
-                )}
+                  )}
 
-                {/* ── Walk-forward backtest (on-demand) ────────────── */}
-                <BacktestPanel symbol={prediction.symbol} isDark={isDark} primaryColor={primaryColor} />
-
-                {/* ── Analyst Jury (on-demand — panel shows a Run button
-                     when the prediction ships without verdicts) ───────── */}
-                <AnalystJuryPanel analysts={prediction.juryAnalysts ?? []} symbol={prediction.symbol} regime={prediction.regime} />
-
-                {/* ── Trade Setup ──────────────────────────────────── */}
-                {user ? (
-                  <TradeSetupCard
-                    setup={tradeSetup}
-                    loading={tradeSetupLoading}
-                    isDark={isDark}
-                    primaryColor={primaryColor}
-                  />
-                ) : (
-                  <AuthGate
-                    title="Trade Setup"
-                    message="Sign in to see entry zones, stop levels, and position sizing."
-                    onSignIn={() => setAuthOpen(true)}
-                    isDark={isDark}
-                    primaryColor={primaryColor}
-                  />
-                )}
-
-                {/* ── Day-Trade Setup (intraday ORB+VWAP) ───────────── */}
-                {user && (
-                  <DayTradeSetupCard
-                    setup={dayTradeSetup}
-                    loading={dayTradeLoading}
-                    isDark={isDark}
-                    primaryColor={primaryColor}
-                  />
-                )}
-
-                {/* ── Price Forecast ────────────────────────────────── */}
-                {prediction.forecastDays?.length > 0 && (
-                  <Card>
-                    <CardContent>
-                      <Typography variant="overline" sx={{ opacity: 0.5, display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <BarChart2 size={14} /> Price Forecast
-                      </Typography>
-                      <Box sx={{ mt: 2, display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)', md: 'repeat(5, 1fr)' }, gap: 1.5 }}>
-                        {prediction.forecastDays.map((day, i) => {
-                          const isUp = day.predicted >= parseFloat(prediction.currentPrice);
-                          const col  = isUp ? (isDark ? '#00ffa3' : '#16a34a') : (isDark ? '#ff0055' : '#dc2626');
-                          return (
-                            <Box key={i} sx={{
-                              textAlign: 'center', p: 1.5, borderRadius: 2,
-                              border: `1px solid ${col}22`, background: `${col}08`,
-                            }}>
-                              <Typography sx={{ fontSize: '0.65rem', opacity: 0.5, letterSpacing: 1, display: 'block' }}>
-                                DAY {i + 1} · {day.date}
-                              </Typography>
-                              <Typography sx={{ fontSize: '1rem', fontWeight: 800, color: col, my: 0.5 }}>
-                                ${day.predicted}
-                              </Typography>
-                              <Typography sx={{ fontSize: '0.6rem', color: isDark ? '#00ffa3' : '#16a34a', display: 'block' }}>↑ ${day.high}</Typography>
-                              <Typography sx={{ fontSize: '0.6rem', color: isDark ? '#ff0055' : '#dc2626', display: 'block', mb: 1 }}>↓ ${day.low}</Typography>
-                              <ConfidenceBadge pct={day.confidence_pct} />
-                            </Box>
-                          );
-                        })}
-                      </Box>
-                    </CardContent>
-                  </Card>
-                )}
-
-                {/* ── Reversal Risk ────────────────────────────────────── */}
-                {prediction.reversalRisk && (
-                  <ReversalRiskCard
-                    risk={prediction.reversalRisk}
-                    isDark={isDark}
-                    primaryColor={primaryColor}
-                  />
-                )}
-
-                {/* ── Next-day Direction ───────────────────────────────── */}
-                {prediction.directionForecast && (
-                  <DirectionForecastCard
-                    forecast={prediction.directionForecast}
-                    isDark={isDark}
-                    primaryColor={primaryColor}
-                  />
-                )}
-
-                {/* ── Monte Carlo GBM ──────────────────────────────────── */}
-                {prediction.monteCarlo && (
-                  <Card>
-                    <CardContent>
-                      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5 }}>
-                        <Typography variant="overline" sx={{ opacity: 0.5 }}>
-                          Monte Carlo Simulation
-                        </Typography>
-                        <MonteCarloProbabilitySurface
-                          priceRangeByDay={prediction.monteCarlo.price_range_by_day}
+                  {/* Monte Carlo GBM */}
+                  {prediction.monteCarlo && (
+                    <Card>
+                      <CardContent>
+                        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 0.5 }}>
+                          <Typography variant="overline" sx={{ opacity: 0.5 }}>
+                            Monte Carlo Simulation
+                          </Typography>
+                          <MonteCarloProbabilitySurface
+                            priceRangeByDay={prediction.monteCarlo.price_range_by_day}
+                            currentPrice={parseFloat(prediction.currentPrice)}
+                            symbol={prediction.symbol}
+                          />
+                        </Stack>
+                        <MonteCarloFanChart
+                          monteCarlo={prediction.monteCarlo}
                           currentPrice={parseFloat(prediction.currentPrice)}
                           symbol={prediction.symbol}
+                          regime={prediction.regime}
                         />
-                      </Stack>
-                      <MonteCarloFanChart
-                        monteCarlo={prediction.monteCarlo}
-                        currentPrice={parseFloat(prediction.currentPrice)}
-                        symbol={prediction.symbol}
-                        regime={prediction.regime}
-                      />
-                    </CardContent>
-                  </Card>
-                )}
+                      </CardContent>
+                    </Card>
+                  )}
+                </AnalysisSection>
 
-                {/* ── DCF Intrinsic Value ───────────────────────────── */}
-                {dcfData && (
-                  <DCFCard
-                    dcf={dcfData}
+                {/* ── AI Jury — 3-analyst verdicts + consensus ──────── */}
+                <AnalysisSection
+                  id="jury" label="AI Jury" count={sectionCounts.jury}
+                  collapsed={!!collapsedSections.jury} onToggle={() => toggleSection('jury')}
+                >
+                  {/* Analyst Jury (on-demand — panel shows a Run button
+                      when the prediction ships without verdicts) */}
+                  <AnalystJuryPanel analysts={prediction.juryAnalysts ?? []} symbol={prediction.symbol} regime={prediction.regime} />
+                </AnalysisSection>
+
+                {/* ── Trade — coherence + setups + reversal risk ────── */}
+                <AnalysisSection
+                  id="trade" label="Trade" count={sectionCounts.trade}
+                  collapsed={!!collapsedSections.trade} onToggle={() => toggleSection('trade')}
+                >
+                  {/* Signal Coherence — one honest net read across the cards */}
+                  <SignalCoherencePanel
+                    prediction={prediction}
                     isDark={isDark}
                     primaryColor={primaryColor}
                   />
-                )}
 
-                {/* ── Stock Report Card (F31) ───────────────────────── */}
-                {/* Self-fetches /api/report-card/{symbol} on symbol change; renders
-                    its own loading / unavailable empty states. */}
-                <StockReportCard key={`report-card-${prediction.symbol}`} symbol={prediction.symbol} />
+                  {/* Trade Setup */}
+                  {user ? (
+                    <TradeSetupCard
+                      setup={tradeSetup}
+                      loading={tradeSetupLoading}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
+                  ) : (
+                    <AuthGate
+                      title="Trade Setup"
+                      message="Sign in to see entry zones, stop levels, and position sizing."
+                      onSignIn={() => setAuthOpen(true)}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
+                  )}
 
-                {/* ── Wall St. Analyst Price Targets ────────────────── */}
-                {/* Always rendered (like InsiderTransactionsCard) so the card's
-                    own loading/empty states are reachable on a slow/failed fetch. */}
-                <AnalystTargetsCard
-                  data={analystTargets}
-                  loading={analystTargetsLoading}
-                />
+                  {/* Day-Trade Setup (intraday ORB+VWAP) */}
+                  {user && (
+                    <DayTradeSetupCard
+                      setup={dayTradeSetup}
+                      loading={dayTradeLoading}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
+                  )}
 
-                {/* ── Dividend & Income (F26) ───────────────────────── */}
-                {/* Self-fetches /api/dividends/{symbol} on symbol change; renders
-                    its own loading / non-payer empty states. */}
-                <DividendIncomeCard key={prediction.symbol} symbol={prediction.symbol} />
+                  {/* Reversal Risk */}
+                  {prediction.reversalRisk && (
+                    <ReversalRiskCard
+                      risk={prediction.reversalRisk}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
+                  )}
+                </AnalysisSection>
 
-                {/* ── Insider Transactions (SEC EDGAR Form 4) ───────── */}
-                <InsiderTransactionsCard
-                  transactions={prediction.insiderTransactions ?? []}
-                  isDark={isDark}
-                  primaryColor={primaryColor}
-                />
+                {/* ── Valuation — DCF + report card + targets + income ── */}
+                <AnalysisSection
+                  id="valuation" label="Valuation" count={sectionCounts.valuation}
+                  collapsed={!!collapsedSections.valuation} onToggle={() => toggleSection('valuation')}
+                >
+                  {/* DCF Intrinsic Value */}
+                  {dcfData && (
+                    <DCFCard
+                      dcf={dcfData}
+                      isDark={isDark}
+                      primaryColor={primaryColor}
+                    />
+                  )}
+
+                  {/* Stock Report Card (F31) — self-fetches /api/report-card/{symbol}
+                      on symbol change; renders its own loading / unavailable states. */}
+                  <StockReportCard key={`report-card-${prediction.symbol}`} symbol={prediction.symbol} />
+
+                  {/* Wall St. Analyst Price Targets — always rendered (like
+                      InsiderTransactionsCard) so the card's own loading/empty
+                      states are reachable on a slow/failed fetch. */}
+                  <AnalystTargetsCard
+                    data={analystTargets}
+                    loading={analystTargetsLoading}
+                  />
+
+                  {/* Dividend & Income (F26) — self-fetches /api/dividends/{symbol}
+                      on symbol change; renders its own loading / non-payer states. */}
+                  <DividendIncomeCard key={prediction.symbol} symbol={prediction.symbol} />
+                </AnalysisSection>
+
+                {/* ── Data — backtest + insider filings ─────────────── */}
+                <AnalysisSection
+                  id="data" label="Data" count={sectionCounts.data}
+                  collapsed={!!collapsedSections.data} onToggle={() => toggleSection('data')}
+                >
+                  {/* Walk-forward backtest (on-demand) */}
+                  <BacktestPanel symbol={prediction.symbol} isDark={isDark} primaryColor={primaryColor} />
+
+                  {/* Insider Transactions (SEC EDGAR Form 4) */}
+                  <InsiderTransactionsCard
+                    transactions={prediction.insiderTransactions ?? []}
+                    isDark={isDark}
+                    primaryColor={primaryColor}
+                  />
+                </AnalysisSection>
 
               </Stack>
             ) : (
