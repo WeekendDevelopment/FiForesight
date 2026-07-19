@@ -11,6 +11,7 @@ import {
   ReferenceLine, Tooltip,
 } from 'recharts';
 import { Activity } from 'lucide-react';
+import { formatPrice } from '../lib/currency';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -41,6 +42,8 @@ interface Props {
   symbol: string;
   isDark: boolean;
   primaryColor: string;
+  currency?: string | null;  // active display currency (F35)
+  fx?:       number | null;  // display-time multiplier (1 = native)
 }
 
 const MODEL_ROWS: Array<{ key: keyof BacktestResult['models']; label: string; color: string }> = [
@@ -51,12 +54,12 @@ const MODEL_ROWS: Array<{ key: keyof BacktestResult['models']; label: string; co
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const fmtMae = (v: number | null) => (v == null ? '—' : `$${v.toFixed(2)}`);
 const fmtAcc = (v: number | null) => (v == null ? '—' : `${(v * 100).toFixed(0)}%`);
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
-export default function BacktestPanel({ symbol, isDark, primaryColor }: Props) {
+export default function BacktestPanel({ symbol, isDark, primaryColor, currency = 'USD', fx }: Props) {
+  const fmtMae = (v: number | null) => (v == null ? '—' : formatPrice(v * (fx ?? 1), currency));
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

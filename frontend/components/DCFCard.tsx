@@ -3,11 +3,14 @@
 import { Box, Card, CardContent, Stack, Tooltip, Typography } from '@mui/material';
 import { DollarSign } from 'lucide-react';
 import type { DCFResult } from '../types';
+import { formatPrice } from '../lib/currency';
 
 interface Props {
   dcf:          DCFResult;
   isDark:       boolean;
   primaryColor: string;
+  currency?:    string | null;  // active display currency (F35)
+  fx?:          number | null;  // display-time multiplier (1 = native)
 }
 
 const SCENARIOS = [
@@ -16,8 +19,9 @@ const SCENARIOS = [
   { key: 'bull' as const, label: 'BULL', color: '#00ffa3' },
 ] as const;
 
-export default function DCFCard({ dcf, isDark, primaryColor }: Props) {
+export default function DCFCard({ dcf, isDark, primaryColor, currency = 'USD', fx }: Props) {
   const mos = dcf.base.upside_pct;
+  const money = (v: number, decimals = 0) => formatPrice(v * (fx ?? 1), currency, { decimals });
 
   return (
     <Card>
@@ -62,7 +66,7 @@ export default function DCFCard({ dcf, isDark, primaryColor }: Props) {
                   {label}
                 </Typography>
                 <Typography sx={{ fontSize: '0.9rem', fontWeight: 900, color, lineHeight: 1.1 }}>
-                  ${s.intrinsic_value.toFixed(0)}
+                  {money(s.intrinsic_value)}
                 </Typography>
                 <Typography sx={{ fontSize: '0.55rem', opacity: 0.55, mt: 0.25 }}>
                   {s.upside_pct >= 0 ? '+' : ''}{s.upside_pct.toFixed(1)}%

@@ -81,7 +81,7 @@ def test_rows_shape_and_sorted() -> None:
     rows = resp.json()
     assert [r["symbol"] for r in rows] == ["AAA", "BBB", "CCC", "DDD"]  # cap desc
     for row in rows:
-        assert set(row) == {"symbol", "name", "sector", "marketCap", "changePct"}
+        assert set(row) == {"symbol", "name", "sector", "marketCap", "changePct", "currency"}
         # 104/103 - 1 = +0.97%
         assert row["changePct"] == pytest.approx(0.97)
 

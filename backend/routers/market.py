@@ -1670,6 +1670,8 @@ async def market_treemap(request: Request) -> List[Dict[str, Any]]:
                 "sector": r.get("sector") or "—",
                 "marketCap": r["marketCap"],
                 "changePct": changes.get(r["symbol"]),
+                # F35 — label-only; a pre-F35 cached universe snapshot lacks it → None
+                "currency": r.get("currency"),
             }
             for r in rows
         ),

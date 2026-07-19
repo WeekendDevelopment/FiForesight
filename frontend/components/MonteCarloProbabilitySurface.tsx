@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import { Box, Button, CircularProgress, IconButton, Modal, Paper, Typography } from '@mui/material';
 import { X } from 'lucide-react';
 import type { PlotParams } from 'react-plotly.js';
+import { currencyAffixes } from '../lib/currency';
 
 // react-plotly.js exception: Recharts has no 3D surface capability, so this
 // component uses Plotly via dynamic import. See CLAUDE.md "Key Decisions" for details.
@@ -36,6 +37,7 @@ interface Props {
   priceRangeByDay: PriceRangeDay[];
   currentPrice: number;
   symbol: string;
+  currency?: string | null;  // native quote currency (F35) — axis affix only
 }
 
 // ── Gaussian PDF helper ────────────────────────────────────────────────────────
@@ -52,8 +54,10 @@ export default function MonteCarloProbabilitySurface({
   priceRangeByDay,
   currentPrice,
   symbol,
+  currency = 'USD',
 }: Props) {
   const [open, setOpen] = useState(false);
+  const { prefix: tickPrefix, suffix: tickSuffix } = currencyAffixes(currency);
 
   // Build 3D surface: X = days, Y = price bins, Z = probability density
   const N_BINS = 40;
@@ -119,10 +123,11 @@ export default function MonteCarloProbabilitySurface({
         backgroundcolor: '#0d1117',
       },
       yaxis: {
-        title:     { text: 'Price ($)', font: { color: '#64748b', size: 11 } },
+        title:     { text: `Price (${currency ?? 'USD'})`, font: { color: '#64748b', size: 11 } },
         tickfont:  { color: '#64748b', size: 10 },
         gridcolor: '#1e293b',
-        tickprefix: '$',
+        tickprefix: tickPrefix,
+        ticksuffix: tickSuffix,
         showbackground: true,
         backgroundcolor: '#0d1117',
       },

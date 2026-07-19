@@ -169,6 +169,9 @@ export interface PredictionData {
   juryDissent?: JuryDissent | null;
   // Gap Explainer (Feature 22) — present only on a >=3% daily move
   gap_alert?:   GapAlert | null;
+  // Currency-aware display (Feature 35)
+  currency?: string | null;   // quote currency (yfinance info['currency']; "GBp" = pence)
+  fxToUsd?:  number | null;   // 1 quote unit → USD multiplier; null when FX unavailable
   lastUpdated: string;
 }
 
@@ -228,6 +231,7 @@ export interface TreemapRow {
   sector: string;
   marketCap: number;
   changePct: number | null;
+  currency?: string | null;  // quote currency (F35) — label only, no conversion
 }
 
 export interface SectorRotationRow {
@@ -643,6 +647,7 @@ export interface WatchlistMetricRow {
   pctFrom52wHigh: number | null;
   marketCap:      number | null;
   nextEarnings:   string | null;
+  currency?:      string | null;  // quote currency (F35) — label only, no conversion
 }
 
 export interface PortfolioSummary {
@@ -764,6 +769,7 @@ export interface ScreenerRow {
   revenueGrowth: number | null;
   rsi:           number | null;
   price:         number | null;
+  currency?:     string | null;   // quote currency (F35) — label only, no conversion
 }
 
 export interface ScreenerResult {

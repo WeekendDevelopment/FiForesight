@@ -32,6 +32,7 @@ from dependencies import (
     fred_svc, insider_svc, short_interest_svc, regime_svc,
     limiter, get_user_id, _user_rate_key,
 )
+from fx import get_usd_rate
 from jury_graph import run_jury_graph, detect_dissent
 from redis_cache import cache_get, cache_set
 from reversal import compute_reversal_risk
@@ -129,11 +130,31 @@ class PredictionResponse(BaseModel):
     juryDissent:   Optional[JuryDissentResponse] = None   # minority view on a 2-1 split, else None
     # Gap Explainer (Feature 22) — populated only on a >=3% daily move, else None
     gap_alert:     Optional[GapAlertResponse]    = None
+    # Currency-aware display (Feature 35) — quote currency + →USD multiplier.
+    currency:      str             = "USD"   # yfinance info['currency'] ("GBp" = pence)
+    fxToUsd:       Optional[float] = None    # 1 quote unit → USD; None when FX unavailable
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+async def _resolve_currency(metrics: dict) -> Tuple[str, Optional[float]]:
+    """Instrument quote currency + its →USD multiplier (Feature 35).
+
+    Reads the currency fetch_info already put in ``metrics``; an FX failure
+    yields ``None`` (frontend degrades to native display) — never raises.
+    """
+    currency = metrics.get("currency") or "USD"
+    if currency == "N/A":
+        currency = "USD"
+    try:
+        fx_to_usd = await get_usd_rate(currency)
+    except Exception as e:
+        logger.warning(f"[FX] rate lookup failed for {currency}: {e}")
+        fx_to_usd = None
+    return currency, fx_to_usd
+
 
 def _fmt_market_cap(cap) -> str:
     try:
@@ -1899,6 +1920,10 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     )
     logger.info(f"[TREND] {symbol} composite trend → {trend_label} (RSI={rsi:.1f})")
 
+    # Currency-aware display (Feature 35) — Redis-cached 1h per currency, so
+    # this is a fast lookup for repeat non-USD symbols and a no-op for USD.
+    currency_code, fx_to_usd = await _resolve_currency(metrics)
+
     return PredictionResponse(
         symbol       = symbol,
         currentPrice = f"{live_price:.2f}",
@@ -1948,6 +1973,8 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         regime             = regime_result,
         juryDissent        = detect_dissent(jury),
         gap_alert          = gap_alert,
+        currency           = currency_code,
+        fxToUsd            = fx_to_usd,
     )
 
 

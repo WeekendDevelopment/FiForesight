@@ -49,6 +49,7 @@ import MorningBriefingPanel   from '../../../components/MorningBriefingPanel';
 import AnalysisSectionNav     from '../../../components/AnalysisSectionNav';
 import AnalysisSection        from '../../../components/AnalysisSection';
 import type { PredictionData, IndicatorKey, TradeSetupResponse, DayTradeSetup, DCFResult, AnalystTargets } from '../../../types';
+import { formatPrice } from '../../../lib/currency';
 
 // Ticker search lives in the command palette (Ctrl+K / the search-bar trigger
 // below) — live multi-exchange symbol search replaced the old inline
@@ -71,6 +72,14 @@ const ANALYSIS_SECTIONS = [
 ] as const;
 
 const SECTIONS_KEY = 'fiforesight:analysis:sections';
+
+// "Show in USD" toggle persistence (F35 — currency-aware price display).
+const CURRENCY_LS_KEY = 'fiforesight:currency:usd';
+
+function loadShowUsd(): boolean {
+  if (typeof window === 'undefined') return false;
+  try { return window.localStorage.getItem(CURRENCY_LS_KEY) === '1'; } catch { return false; }
+}
 
 function loadCollapsedSections(): Record<string, boolean> {
   if (typeof window === 'undefined') return {};
@@ -108,6 +117,21 @@ function AnalysisContent() {
   const [analystTargetsLoading, setAnalystTargetsLoading] = useState(false);
   const [chatOpen,         setChatOpen]         = useState(false);
   const [authOpen,         setAuthOpen]         = useState(false);
+
+  // ── Currency-aware display (F35) ────────────────────────────────────────
+  // Native quote currency + →USD rate come from /predict; the toggle converts
+  // at DISPLAY time only (underlying prediction state stays native).
+  const [showUsd, setShowUsd] = useState<boolean>(loadShowUsd);
+  const toggleShowUsd = (v: boolean) => {
+    setShowUsd(v);
+    try { window.localStorage.setItem(CURRENCY_LS_KEY, v ? '1' : '0'); } catch { /* private mode */ }
+  };
+  const nativeCurrency = prediction?.currency ?? prediction?.metrics?.currency ?? 'USD';
+  const fxToUsd        = prediction?.fxToUsd ?? null;
+  const usdMode        = showUsd && nativeCurrency !== 'USD' && fxToUsd != null;
+  // Every price card renders formatPrice(value × displayFx, displayCurrency).
+  const displayCurrency = usdMode ? 'USD' : nativeCurrency;
+  const displayFx       = usdMode ? (fxToUsd as number) : 1;
 
   // ── Analysis Navigator (F34) ────────────────────────────────────────────
   const [activeSection,     setActiveSection]     = useState<string>('overview');
@@ -434,6 +458,12 @@ function AnalysisContent() {
                     trendColor={trendColor}
                     chartStats={chartStats}
                     indicatorSignals={indicatorSignals}
+                    currency={displayCurrency}
+                    fx={displayFx}
+                    nativeCurrency={nativeCurrency}
+                    fxToUsd={fxToUsd}
+                    showUsd={showUsd}
+                    onToggleUsd={toggleShowUsd}
                   />
                 </AnalysisSection>
 
@@ -474,10 +504,10 @@ function AnalysisContent() {
                                   DAY {i + 1} · {day.date}
                                 </Typography>
                                 <Typography sx={{ fontSize: '1rem', fontWeight: 800, color: col, my: 0.5 }}>
-                                  ${day.predicted}
+                                  {formatPrice(day.predicted * displayFx, displayCurrency)}
                                 </Typography>
-                                <Typography sx={{ fontSize: '0.6rem', color: isDark ? '#00ffa3' : '#16a34a', display: 'block' }}>↑ ${day.high}</Typography>
-                                <Typography sx={{ fontSize: '0.6rem', color: isDark ? '#ff0055' : '#dc2626', display: 'block', mb: 1 }}>↓ ${day.low}</Typography>
+                                <Typography sx={{ fontSize: '0.6rem', color: isDark ? '#00ffa3' : '#16a34a', display: 'block' }}>↑ {formatPrice(day.high * displayFx, displayCurrency)}</Typography>
+                                <Typography sx={{ fontSize: '0.6rem', color: isDark ? '#ff0055' : '#dc2626', display: 'block', mb: 1 }}>↓ {formatPrice(day.low * displayFx, displayCurrency)}</Typography>
                                 <ConfidenceBadge pct={day.confidence_pct} />
                               </Box>
                             );
@@ -508,6 +538,7 @@ function AnalysisContent() {
                             priceRangeByDay={prediction.monteCarlo.price_range_by_day}
                             currentPrice={parseFloat(prediction.currentPrice)}
                             symbol={prediction.symbol}
+                            currency={nativeCurrency}
                           />
                         </Stack>
                         <MonteCarloFanChart
@@ -515,6 +546,8 @@ function AnalysisContent() {
                           currentPrice={parseFloat(prediction.currentPrice)}
                           symbol={prediction.symbol}
                           regime={prediction.regime}
+                          currency={displayCurrency}
+                          fx={displayFx}
                         />
                       </CardContent>
                     </Card>
@@ -550,6 +583,8 @@ function AnalysisContent() {
                       loading={tradeSetupLoading}
                       isDark={isDark}
                       primaryColor={primaryColor}
+                      currency={displayCurrency}
+                      fx={displayFx}
                     />
                   ) : (
                     <AuthGate
@@ -568,6 +603,8 @@ function AnalysisContent() {
                       loading={dayTradeLoading}
                       isDark={isDark}
                       primaryColor={primaryColor}
+                      currency={displayCurrency}
+                      fx={displayFx}
                     />
                   )}
 
@@ -592,6 +629,8 @@ function AnalysisContent() {
                       dcf={dcfData}
                       isDark={isDark}
                       primaryColor={primaryColor}
+                      currency={displayCurrency}
+                      fx={displayFx}
                     />
                   )}
 
@@ -605,6 +644,8 @@ function AnalysisContent() {
                   <AnalystTargetsCard
                     data={analystTargets}
                     loading={analystTargetsLoading}
+                    currency={displayCurrency}
+                    fx={displayFx}
                   />
 
                   {/* Dividend & Income (F26) — self-fetches /api/dividends/{symbol}
@@ -618,7 +659,7 @@ function AnalysisContent() {
                   collapsed={!!collapsedSections.data} onToggle={() => toggleSection('data')}
                 >
                   {/* Walk-forward backtest (on-demand) */}
-                  <BacktestPanel symbol={prediction.symbol} isDark={isDark} primaryColor={primaryColor} />
+                  <BacktestPanel symbol={prediction.symbol} isDark={isDark} primaryColor={primaryColor} currency={displayCurrency} fx={displayFx} />
 
                   {/* Insider Transactions (SEC EDGAR Form 4) */}
                   <InsiderTransactionsCard
@@ -683,6 +724,8 @@ function AnalysisContent() {
                     rsiInfo={rsiInfo}
                     isDark={isDark}
                     primaryColor={primaryColor}
+                    currency={displayCurrency}
+                    fx={displayFx}
                   />
                 )}
 

@@ -8,6 +8,7 @@ import {
 import { Box, Button, Chip, Collapse, IconButton, Paper, Stack, Tooltip as MuiTooltip, Typography } from '@mui/material';
 import { HelpCircle } from 'lucide-react';
 import type { RegimeInfo } from '../types';
+import { formatPrice } from '../lib/currency';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -34,7 +35,12 @@ interface Props {
   currentPrice: number;
   symbol: string;
   regime?: RegimeInfo | null;
+  currency?: string | null;  // active display currency (F35)
+  fx?: number | null;        // display-time multiplier (1 = native)
 }
+
+/** Display formatter type threaded into the tooltip/label sub-components. */
+type Money = (v: number, decimals?: number) => string;
 
 type FanPoint = {
   day: string;
@@ -43,12 +49,14 @@ type FanPoint = {
 
 // ── Custom tooltip ─────────────────────────────────────────────────────────────
 
-function FanTooltip({ active, payload, label }: {
+function FanTooltip({ active, payload, label, money }: {
   active?: boolean;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   payload?: any[];
   label?: string;
+  money?: Money;
 }) {
+  const fmt: Money = money ?? ((v) => formatPrice(v));
   if (!active || !payload?.length) return null;
   // Read from the data row directly — percentile lines use tooltipType="none"
   // and p25/p75 aren't rendered as standalone series.
@@ -75,7 +83,7 @@ function FanTooltip({ active, payload, label }: {
       ].map(({ val, label: lbl, color }) => val != null && (
         <Box key={lbl} sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.25 }}>
           <Typography variant="caption" sx={{ color }}>{lbl}</Typography>
-          <Typography variant="caption" sx={{ color, fontWeight: 700 }}>${val.toFixed(2)}</Typography>
+          <Typography variant="caption" sx={{ color, fontWeight: 700 }}>{fmt(val)}</Typography>
         </Box>
       ))}
       <Typography variant="caption" display="block" sx={{ mt: 0.75, opacity: 0.4, fontSize: 10 }}>
@@ -124,17 +132,18 @@ function GainProbBar({ prob_gain }: { prob_gain: number }) {
 
 // ── End-of-fan labels rendered as custom SVG ──────────────────────────────────
 
-function EndLabels({ p10, p50, p90, yMin, yMax, chartH }: {
+function EndLabels({ p10, p50, p90, yMin, yMax, chartH, money }: {
   p10: number; p50: number; p90: number;
   yMin: number; yMax: number; chartH: number;
+  money: Money;
 }) {
   const toY = (v: number) => chartH - ((v - yMin) / (yMax - yMin)) * chartH;
   return (
     <g>
       {[
-        { val: p90, label: `🐂 $${p90.toFixed(0)}`, color: '#00ffa3' },
-        { val: p50, label: `📊 $${p50.toFixed(0)}`, color: '#00f2ff' },
-        { val: p10, label: `🐻 $${p10.toFixed(0)}`, color: '#ff6b6b' },
+        { val: p90, label: `🐂 ${money(p90, 0)}`, color: '#00ffa3' },
+        { val: p50, label: `📊 ${money(p50, 0)}`, color: '#00f2ff' },
+        { val: p10, label: `🐻 ${money(p10, 0)}`, color: '#ff6b6b' },
       ].map(({ val, label, color }) => (
         <text key={label} x={4} y={toY(val)} fill={color} fontSize={9} fontWeight={700} dominantBaseline="middle">
           {label}
@@ -146,9 +155,10 @@ function EndLabels({ p10, p50, p90, yMin, yMax, chartH }: {
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
-export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol, regime }: Props) {
+export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol, regime, currency = 'USD', fx }: Props) {
   const [visible, setVisible] = useState(false);
   const [guideOpen, setGuideOpen] = useState(true);
+  const money: Money = (v, decimals = 2) => formatPrice(v * (fx ?? 1), currency, { decimals });
 
   const { price_range_by_day, paths_sample, n_sims, prob_gain, var_95, p10, p50, p90 } = monteCarlo;
 
@@ -247,12 +257,12 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol, r
         </Button>
         <GainProbBar prob_gain={prob_gain} />
         <MuiTooltip
-          title={`VaR 95 = $${var_95.toFixed(2)} per share. In 95 out of 100 simulated scenarios, you wouldn't lose more than this amount per share over 5 days. Think of it as your "reasonable worst case."`}
+          title={`VaR 95 = ${money(var_95)} per share. In 95 out of 100 simulated scenarios, you wouldn't lose more than this amount per share over 5 days. Think of it as your "reasonable worst case."`}
           arrow
         >
           <Box sx={{ cursor: 'help', textAlign: 'center' }}>
             <Typography variant="caption" color="text.secondary" sx={{ textDecoration: 'underline dotted' }}>
-              VaR95 ${var_95.toFixed(2)}/share
+              VaR95 {money(var_95)}/share
             </Typography>
             <Typography variant="caption" display="block" sx={{ fontSize: 9, opacity: 0.45 }}>
               Max likely loss per share
@@ -300,12 +310,12 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol, r
                 <XAxis dataKey="day" tick={{ fontSize: 11, fill: '#64748b' }} interval="preserveStartEnd" />
                 <YAxis
                   tick={{ fontSize: 11, fill: '#64748b' }}
-                  tickFormatter={v => `$${(v as number).toFixed(0)}`}
+                  tickFormatter={v => money(v as number, 0)}
                   domain={[yMin, yMax]}
                   width={62}
                   tickCount={6}
                 />
-                <Tooltip content={<FanTooltip />} />
+                <Tooltip content={<FanTooltip money={money} />} />
 
                 {/* ── Percentile envelope bands (stacked areas) ────────────── */}
                 {/* Transparent baseline up to p10 */}
@@ -373,7 +383,7 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol, r
                     return (
                       <g>
                         <text x={(x ?? 0) + (width ?? 0) + 4} y={y} fill="#f59e0b" fontSize={9} dominantBaseline="middle">
-                          Current ${currentPrice.toFixed(2)}
+                          Current {money(currentPrice)}
                         </text>
                         <text x={(x ?? 0) + (width ?? 0) + 4} y={(y ?? 0) + 10} fill="#f59e0b" fontSize={8} dominantBaseline="middle" opacity={0.6}>
                           ← Break-even line
@@ -395,6 +405,7 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol, r
                   <EndLabels
                     p10={last.p10} p50={last.p50} p90={last.p90}
                     yMin={yMin} yMax={yMax} chartH={CHART_H - 12}
+                    money={money}
                   />
                 </svg>
               </Box>
@@ -421,7 +432,7 @@ export default function MonteCarloFanChart({ monteCarlo, currentPrice, symbol, r
                   }}>
                     <Typography sx={{ fontSize: 11 }}>{icon} {label}</Typography>
                     <Typography sx={{ fontSize: 13, fontWeight: 800, color }}>
-                      ${val.toFixed(2)}
+                      {money(val)}
                     </Typography>
                     <Typography sx={{ fontSize: 9, color, opacity: 0.7 }}>
                       {sign}{pctChange.toFixed(1)}% from now

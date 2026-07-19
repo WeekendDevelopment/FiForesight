@@ -50,6 +50,7 @@ async def _fetch_row(symbol: str) -> dict | None:
                     if info.get("revenueGrowth") is not None else None,
                 "rsi": rsi,
                 "price": info.get("currentPrice") or info.get("regularMarketPrice"),
+                "currency": info.get("currency"),
             }
 
         try:

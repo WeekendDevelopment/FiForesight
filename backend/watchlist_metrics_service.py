@@ -57,6 +57,7 @@ async def _fetch_metrics(symbol: str) -> dict | None:
                 "pctFrom52wHigh": pct_from_high,
                 "marketCap": info.get("marketCap"),
                 "nextEarnings": next_earnings,
+                "currency": info.get("currency"),
             }
 
         try:
