@@ -5,14 +5,15 @@ Service functions (_signals / _run) are exercised directly on synthetic DataFram
 (no network). The POST /backtest endpoint is tested with a mini app, run_backtest
 patched, and Redis inert.
 """
+
 from collections.abc import Generator
 from unittest.mock import AsyncMock, patch
 
 import pandas as pd
 import pytest
 from fastapi import FastAPI, Request
-from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
 
 from backend import backtester_service as bt
@@ -25,6 +26,7 @@ def _df(closes: list[float]) -> pd.DataFrame:
 
 
 # ── Service: simulation logic ─────────────────────────────────────────────────
+
 
 def test_sma_cross_uptrend_profitable() -> None:
     closes = [100.0 + i for i in range(120)]  # monotonically rising
@@ -69,6 +71,7 @@ def test_win_rate_and_trade_count() -> None:
 
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture(autouse=True)
 def _no_cache() -> Generator[None, None, None]:
     """Inert Redis so the endpoint always runs the (mocked) backtest."""
@@ -91,14 +94,25 @@ def _build_app() -> TestClient:
 def test_backtest_success_200() -> None:
     client = _build_app()
     payload = {
-        "totalReturnPct": 12.34, "buyHoldReturnPct": 8.0, "cagrPct": 5.6,
-        "winRatePct": 60.0, "numTrades": 5, "maxDrawdownPct": -10.0,
-        "sharpe": 1.1, "equityCurve": [{"date": "2024-01-01", "strategy": 1.0, "buyHold": 1.0}],
+        "totalReturnPct": 12.34,
+        "buyHoldReturnPct": 8.0,
+        "cagrPct": 5.6,
+        "winRatePct": 60.0,
+        "numTrades": 5,
+        "maxDrawdownPct": -10.0,
+        "sharpe": 1.1,
+        "equityCurve": [{"date": "2024-01-01", "strategy": 1.0, "buyHold": 1.0}],
     }
     with patch.object(market, "run_backtest", AsyncMock(return_value=payload)):
-        resp = client.post("/backtest",
-                           json={"symbol": "AAPL", "strategy": "sma_cross",
-                                 "params": {"fast": 20, "slow": 50}, "period": "2y"})
+        resp = client.post(
+            "/backtest",
+            json={
+                "symbol": "AAPL",
+                "strategy": "sma_cross",
+                "params": {"fast": 20, "slow": 50},
+                "period": "2y",
+            },
+        )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body == payload
@@ -113,10 +127,10 @@ def test_unknown_strategy_422() -> None:
 
 def test_insufficient_history_422() -> None:
     client = _build_app()
-    with patch.object(market, "run_backtest",
-                      AsyncMock(side_effect=ValueError("insufficient history"))):
-        resp = client.post("/backtest",
-                           json={"symbol": "AAPL", "strategy": "sma_cross"})
+    with patch.object(
+        market, "run_backtest", AsyncMock(side_effect=ValueError("insufficient history"))
+    ):
+        resp = client.post("/backtest", json={"symbol": "AAPL", "strategy": "sma_cross"})
     assert resp.status_code == 422
     assert "insufficient history" in resp.json()["detail"]
 

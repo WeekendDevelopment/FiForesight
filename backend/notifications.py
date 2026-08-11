@@ -15,19 +15,20 @@ pywebpush is synchronous (uses `requests`), so it runs in a worker thread to kee
 the async evaluator non-blocking. Failures are swallowed and reported as a status
 string — one bad subscription never aborts a batch.
 """
+
 import asyncio
 import json
 import logging
-from typing import Any, Dict
+from typing import Any
 
 import httpx
-
 from config import Config
 
 logger = logging.getLogger(__name__)
 
 try:
-    from pywebpush import webpush, WebPushException
+    from pywebpush import WebPushException, webpush
+
     _PYWEBPUSH_AVAILABLE = True
 except ImportError:  # pragma: no cover - exercised only when the dep is absent
     webpush = None
@@ -40,11 +41,7 @@ except ImportError:  # pragma: no cover - exercised only when the dep is absent
 
 def web_push_configured() -> bool:
     """True when a VAPID key pair is set and pywebpush is importable."""
-    return bool(
-        _PYWEBPUSH_AVAILABLE
-        and Config.VAPID_PUBLIC_KEY
-        and Config.VAPID_PRIVATE_KEY
-    )
+    return bool(_PYWEBPUSH_AVAILABLE and Config.VAPID_PUBLIC_KEY and Config.VAPID_PRIVATE_KEY)
 
 
 def email_configured() -> bool:
@@ -52,7 +49,7 @@ def email_configured() -> bool:
     return bool(Config.ALERT_EMAIL_ENABLED and Config.RESEND_API_KEY)
 
 
-def _send_web_push_sync(subscription_info: Dict[str, Any], payload_json: str) -> None:
+def _send_web_push_sync(subscription_info: dict[str, Any], payload_json: str) -> None:
     """Blocking pywebpush call. Raises WebPushException on a non-2xx response."""
     webpush(
         subscription_info=subscription_info,
@@ -63,7 +60,9 @@ def _send_web_push_sync(subscription_info: Dict[str, Any], payload_json: str) ->
     )
 
 
-async def send_web_push(subscription: Dict[str, Any], title: str, body: str, url: str = "/alerts") -> str:
+async def send_web_push(
+    subscription: dict[str, Any], title: str, body: str, url: str = "/alerts"
+) -> str:
     """Send one Web Push notification.
 
     Returns a status string:
@@ -128,7 +127,9 @@ async def send_email(to_email: str, subject: str, html: str) -> bool:
                 },
             )
         if resp.status_code >= 400:
-            logger.warning("[NOTIFY] Resend email failed HTTP %s: %s", resp.status_code, resp.text[:200])
+            logger.warning(
+                "[NOTIFY] Resend email failed HTTP %s: %s", resp.status_code, resp.text[:200]
+            )
             return False
         return True
     except Exception as exc:

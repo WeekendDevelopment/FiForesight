@@ -13,18 +13,19 @@ The whole summary is Redis-cached (15 min) by the router.
 Failure isolation: a holding whose price/history can't be fetched is skipped and
 reported in `skipped`, never failing the whole summary.
 """
+
 import asyncio
 import logging
 import math
 from statistics import fmean
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
 # Cap concurrent yfinance calls to avoid Yahoo 429s on larger portfolios.
-_YF_SEM: Optional[asyncio.Semaphore] = None
+_YF_SEM: asyncio.Semaphore | None = None
 
 # Bound work so a pathologically large holdings list can't hang the request.
 _MAX_HOLDINGS = 50
@@ -55,7 +56,7 @@ def _label_for(score: float) -> str:
     return "Neutral"
 
 
-def _trend_signal(closes: List[float]) -> tuple[str, float]:
+def _trend_signal(closes: list[float]) -> tuple[str, float]:
     """Lightweight directional signal from recent daily closes.
 
     Blends three classic momentum reads into a score in [-1, 1]:
@@ -81,7 +82,7 @@ def _trend_signal(closes: List[float]) -> tuple[str, float]:
     return _label_for(score), score
 
 
-async def _analyze_holding(holding: Dict[str, Any], yf_svc: Any) -> Optional[Dict[str, Any]]:
+async def _analyze_holding(holding: dict[str, Any], yf_svc: Any) -> dict[str, Any] | None:
     """Resolve live price, sector, and trend for one holding. None on failure."""
     symbol = str(holding.get("symbol", "")).upper()
     try:
@@ -124,19 +125,19 @@ async def _analyze_holding(holding: Dict[str, Any], yf_svc: Any) -> Optional[Dic
         pnl_pct = (pnl / cost_value * 100.0) if cost_value > 0 else 0.0
 
         return {
-            "id":             holding.get("id"),
-            "symbol":         symbol,
-            "name":           name,
-            "sector":         sector if sector and sector != "N/A" else "Unknown",
-            "currency":       currency,
-            "shares":         round(shares, 6),
-            "costBasis":      round(cost_basis, 4),
-            "price":          round(price, 4),
-            "marketValue":    round(market_value, 2),
-            "costValue":      round(cost_value, 2),
-            "pnl":            round(pnl, 2),
-            "pnlPct":         round(pnl_pct, 2),
-            "direction":      direction,
+            "id": holding.get("id"),
+            "symbol": symbol,
+            "name": name,
+            "sector": sector if sector and sector != "N/A" else "Unknown",
+            "currency": currency,
+            "shares": round(shares, 6),
+            "costBasis": round(cost_basis, 4),
+            "price": round(price, 4),
+            "marketValue": round(market_value, 2),
+            "costValue": round(cost_value, 2),
+            "pnl": round(pnl, 2),
+            "pnlPct": round(pnl_pct, 2),
+            "direction": direction,
             "directionScore": direction_score,
         }
     except Exception as exc:
@@ -144,28 +145,28 @@ async def _analyze_holding(holding: Dict[str, Any], yf_svc: Any) -> Optional[Dic
         return None
 
 
-def _empty_summary(skipped: Optional[List[str]] = None) -> Dict[str, Any]:
+def _empty_summary(skipped: list[str] | None = None) -> dict[str, Any]:
     return {
-        "holdings":           [],
-        "totalMarketValue":   0.0,
-        "totalCost":          0.0,
-        "totalPnl":           0.0,
-        "totalPnlPct":        0.0,
-        "sectorAllocation":   [],
+        "holdings": [],
+        "totalMarketValue": 0.0,
+        "totalCost": 0.0,
+        "totalPnl": 0.0,
+        "totalPnlPct": 0.0,
+        "sectorAllocation": [],
         "diversificationScore": 0,
-        "forecast":           {"label": "Neutral", "score": 0.0},
-        "skipped":            skipped or [],
+        "forecast": {"label": "Neutral", "score": 0.0},
+        "skipped": skipped or [],
     }
 
 
-async def build_summary(holdings: List[Dict[str, Any]], yf_svc: Any) -> Dict[str, Any]:
+async def build_summary(holdings: list[dict[str, Any]], yf_svc: Any) -> dict[str, Any]:
     """Compute the full portfolio summary. Holdings that error are skipped, not fatal."""
     if not holdings:
         return _empty_summary()
 
     capped = holdings[:_MAX_HOLDINGS]
 
-    async def _guarded(h: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def _guarded(h: dict[str, Any]) -> dict[str, Any] | None:
         try:
             return await asyncio.wait_for(_analyze_holding(h, yf_svc), timeout=_PER_HOLDING_TIMEOUT)
         except asyncio.TimeoutError:
@@ -174,8 +175,8 @@ async def build_summary(holdings: List[Dict[str, Any]], yf_svc: Any) -> Dict[str
 
     results = await asyncio.gather(*[_guarded(h) for h in capped], return_exceptions=True)
 
-    rows: List[Dict[str, Any]] = []
-    skipped: List[str] = []
+    rows: list[dict[str, Any]] = []
+    skipped: list[str] = []
     for h, res in zip(capped, results):
         if isinstance(res, dict):
             rows.append(res)
@@ -194,10 +195,14 @@ async def build_summary(holdings: List[Dict[str, Any]], yf_svc: Any) -> Dict[str
 
     # Per-holding weight by market value.
     for r in rows:
-        r["weightPct"] = round((r["marketValue"] / total_market_value * 100.0), 2) if total_market_value > 0 else 0.0
+        r["weightPct"] = (
+            round((r["marketValue"] / total_market_value * 100.0), 2)
+            if total_market_value > 0
+            else 0.0
+        )
 
     # Sector allocation — aggregate weight (and value) by sector, largest first.
-    sector_map: Dict[str, Dict[str, float]] = {}
+    sector_map: dict[str, dict[str, float]] = {}
     for r in rows:
         bucket = sector_map.setdefault(r["sector"], {"weightPct": 0.0, "value": 0.0})
         bucket["weightPct"] += r["weightPct"]
@@ -223,13 +228,13 @@ async def build_summary(holdings: List[Dict[str, Any]], yf_svc: Any) -> Dict[str
     )
 
     return {
-        "holdings":             rows,
-        "totalMarketValue":     round(total_market_value, 2),
-        "totalCost":            round(total_cost, 2),
-        "totalPnl":             round(total_pnl, 2),
-        "totalPnlPct":          round(total_pnl_pct, 2),
-        "sectorAllocation":     sector_allocation,
+        "holdings": rows,
+        "totalMarketValue": round(total_market_value, 2),
+        "totalCost": round(total_cost, 2),
+        "totalPnl": round(total_pnl, 2),
+        "totalPnlPct": round(total_pnl_pct, 2),
+        "sectorAllocation": sector_allocation,
         "diversificationScore": diversification_score,
-        "forecast":             {"label": _label_for(weighted_score), "score": weighted_score},
-        "skipped":              skipped,
+        "forecast": {"label": _label_for(weighted_score), "score": weighted_score},
+        "skipped": skipped,
     }

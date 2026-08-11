@@ -8,16 +8,16 @@ Endpoints (read-only tier rate limit, 15-min Redis cache):
   GET /analytics/accuracy/{symbol}   — model MAE, directional accuracy, forecast-vs-actual
   GET /analytics/sentiment/{symbol}  — 30-day VADER compound trend
 """
+
 import asyncio
 import logging
 import re
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Request
-from slowapi.util import get_remote_address
-
 from config import Config
 from dependencies import forecast_store, influx_svc, limiter
+from fastapi import APIRouter, HTTPException, Request
+from slowapi.util import get_remote_address
 
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-:]{1,15}$")
 
@@ -101,9 +101,9 @@ def _compute_accuracy(
         if e_d1 is not None and e_d1 > _MISSING:
             # records are ascending by _time → later same-date entry overwrites
             fva_by_date[actual_date] = {
-                "date":     actual_date.isoformat(),
+                "date": actual_date.isoformat(),
                 "forecast": round(float(e_d1), 2),
-                "actual":   round(float(actual), 2),
+                "actual": round(float(actual), 2),
             }
 
         actual_dir = _sign(actual - last_price)
@@ -116,29 +116,30 @@ def _compute_accuracy(
                 dir_counts[model][0] += 1
 
     directional_accuracy = {
-        model: round(c / t, 2) if t else None
-        for model, (c, t) in dir_counts.items()
+        model: round(c / t, 2) if t else None for model, (c, t) in dir_counts.items()
     }
     forecast_vs_actual = [fva_by_date[d] for d in sorted(fva_by_date)]
 
     # ── Naive-persistence baseline & per-model skill ──────────────────────────
     # Naive baseline: always predict last_price (yesterday's close).
     # skill = 1 − model_mae/naive_mae; >0 beats persistence, <0 is worse.
-    naive_mae: float | None = round(sum(naive_errors) / len(naive_errors), 2) if naive_errors else None
+    naive_mae: float | None = (
+        round(sum(naive_errors) / len(naive_errors), 2) if naive_errors else None
+    )
     model_skill: dict = {}
     if naive_mae and naive_mae > 0:
         for model, mae in model_mae.items():
             model_skill[model] = round(1.0 - mae / naive_mae, 3)
 
     return {
-        "model_mae":               model_mae,
-        "best_model":              best_model,
+        "model_mae": model_mae,
+        "best_model": best_model,
         "ensemble_mae_by_horizon": ensemble_mae_by_horizon,
-        "directional_accuracy":    directional_accuracy,
-        "forecast_vs_actual":      forecast_vs_actual,
-        "samples":                 matched,
-        "naive_mae":               naive_mae,
-        "model_skill":             model_skill,
+        "directional_accuracy": directional_accuracy,
+        "forecast_vs_actual": forecast_vs_actual,
+        "samples": matched,
+        "naive_mae": naive_mae,
+        "model_skill": model_skill,
     }
 
 
@@ -171,13 +172,18 @@ async def accuracy_analytics(request: Request, symbol: str):
     except asyncio.TimeoutError:
         logger.warning("[ANALYTICS] accuracy query timed out for %s", symbol)
         result = {
-            "model_mae": {}, "best_model": None, "ensemble_mae_by_horizon": [],
-            "directional_accuracy": {}, "forecast_vs_actual": [], "samples": 0,
-            "naive_mae": None, "model_skill": {},
+            "model_mae": {},
+            "best_model": None,
+            "ensemble_mae_by_horizon": [],
+            "directional_accuracy": {},
+            "forecast_vs_actual": [],
+            "samples": 0,
+            "naive_mae": None,
+            "model_skill": {},
         }
 
     payload = {
-        "symbol":       symbol,
+        "symbol": symbol,
         **result,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -216,15 +222,20 @@ async def calibration_analytics(request: Request, symbol: str) -> dict:
         logger.warning("[ANALYTICS] calibration query timed out for %s", symbol)
         return {
             "symbol": symbol,
-            "samples": 0, "p10_p90_coverage_pct": None, "range_coverage_pct": None,
-            "directional_accuracy_pct": None, "naive_accuracy_pct": None,
-            "edge_pct": None, "mean_signed_error": None, "calibration_verdict": None,
+            "samples": 0,
+            "p10_p90_coverage_pct": None,
+            "range_coverage_pct": None,
+            "directional_accuracy_pct": None,
+            "naive_accuracy_pct": None,
+            "edge_pct": None,
+            "mean_signed_error": None,
+            "calibration_verdict": None,
             "coverage_target_pct": 80.0,
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
 
     payload = {
-        "symbol":       symbol,
+        "symbol": symbol,
         **result,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -257,9 +268,9 @@ async def sentiment_analytics(request: Request, symbol: str):
 
     current = history[-1] if history else None
     payload = {
-        "symbol":       symbol,
-        "history":      history,
-        "current":      current,
+        "symbol": symbol,
+        "history": history,
+        "current": current,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
     await cache_set(cache_key, payload, ttl_seconds=900)

@@ -2,20 +2,23 @@
 Router tests — trade setup, DCF valuation, options chain.
 All external calls are mocked; no network required.
 """
-from typing import Any, Dict, List, Tuple
-from unittest.mock import patch, AsyncMock, MagicMock
+
 import importlib as _il
 import warnings
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
 
 # Build a lightweight test app that includes only the routers under test.
 # This avoids the Redis lifespan in main.py while still exercising the real
 # router logic (validation, calculations, response models).
-from backend.routers import trade, market
+from backend.routers import market, trade
+
 # Import from the bare module path so the object identity matches what the
 # routers use (they do `from dependencies import ...`, not `from backend.dependencies`).
 # Dependency overrides use object identity as the key, so paths must match.
@@ -72,16 +75,17 @@ def _reset_rate_limiter():
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _trade_payload(**overrides: Any) -> Dict[str, Any]:
-    base: Dict[str, Any] = {
-        "symbol":          "AAPL",
-        "current_price":   150.0,
-        "high_range":      165.0,
-        "low_range":       135.0,
-        "rsi":             35.0,
-        "support":         [148.0, 144.0],
-        "resistance":      [155.0, 162.0],
-        "trend":           "Bullish",
+
+def _trade_payload(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "symbol": "AAPL",
+        "current_price": 150.0,
+        "high_range": 165.0,
+        "low_range": 135.0,
+        "rsi": 35.0,
+        "support": [148.0, 144.0],
+        "resistance": [155.0, 162.0],
+        "trend": "Bullish",
         "sentiment_label": "Bullish",
     }
     base.update(overrides)
@@ -97,6 +101,7 @@ def _mock_jury() -> MagicMock:
 # ---------------------------------------------------------------------------
 # Trade-setup tests
 # ---------------------------------------------------------------------------
+
 
 def test_trade_setup_bullish_oversold() -> None:
     with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
@@ -152,7 +157,7 @@ def test_trade_setup_position_sizing() -> None:
     d = resp.json()
     assert d["risk_per_share"] > 0
     assert 0 < d["risk_pct"] < 100
-    assert 0 < d["suggested_position_pct"] <= 500   # capped at 5× = 500%
+    assert 0 < d["suggested_position_pct"] <= 500  # capped at 5× = 500%
 
 
 def test_trade_setup_risk_reward_format() -> None:
@@ -186,8 +191,8 @@ def test_trade_setup_atr_stop_widens_with_volatility() -> None:
         ).json()
     assert low_vol["atr_14"] == 0.5 and low_vol["atr_multiplier"] == 2.0
     assert high_vol["atr_14"] == 4.0
-    entry_low_lv  = (low_vol["entry_low"] + low_vol["entry_high"]) / 2 - low_vol["stop_loss"]
-    entry_low_hv  = (high_vol["entry_low"] + high_vol["entry_high"]) / 2 - high_vol["stop_loss"]
+    entry_low_lv = (low_vol["entry_low"] + low_vol["entry_high"]) / 2 - low_vol["stop_loss"]
+    entry_low_hv = (high_vol["entry_low"] + high_vol["entry_high"]) / 2 - high_vol["stop_loss"]
     # Higher ATR → wider stop distance.
     assert entry_low_hv > entry_low_lv
 
@@ -254,13 +259,17 @@ def test_trade_setup_high_below_low() -> None:
 
 # ── Coherence gate: forecast-aware, honesty-gated setups ──────────────────────
 
+
 def test_trade_setup_conflict_short_vs_rising_forecast() -> None:
     """The GOOGL case: a bearish trend would build a short, but the 5-day forecast
     projects HIGHER — the setup must be flagged non-actionable, not a fake short."""
     payload = _trade_payload(
-        rsi=35.0, trend="Bearish", current_price=150.0,
-        high_range=160.0, low_range=140.0,
-        forecast_close=156.0,   # +4% over 5 days → forecast up, contradicts short
+        rsi=35.0,
+        trend="Bearish",
+        current_price=150.0,
+        high_range=160.0,
+        low_range=140.0,
+        forecast_close=156.0,  # +4% over 5 days → forecast up, contradicts short
     )
     with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
         resp = client.post("/trade-setup", json=payload)
@@ -275,9 +284,12 @@ def test_trade_setup_conflict_short_vs_rising_forecast() -> None:
 
 def test_trade_setup_conflict_long_vs_falling_forecast() -> None:
     payload = _trade_payload(
-        rsi=55.0, trend="Bullish", current_price=150.0,
-        high_range=160.0, low_range=140.0,
-        forecast_close=144.0,   # −4% → forecast down, contradicts long
+        rsi=55.0,
+        trend="Bullish",
+        current_price=150.0,
+        high_range=160.0,
+        low_range=140.0,
+        forecast_close=144.0,  # −4% → forecast down, contradicts long
     )
     with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
         resp = client.post("/trade-setup", json=payload)
@@ -291,9 +303,12 @@ def test_trade_setup_conflict_long_vs_falling_forecast() -> None:
 def test_trade_setup_aligned_forecast_is_actionable() -> None:
     """Bullish trend + rising forecast agree → a real, actionable long."""
     payload = _trade_payload(
-        rsi=55.0, trend="Bullish", current_price=150.0,
-        high_range=165.0, low_range=140.0,
-        forecast_close=158.0,   # +5% → forecast up, agrees with long
+        rsi=55.0,
+        trend="Bullish",
+        current_price=150.0,
+        high_range=165.0,
+        low_range=140.0,
+        forecast_close=158.0,  # +5% → forecast up, agrees with long
     )
     with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
         resp = client.post("/trade-setup", json=payload)
@@ -319,9 +334,12 @@ def test_trade_setup_neutral_trend_no_clean_setup() -> None:
 def test_trade_setup_unfavorable_rr_flagged() -> None:
     """A setup whose reward is smaller than its risk is flagged, not presented as an edge."""
     payload = _trade_payload(
-        rsi=50.0, trend="Bearish", current_price=150.0,
-        high_range=152.0, low_range=149.0,   # tiny downside reward
-        atr_14=10.0,                         # huge ATR → wide stop = large risk
+        rsi=50.0,
+        trend="Bearish",
+        current_price=150.0,
+        high_range=152.0,
+        low_range=149.0,  # tiny downside reward
+        atr_14=10.0,  # huge ATR → wide stop = large risk
     )
     with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
         resp = client.post("/trade-setup", json=payload)
@@ -346,12 +364,18 @@ def test_trade_setup_no_forecast_is_backward_compatible() -> None:
 
 # ── Swing entry trigger: daily candle confirmation ────────────────────────────
 
+
 def test_trade_setup_entry_confirmed_by_matching_candle() -> None:
     """An actionable long with a bullish candle already printed → confirmed trigger."""
     payload = _trade_payload(
-        rsi=55.0, trend="Bullish", current_price=150.0,
-        high_range=165.0, low_range=140.0, forecast_close=158.0,
-        candle_pattern="Bullish Engulfing", candle_pattern_dir="bullish",
+        rsi=55.0,
+        trend="Bullish",
+        current_price=150.0,
+        high_range=165.0,
+        low_range=140.0,
+        forecast_close=158.0,
+        candle_pattern="Bullish Engulfing",
+        candle_pattern_dir="bullish",
     )
     with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
         resp = client.post("/trade-setup", json=payload)
@@ -365,8 +389,12 @@ def test_trade_setup_entry_confirmed_by_matching_candle() -> None:
 def test_trade_setup_entry_pending_without_candle() -> None:
     """Actionable long, no candle → pending trigger ('wait for ...')."""
     payload = _trade_payload(
-        rsi=55.0, trend="Bullish", current_price=150.0,
-        high_range=165.0, low_range=140.0, forecast_close=158.0,
+        rsi=55.0,
+        trend="Bullish",
+        current_price=150.0,
+        high_range=165.0,
+        low_range=140.0,
+        forecast_close=158.0,
     )
     with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
         resp = client.post("/trade-setup", json=payload)
@@ -379,9 +407,14 @@ def test_trade_setup_entry_pending_without_candle() -> None:
 def test_trade_setup_entry_pending_when_candle_dir_mismatches() -> None:
     """A bearish candle does not confirm a long → still pending."""
     payload = _trade_payload(
-        rsi=55.0, trend="Bullish", current_price=150.0,
-        high_range=165.0, low_range=140.0, forecast_close=158.0,
-        candle_pattern="Shooting Star", candle_pattern_dir="bearish",
+        rsi=55.0,
+        trend="Bullish",
+        current_price=150.0,
+        high_range=165.0,
+        low_range=140.0,
+        forecast_close=158.0,
+        candle_pattern="Shooting Star",
+        candle_pattern_dir="bearish",
     )
     with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
         resp = client.post("/trade-setup", json=payload)
@@ -392,9 +425,14 @@ def test_trade_setup_entry_pending_when_candle_dir_mismatches() -> None:
 def test_trade_setup_no_trigger_when_not_actionable() -> None:
     """A conflicted (non-actionable) setup carries no entry trigger."""
     payload = _trade_payload(
-        rsi=35.0, trend="Bearish", current_price=150.0,
-        high_range=160.0, low_range=140.0, forecast_close=156.0,
-        candle_pattern="Bullish Engulfing", candle_pattern_dir="bullish",
+        rsi=35.0,
+        trend="Bearish",
+        current_price=150.0,
+        high_range=160.0,
+        low_range=140.0,
+        forecast_close=156.0,
+        candle_pattern="Bullish Engulfing",
+        candle_pattern_dir="bullish",
     )
     with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
         resp = client.post("/trade-setup", json=payload)
@@ -412,24 +450,32 @@ def test_trade_setup_invalid_candle_dir_rejected() -> None:
 
 # ── CFD-ready framing ─────────────────────────────────────────────────────────
 
+
 def test_trade_setup_cfd_framing_on_actionable_long() -> None:
     payload = _trade_payload(
-        rsi=55.0, trend="Bullish", current_price=150.0,
-        high_range=165.0, low_range=140.0, forecast_close=158.0,
+        rsi=55.0,
+        trend="Bullish",
+        current_price=150.0,
+        high_range=165.0,
+        low_range=140.0,
+        forecast_close=158.0,
     )
     with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
         resp = client.post("/trade-setup", json=payload)
     assert resp.status_code == 200
     d = resp.json()
     assert d["cfd_side"] == "Buy"
-    assert d["cfd_margin_pct"] == 20.0          # 5:1 leverage → 20% margin
+    assert d["cfd_margin_pct"] == 20.0  # 5:1 leverage → 20% margin
     assert "CFD" in d["cfd_note"] and "financing" in d["cfd_note"]
 
 
 def test_trade_setup_cfd_side_sell_on_short() -> None:
     payload = _trade_payload(
-        rsi=32.0, trend="Bearish", current_price=150.0,
-        high_range=180.0, low_range=135.0,   # aligned short (no forecast_close)
+        rsi=32.0,
+        trend="Bearish",
+        current_price=150.0,
+        high_range=180.0,
+        low_range=135.0,  # aligned short (no forecast_close)
     )
     with patch("backend.routers.trade.analyst_jury_svc", _mock_jury()):
         resp = client.post("/trade-setup", json=payload)
@@ -451,30 +497,33 @@ def test_trade_setup_no_cfd_framing_when_not_actionable() -> None:
 # DCF tests
 # ---------------------------------------------------------------------------
 
+
 def _mock_dcf_deps(
     fcf: float = 50_000_000_000,
     beta: float = 1.2,
     revenue_growth: float = 0.08,
     current_price: float = 150.0,
     shares: int = 15_000_000_000,
-) -> Tuple[MagicMock, MagicMock]:
+) -> tuple[MagicMock, MagicMock]:
     mock_yf_svc = MagicMock()
     mock_yf_svc.fetch_info.return_value = {
-        "free_cash_flow":  fcf,
-        "beta":            beta,
-        "revenue_growth":  revenue_growth,
-        "current_price":   current_price,
+        "free_cash_flow": fcf,
+        "beta": beta,
+        "revenue_growth": revenue_growth,
+        "current_price": current_price,
     }
-    mock_ticker_inst         = MagicMock()
-    mock_ticker_inst.info    = {"sharesOutstanding": shares}
-    mock_yf_ticker           = MagicMock(return_value=mock_ticker_inst)
+    mock_ticker_inst = MagicMock()
+    mock_ticker_inst.info = {"sharesOutstanding": shares}
+    mock_yf_ticker = MagicMock(return_value=mock_ticker_inst)
     return mock_yf_svc, mock_yf_ticker
 
 
 def test_dcf_returns_three_scenarios() -> None:
     yf_svc, yf_ticker = _mock_dcf_deps()
-    with patch("backend.routers.market.yf_svc", yf_svc), \
-         patch("backend.routers.market.yf.Ticker", yf_ticker):
+    with (
+        patch("backend.routers.market.yf_svc", yf_svc),
+        patch("backend.routers.market.yf.Ticker", yf_ticker),
+    ):
         resp = client.get("/dcf/AAPL")
     assert resp.status_code == 200
     d = resp.json()
@@ -484,17 +533,23 @@ def test_dcf_returns_three_scenarios() -> None:
 
 def test_dcf_bull_higher_than_bear() -> None:
     yf_svc, yf_ticker = _mock_dcf_deps()
-    with patch("backend.routers.market.yf_svc", yf_svc), \
-         patch("backend.routers.market.yf.Ticker", yf_ticker):
+    with (
+        patch("backend.routers.market.yf_svc", yf_svc),
+        patch("backend.routers.market.yf.Ticker", yf_ticker),
+    ):
         resp = client.get("/dcf/AAPL")
     d = resp.json()
-    assert d["bear"]["intrinsic_value"] < d["base"]["intrinsic_value"] < d["bull"]["intrinsic_value"]
+    assert (
+        d["bear"]["intrinsic_value"] < d["base"]["intrinsic_value"] < d["bull"]["intrinsic_value"]
+    )
 
 
 def test_dcf_wacc_base_positive() -> None:
     yf_svc, yf_ticker = _mock_dcf_deps(beta=1.5)
-    with patch("backend.routers.market.yf_svc", yf_svc), \
-         patch("backend.routers.market.yf.Ticker", yf_ticker):
+    with (
+        patch("backend.routers.market.yf_svc", yf_svc),
+        patch("backend.routers.market.yf.Ticker", yf_ticker),
+    ):
         resp = client.get("/dcf/AAPL")
     assert resp.json()["wacc_base"] > 0
 
@@ -509,8 +564,10 @@ def test_dcf_missing_fcf_returns_422() -> None:
     }
     ticker_inst = MagicMock()
     ticker_inst.info = {"sharesOutstanding": 1_000_000_000}
-    with patch("backend.routers.market.yf_svc", yf_svc_mock), \
-         patch("backend.routers.market.yf.Ticker", MagicMock(return_value=ticker_inst)):
+    with (
+        patch("backend.routers.market.yf_svc", yf_svc_mock),
+        patch("backend.routers.market.yf.Ticker", MagicMock(return_value=ticker_inst)),
+    ):
         resp = client.get("/dcf/AAPL")
     assert resp.status_code == 422
 
@@ -525,16 +582,20 @@ def test_dcf_negative_fcf_returns_422() -> None:
     }
     ticker_inst = MagicMock()
     ticker_inst.info = {"sharesOutstanding": 1_000_000_000}
-    with patch("backend.routers.market.yf_svc", yf_svc_mock), \
-         patch("backend.routers.market.yf.Ticker", MagicMock(return_value=ticker_inst)):
+    with (
+        patch("backend.routers.market.yf_svc", yf_svc_mock),
+        patch("backend.routers.market.yf.Ticker", MagicMock(return_value=ticker_inst)),
+    ):
         resp = client.get("/dcf/AAPL")
     assert resp.status_code == 422
 
 
 def test_dcf_symbol_uppercased() -> None:
     yf_svc, yf_ticker = _mock_dcf_deps()
-    with patch("backend.routers.market.yf_svc", yf_svc), \
-         patch("backend.routers.market.yf.Ticker", yf_ticker):
+    with (
+        patch("backend.routers.market.yf_svc", yf_svc),
+        patch("backend.routers.market.yf.Ticker", yf_ticker),
+    ):
         resp = client.get("/dcf/aapl")
     assert resp.json()["symbol"] == "AAPL"
 
@@ -543,41 +604,45 @@ def test_dcf_symbol_uppercased() -> None:
 # Options chain tests
 # ---------------------------------------------------------------------------
 
-def _make_options_df(strikes: List[int], price: float, is_call: bool) -> Any:
+
+def _make_options_df(strikes: list[int], price: float, is_call: bool) -> Any:
     import pandas as pd
+
     rows = []
     for strike in strikes:
-        rows.append({
-            "strike":            strike,
-            "lastPrice":         1.5,
-            "bid":               1.4,
-            "ask":               1.6,
-            "change":            0.05,
-            "percentChange":     3.4,
-            "volume":            500,
-            "openInterest":      1200,
-            "impliedVolatility": 0.28,
-            "inTheMoney":        strike < price if is_call else strike > price,
-        })
+        rows.append(
+            {
+                "strike": strike,
+                "lastPrice": 1.5,
+                "bid": 1.4,
+                "ask": 1.6,
+                "change": 0.05,
+                "percentChange": 3.4,
+                "volume": 500,
+                "openInterest": 1200,
+                "impliedVolatility": 0.28,
+                "inTheMoney": strike < price if is_call else strike > price,
+            }
+        )
     return pd.DataFrame(rows)
 
 
 def _mock_options_ticker(
     price: float = 150.0,
-    expirations: List[str] | None = None,
+    expirations: list[str] | None = None,
 ) -> MagicMock:
-    strikes  = [130, 140, 145, 150, 155, 160, 170]
+    strikes = [130, 140, 145, 150, 155, 160, 170]
     calls_df = _make_options_df(strikes, price, is_call=True)
-    puts_df  = _make_options_df(strikes, price, is_call=False)
+    puts_df = _make_options_df(strikes, price, is_call=False)
 
-    chain       = MagicMock()
+    chain = MagicMock()
     chain.calls = calls_df
-    chain.puts  = puts_df
+    chain.puts = puts_df
 
-    ticker              = MagicMock()
-    ticker.options      = expirations or ["2026-06-20", "2026-07-18"]
+    ticker = MagicMock()
+    ticker.options = expirations or ["2026-06-20", "2026-07-18"]
     ticker.option_chain.return_value = chain
-    ticker.info         = {"currentPrice": price}
+    ticker.info = {"currentPrice": price}
     return MagicMock(return_value=ticker)
 
 
@@ -602,9 +667,9 @@ def test_options_chain_filters_far_strikes() -> None:
 
 
 def test_options_chain_no_expirations_returns_404() -> None:
-    ticker        = MagicMock()
+    ticker = MagicMock()
     ticker.options = []
-    ticker.info    = {"currentPrice": 150.0}
+    ticker.info = {"currentPrice": 150.0}
     with patch("backend.routers.market.yf.Ticker", MagicMock(return_value=ticker)):
         resp = client.get("/options/AAPL")
     assert resp.status_code == 404
@@ -621,7 +686,9 @@ def test_options_chain_itm_field_present() -> None:
 def test_options_chain_expiry_list_capped() -> None:
     """12 expirations in the mock; the router caps the response to 8."""
     many_expirations = [f"2026-{m:02d}-20" for m in range(1, 13)]
-    with patch("backend.routers.market.yf.Ticker", _mock_options_ticker(expirations=many_expirations)):
+    with patch(
+        "backend.routers.market.yf.Ticker", _mock_options_ticker(expirations=many_expirations)
+    ):
         resp = client.get("/options/AAPL")
     assert len(resp.json()["expirations"]) == 8
 
@@ -631,7 +698,7 @@ def test_options_chain_includes_greeks() -> None:
     with patch("backend.routers.market.yf.Ticker", _mock_options_ticker()):
         resp = client.get("/options/AAPL")
     call = resp.json()["calls"][0]
-    put  = resp.json()["puts"][0]
+    put = resp.json()["puts"][0]
     assert "delta" in call and "theta" in call
     # Call delta in [0, 1]; put delta in [-1, 0].
     assert 0.0 <= call["delta"] <= 1.0
@@ -654,12 +721,12 @@ def test_options_chain_handles_nan_iv() -> None:
 
     strikes = [145, 150, 155]
     calls_df = _make_options_df(strikes, 150.0, is_call=True)
-    puts_df  = _make_options_df(strikes, 150.0, is_call=False)
+    puts_df = _make_options_df(strikes, 150.0, is_call=False)
     calls_df.loc[:, "impliedVolatility"] = _math.nan  # poison the IV column
 
     chain = MagicMock()
     chain.calls = calls_df
-    chain.puts  = puts_df
+    chain.puts = puts_df
     ticker = MagicMock()
     ticker.options = ["2026-06-20"]
     ticker.option_chain.return_value = chain
@@ -690,13 +757,14 @@ def test_options_chain_expiry_param_selects_expiry() -> None:
 # Earnings calendar tests
 # ---------------------------------------------------------------------------
 
+
 def _mock_earnings_ticker(date_str: str = "2026-06-20", market_cap: float = 3e12) -> MagicMock:
     fast_info = MagicMock()
     fast_info.display_name = "Mock Corp"
-    fast_info.market_cap   = market_cap
+    fast_info.market_cap = market_cap
 
     ticker = MagicMock()
-    ticker.calendar  = {"Earnings Date": [date_str]}
+    ticker.calendar = {"Earnings Date": [date_str]}
     ticker.fast_info = fast_info
     return MagicMock(return_value=ticker)
 
@@ -729,6 +797,7 @@ def test_earnings_calendar_skips_missing_dates() -> None:
 # IPO calendar tests
 # ---------------------------------------------------------------------------
 
+
 def _mock_httpx_client(json_payload: Any) -> MagicMock:
     """Build a drop-in for ``httpx.AsyncClient`` usable as an async context
     manager, whose ``.get()`` resolves to a response carrying ``json_payload``."""
@@ -748,23 +817,36 @@ def _mock_httpx_client(json_payload: Any) -> MagicMock:
 # A minimal Nasdaq IPO-calendar payload (one upcoming + one priced row).
 _NASDAQ_SAMPLE = {
     "data": {
-        "upcoming": {"upcomingTable": {"rows": [
-            {
-                "dealID": "1", "proposedTickerSymbol": "SPCX",
-                "companyName": "Space Exploration Technologies Corp",
-                "proposedExchange": "NASDAQ", "proposedSharePrice": "135.00",
-                "sharesOffered": "555,555,555", "expectedPriceDate": "6/12/2026",
-                "dollarValueOfSharesOffered": "$86,249,999,880",
-            },
-        ]}},
-        "priced": {"rows": [
-            {
-                "dealID": "2", "proposedTickerSymbol": "ACME",
-                "companyName": "Acme Inc", "proposedExchange": "NYSE",
-                "proposedSharePrice": "15.00-17.00", "sharesOffered": "3,000,000",
-                "pricedDate": "5/20/2026", "dollarValueOfSharesOffered": "$48,000,000",
-            },
-        ]},
+        "upcoming": {
+            "upcomingTable": {
+                "rows": [
+                    {
+                        "dealID": "1",
+                        "proposedTickerSymbol": "SPCX",
+                        "companyName": "Space Exploration Technologies Corp",
+                        "proposedExchange": "NASDAQ",
+                        "proposedSharePrice": "135.00",
+                        "sharesOffered": "555,555,555",
+                        "expectedPriceDate": "6/12/2026",
+                        "dollarValueOfSharesOffered": "$86,249,999,880",
+                    },
+                ]
+            }
+        },
+        "priced": {
+            "rows": [
+                {
+                    "dealID": "2",
+                    "proposedTickerSymbol": "ACME",
+                    "companyName": "Acme Inc",
+                    "proposedExchange": "NYSE",
+                    "proposedSharePrice": "15.00-17.00",
+                    "sharesOffered": "3,000,000",
+                    "pricedDate": "5/20/2026",
+                    "dollarValueOfSharesOffered": "$48,000,000",
+                },
+            ]
+        },
         "filed": None,
         "withdrawn": None,
     }
@@ -784,10 +866,10 @@ def test_ipo_calendar_nasdaq_free_source() -> None:
 
     up = payload["upcoming"][0]
     assert up["symbol"] == "SPCX" and up["status"] == "upcoming"
-    assert up["date"] == "2026-06-12"              # "6/12/2026" -> ISO
+    assert up["date"] == "2026-06-12"  # "6/12/2026" -> ISO
     assert up["price_low"] == 135.0 and up["price_high"] == 135.0
-    assert up["shares"] == 555_555_555             # commas stripped
-    assert up["market_cap"] == 86_249_999_880      # "$..." stripped
+    assert up["shares"] == 555_555_555  # commas stripped
+    assert up["market_cap"] == 86_249_999_880  # "$..." stripped
 
     rec = payload["recent"][0]
     assert rec["symbol"] == "ACME" and rec["actions"] == "Priced"
@@ -799,16 +881,32 @@ def test_ipo_calendar_nasdaq_upcoming_wins_dedup() -> None:
     # priced table; it must be classified "upcoming", not duplicated into recent.
     payload = {
         "data": {
-            "upcoming": {"upcomingTable": {"rows": [
-                {"dealID": "DUP", "proposedTickerSymbol": "DUP", "companyName": "Dup Co",
-                 "proposedExchange": "NASDAQ", "proposedSharePrice": "10.00",
-                 "expectedPriceDate": "7/01/2026"},
-            ]}},
-            "priced": {"rows": [
-                {"dealID": "DUP", "proposedTickerSymbol": "DUP", "companyName": "Dup Co",
-                 "proposedExchange": "NASDAQ", "proposedSharePrice": "10.00",
-                 "pricedDate": "6/01/2026"},
-            ]},
+            "upcoming": {
+                "upcomingTable": {
+                    "rows": [
+                        {
+                            "dealID": "DUP",
+                            "proposedTickerSymbol": "DUP",
+                            "companyName": "Dup Co",
+                            "proposedExchange": "NASDAQ",
+                            "proposedSharePrice": "10.00",
+                            "expectedPriceDate": "7/01/2026",
+                        },
+                    ]
+                }
+            },
+            "priced": {
+                "rows": [
+                    {
+                        "dealID": "DUP",
+                        "proposedTickerSymbol": "DUP",
+                        "companyName": "Dup Co",
+                        "proposedExchange": "NASDAQ",
+                        "proposedSharePrice": "10.00",
+                        "pricedDate": "6/01/2026",
+                    },
+                ]
+            },
         }
     }
     with patch("backend.routers.market.httpx.AsyncClient", _mock_httpx_client(payload)):
@@ -817,7 +915,7 @@ def test_ipo_calendar_nasdaq_upcoming_wins_dedup() -> None:
     body = resp.json()
     assert body["source"] == "nasdaq"
     assert len(body["upcoming"]) == 1 and body["upcoming"][0]["symbol"] == "DUP"
-    assert len(body["recent"]) == 0          # not double-counted as recent
+    assert len(body["recent"]) == 0  # not double-counted as recent
 
 
 def test_ipo_calendar_edgar_fallback_when_nasdaq_unavailable() -> None:

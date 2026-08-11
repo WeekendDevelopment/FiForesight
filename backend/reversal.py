@@ -7,17 +7,17 @@ Fits a lightweight RandomForestClassifier on-the-fly using the full indicator
 history that /predict already computes (RSI, BB, MACD, volume).  No serialised
 model, no external state.  Returns None when there is insufficient data.
 """
+
 import logging
-from typing import Optional
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
-_MIN_SAMPLES    = 40     # minimum labeled bars before we produce an estimate
-_DROP_THRESHOLD = 0.02   # 2% drop → "peak" label
-_HORIZON        = 5      # look-forward window (trading days)
-_WINDOW         = 5      # look-back window for slope features
+_MIN_SAMPLES = 40  # minimum labeled bars before we produce an estimate
+_DROP_THRESHOLD = 0.02  # 2% drop → "peak" label
+_HORIZON = 5  # look-forward window (trading days)
+_WINDOW = 5  # look-back window for slope features
 
 
 def _safe_div(a: float, b: float, fallback: float = 0.0) -> float:
@@ -52,29 +52,33 @@ def _build_dataset(
     rows, labels = [], []
 
     for i in range(_WINDOW, n - _HORIZON):
-        c   = float(closes[i])
+        c = float(closes[i])
         rsi = rsi_series[i]
         bbu = bb_upper[i]
         bbl = bb_lower[i]
-        mh  = macd_hist[i]
+        mh = macd_hist[i]
         vol = float(volumes[i]) if volumes else 1.0
 
         if None in (rsi, bbu, bbl, mh):
             continue
 
-        bb_pct_b = float(max(0.0, min(1.0, _safe_div(c - float(bbl), float(bbu) - float(bbl), 0.5))))
+        bb_pct_b = float(
+            max(0.0, min(1.0, _safe_div(c - float(bbl), float(bbu) - float(bbl), 0.5)))
+        )
 
-        rsi_vals  = [rsi_series[j] for j in range(i - _WINDOW, i + 1) if rsi_series[j] is not None]
-        rsi_slope = _safe_div(rsi_vals[-1] - rsi_vals[0], len(rsi_vals)) if len(rsi_vals) >= 2 else 0.0
+        rsi_vals = [rsi_series[j] for j in range(i - _WINDOW, i + 1) if rsi_series[j] is not None]
+        rsi_slope = (
+            _safe_div(rsi_vals[-1] - rsi_vals[0], len(rsi_vals)) if len(rsi_vals) >= 2 else 0.0
+        )
 
-        mh_vals    = [macd_hist[j] for j in range(max(0, i - 2), i + 1) if macd_hist[j] is not None]
+        mh_vals = [macd_hist[j] for j in range(max(0, i - 2), i + 1) if macd_hist[j] is not None]
         macd_slope = _safe_div(mh_vals[-1] - mh_vals[0], len(mh_vals)) if len(mh_vals) >= 2 else 0.0
 
-        c5        = float(closes[i - _WINDOW])
+        c5 = float(closes[i - _WINDOW])
         price_mom = _safe_div(c - c5, c5)
 
-        vol5      = [float(volumes[j]) for j in range(i - _WINDOW, i + 1) if float(volumes[j]) > 0]
-        avg_vol   = sum(vol5) / len(vol5) if vol5 else 1.0
+        vol5 = [float(volumes[j]) for j in range(i - _WINDOW, i + 1) if float(volumes[j]) > 0]
+        avg_vol = sum(vol5) / len(vol5) if vol5 else 1.0
         vol_ratio = _safe_div(vol, avg_vol, 1.0)
 
         rows.append([float(rsi), bb_pct_b, float(mh), macd_slope, rsi_slope, price_mom, vol_ratio])
@@ -92,7 +96,7 @@ def compute_reversal_risk(
     bb_lower: list,
     macd_hist: list,
     volumes: list,
-) -> Optional[dict]:
+) -> dict | None:
     """
     Fit a RandomForest on historical data and return peak-reversal probability
     for the current (latest) bar.
@@ -140,11 +144,11 @@ def compute_reversal_risk(
     n = len(closes)
     i = n - 1
 
-    c   = float(closes[i])
+    c = float(closes[i])
     rsi = rsi_series[i]
     bbu = bb_upper[i]
     bbl = bb_lower[i]
-    mh  = macd_hist[i]
+    mh = macd_hist[i]
     vol = float(volumes[i]) if volumes else 1.0
 
     if None in (rsi, bbu, bbl, mh):
@@ -153,17 +157,19 @@ def compute_reversal_risk(
 
     bb_pct_b = float(max(0.0, min(1.0, _safe_div(c - float(bbl), float(bbu) - float(bbl), 0.5))))
 
-    rsi_vals  = [rsi_series[j] for j in range(max(0, i - _WINDOW), i + 1) if rsi_series[j] is not None]
+    rsi_vals = [
+        rsi_series[j] for j in range(max(0, i - _WINDOW), i + 1) if rsi_series[j] is not None
+    ]
     rsi_slope = _safe_div(rsi_vals[-1] - rsi_vals[0], len(rsi_vals)) if len(rsi_vals) >= 2 else 0.0
 
-    mh_vals    = [macd_hist[j] for j in range(max(0, i - 2), i + 1) if macd_hist[j] is not None]
+    mh_vals = [macd_hist[j] for j in range(max(0, i - 2), i + 1) if macd_hist[j] is not None]
     macd_slope = _safe_div(mh_vals[-1] - mh_vals[0], len(mh_vals)) if len(mh_vals) >= 2 else 0.0
 
-    c5        = float(closes[max(0, i - _WINDOW)])
+    c5 = float(closes[max(0, i - _WINDOW)])
     price_mom = _safe_div(c - c5, c5)
 
-    vol5      = [float(volumes[j]) for j in range(max(0, i - _WINDOW), i + 1) if float(volumes[j]) > 0]
-    avg_vol   = sum(vol5) / len(vol5) if vol5 else 1.0
+    vol5 = [float(volumes[j]) for j in range(max(0, i - _WINDOW), i + 1) if float(volumes[j]) > 0]
+    avg_vol = sum(vol5) / len(vol5) if vol5 else 1.0
     vol_ratio = _safe_div(vol, avg_vol, 1.0)
 
     x_cur = np.array(
@@ -178,10 +184,18 @@ def compute_reversal_risk(
         return None
 
     risk_pct = round(prob_peak * 100)
-    signal   = "high" if risk_pct >= 65 else "medium" if risk_pct >= 35 else "low"
+    signal = "high" if risk_pct >= 65 else "medium" if risk_pct >= 35 else "low"
 
     # ── Top-3 model-level signals (feature importances are model-global, not per-sample) ──
-    feature_names = ["RSI", "BB %B", "MACD hist", "MACD slope", "RSI slope", "Price 5d", "Vol ratio"]
+    feature_names = [
+        "RSI",
+        "BB %B",
+        "MACD hist",
+        "MACD slope",
+        "RSI slope",
+        "Price 5d",
+        "Vol ratio",
+    ]
     top_idx = np.argsort(clf.feature_importances_)[::-1][:3]
 
     cur_vals = [float(rsi), bb_pct_b, float(mh), macd_slope, rsi_slope, price_mom, vol_ratio]
@@ -194,27 +208,33 @@ def compute_reversal_risk(
             top_features.append(f"RSI {val:.0f}{tag}")
         elif name == "BB %B":
             tag = " — near upper band" if val > 0.8 else " — near lower band" if val < 0.2 else ""
-            top_features.append(f"BB position {val*100:.0f}%{tag}")
+            top_features.append(f"BB position {val * 100:.0f}%{tag}")
         elif name == "MACD hist":
             tag = " — decelerating" if macd_slope < 0 else ""
             top_features.append(f"MACD histogram {val:+.4f}{tag}")
         elif name == "MACD slope":
             top_features.append(f"MACD momentum {'weakening' if val < 0 else 'building'}")
         elif name == "RSI slope":
-            top_features.append(f"RSI {'diverging down' if val < -0.5 else 'diverging up' if val > 0.5 else 'flat'}")
+            top_features.append(
+                f"RSI {'diverging down' if val < -0.5 else 'diverging up' if val > 0.5 else 'flat'}"
+            )
         elif name == "Price 5d":
-            top_features.append(f"5-day return {val*100:+.1f}%")
+            top_features.append(f"5-day return {val * 100:+.1f}%")
         elif name == "Vol ratio":
             top_features.append(f"Volume {val:.1f}× 5d avg")
 
     logger.info(
         "[REVERSAL] risk=%d%% (%s) | n=%d peaks=%d | %s",
-        risk_pct, signal, len(X), n_peaks, " | ".join(top_features[:2]),
+        risk_pct,
+        signal,
+        len(X),
+        n_peaks,
+        " | ".join(top_features[:2]),
     )
 
     return {
-        "risk_pct":    risk_pct,
-        "signal":      signal,
+        "risk_pct": risk_pct,
+        "signal": signal,
         "top_features": top_features,
-        "trained_on":  len(X),
+        "trained_on": len(X),
     }

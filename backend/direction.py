@@ -7,16 +7,16 @@ Fits a lightweight RandomForestClassifier on-the-fly using the same indicator
 history that /predict already computes (RSI, BB, MACD, volume).  No serialised
 model, no external state.  Returns None when there is insufficient data.
 """
+
 import logging
-from typing import Optional
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
-_MIN_SAMPLES = 60       # minimum labeled bars before we produce an estimate
-_RSI_WINDOW  = 5        # bars for RSI slope
-_MACD_WINDOW = 3        # bars for MACD slope
+_MIN_SAMPLES = 60  # minimum labeled bars before we produce an estimate
+_RSI_WINDOW = 5  # bars for RSI slope
+_MACD_WINDOW = 3  # bars for MACD slope
 
 
 def _safe_div(a: float, b: float, fallback: float = 0.0) -> float:
@@ -54,42 +54,59 @@ def _build_direction_dataset(
     rows, labels = [], []
 
     for i in range(10, n - 1):
-        c   = float(closes[i])
+        c = float(closes[i])
         rsi = rsi_series[i]
         bbu = bb_upper[i]
         bbl = bb_lower[i]
-        mh  = macd_hist[i]
+        mh = macd_hist[i]
         vol = float(volumes[i]) if volumes else 1.0
 
         if None in (rsi, bbu, bbl, mh):
             continue
 
-        bb_pct_b = float(max(0.0, min(1.0, _safe_div(
-            c - float(bbl), float(bbu) - float(bbl), 0.5
-        ))))
+        bb_pct_b = float(
+            max(0.0, min(1.0, _safe_div(c - float(bbl), float(bbu) - float(bbl), 0.5)))
+        )
 
-        rsi_vals  = [rsi_series[j] for j in range(i - _RSI_WINDOW, i + 1) if rsi_series[j] is not None]
-        rsi_slope = _safe_div(rsi_vals[-1] - rsi_vals[0], len(rsi_vals)) if len(rsi_vals) >= 2 else 0.0
+        rsi_vals = [
+            rsi_series[j] for j in range(i - _RSI_WINDOW, i + 1) if rsi_series[j] is not None
+        ]
+        rsi_slope = (
+            _safe_div(rsi_vals[-1] - rsi_vals[0], len(rsi_vals)) if len(rsi_vals) >= 2 else 0.0
+        )
 
-        mh_vals    = [macd_hist[j] for j in range(max(0, i - _MACD_WINDOW + 1), i + 1) if macd_hist[j] is not None]
+        mh_vals = [
+            macd_hist[j]
+            for j in range(max(0, i - _MACD_WINDOW + 1), i + 1)
+            if macd_hist[j] is not None
+        ]
         macd_slope = _safe_div(mh_vals[-1] - mh_vals[0], len(mh_vals)) if len(mh_vals) >= 2 else 0.0
 
-        c1  = float(closes[i - 1])
-        c5  = float(closes[max(0, i - 5)])
+        c1 = float(closes[i - 1])
+        c5 = float(closes[max(0, i - 5)])
         c10 = float(closes[max(0, i - 10)])
-        ret_1d  = _safe_div(c - c1, c1)
-        ret_5d  = _safe_div(c - c5, c5)
+        ret_1d = _safe_div(c - c1, c1)
+        ret_5d = _safe_div(c - c5, c5)
         ret_10d = _safe_div(c - c10, c10)
 
-        vol5      = [float(volumes[j]) for j in range(max(0, i - 5), i + 1) if float(volumes[j]) > 0]
-        avg_vol   = sum(vol5) / len(vol5) if vol5 else 1.0
+        vol5 = [float(volumes[j]) for j in range(max(0, i - 5), i + 1) if float(volumes[j]) > 0]
+        avg_vol = sum(vol5) / len(vol5) if vol5 else 1.0
         vol_ratio = _safe_div(vol, avg_vol, 1.0)
 
-        rows.append([
-            float(rsi), float(rsi) - 50.0, bb_pct_b,
-            float(mh), macd_slope, rsi_slope,
-            ret_1d, ret_5d, ret_10d, vol_ratio,
-        ])
+        rows.append(
+            [
+                float(rsi),
+                float(rsi) - 50.0,
+                bb_pct_b,
+                float(mh),
+                macd_slope,
+                rsi_slope,
+                ret_1d,
+                ret_5d,
+                ret_10d,
+                vol_ratio,
+            ]
+        )
         labels.append(1 if float(closes[i + 1]) > c else 0)
 
     return np.array(rows, dtype=np.float32), np.array(labels, dtype=np.int8)
@@ -102,7 +119,7 @@ def compute_direction_forecast(
     bb_lower: list,
     macd_hist: list,
     volumes: list,
-) -> Optional[dict]:
+) -> dict | None:
     """
     Fit a RandomForestClassifier and return the next-day direction prediction.
 
@@ -127,10 +144,12 @@ def compute_direction_forecast(
         logger.info("[DIRECTION] Too few samples (%d < %d) — skipping", len(X), _MIN_SAMPLES)
         return None
 
-    n_up   = int(y.sum())
+    n_up = int(y.sum())
     n_down = len(y) - n_up
     if n_up < 10 or n_down < 10:
-        logger.info("[DIRECTION] Class imbalance too severe (up=%d, down=%d) — skipping", n_up, n_down)
+        logger.info(
+            "[DIRECTION] Class imbalance too severe (up=%d, down=%d) — skipping", n_up, n_down
+        )
         return None
 
     try:
@@ -151,70 +170,102 @@ def compute_direction_forecast(
     n = len(closes)
     i = n - 1
 
-    c   = float(closes[i])
+    c = float(closes[i])
     rsi = rsi_series[i]
     bbu = bb_upper[i]
     bbl = bb_lower[i]
-    mh  = macd_hist[i]
+    mh = macd_hist[i]
     vol = float(volumes[i]) if volumes else 1.0
 
     if None in (rsi, bbu, bbl, mh):
         logger.info("[DIRECTION] Current bar missing indicators — skipping")
         return None
 
-    bb_pct_b = float(max(0.0, min(1.0, _safe_div(
-        c - float(bbl), float(bbu) - float(bbl), 0.5
-    ))))
+    bb_pct_b = float(max(0.0, min(1.0, _safe_div(c - float(bbl), float(bbu) - float(bbl), 0.5))))
 
-    rsi_vals  = [rsi_series[j] for j in range(max(0, i - _RSI_WINDOW), i + 1) if rsi_series[j] is not None]
+    rsi_vals = [
+        rsi_series[j] for j in range(max(0, i - _RSI_WINDOW), i + 1) if rsi_series[j] is not None
+    ]
     rsi_slope = _safe_div(rsi_vals[-1] - rsi_vals[0], len(rsi_vals)) if len(rsi_vals) >= 2 else 0.0
 
-    mh_vals    = [macd_hist[j] for j in range(max(0, i - _MACD_WINDOW + 1), i + 1) if macd_hist[j] is not None]
+    mh_vals = [
+        macd_hist[j] for j in range(max(0, i - _MACD_WINDOW + 1), i + 1) if macd_hist[j] is not None
+    ]
     macd_slope = _safe_div(mh_vals[-1] - mh_vals[0], len(mh_vals)) if len(mh_vals) >= 2 else 0.0
 
-    c1  = float(closes[max(0, i - 1)])
-    c5  = float(closes[max(0, i - 5)])
+    c1 = float(closes[max(0, i - 1)])
+    c5 = float(closes[max(0, i - 5)])
     c10 = float(closes[max(0, i - 10)])
-    ret_1d  = _safe_div(c - c1, c1)
-    ret_5d  = _safe_div(c - c5, c5)
+    ret_1d = _safe_div(c - c1, c1)
+    ret_5d = _safe_div(c - c5, c5)
     ret_10d = _safe_div(c - c10, c10)
 
-    vol5      = [float(volumes[j]) for j in range(max(0, i - 5), i + 1) if float(volumes[j]) > 0]
-    avg_vol   = sum(vol5) / len(vol5) if vol5 else 1.0
+    vol5 = [float(volumes[j]) for j in range(max(0, i - 5), i + 1) if float(volumes[j]) > 0]
+    avg_vol = sum(vol5) / len(vol5) if vol5 else 1.0
     vol_ratio = _safe_div(vol, avg_vol, 1.0)
 
     x_cur = np.array(
-        [[float(rsi), float(rsi) - 50.0, bb_pct_b, float(mh), macd_slope, rsi_slope,
-          ret_1d, ret_5d, ret_10d, vol_ratio]],
+        [
+            [
+                float(rsi),
+                float(rsi) - 50.0,
+                bb_pct_b,
+                float(mh),
+                macd_slope,
+                rsi_slope,
+                ret_1d,
+                ret_5d,
+                ret_10d,
+                vol_ratio,
+            ]
+        ],
         dtype=np.float32,
     )
 
     try:
-        proba = clf.predict_proba(x_cur)[0]   # [p_down, p_up] when classes=[0,1]
+        proba = clf.predict_proba(x_cur)[0]  # [p_down, p_up] when classes=[0,1]
     except Exception as exc:
         logger.warning("[DIRECTION] Prediction failed: %s", exc)
         return None
 
     # clf.classes_ may be [0,1] or [1] if only one class survived training
     classes = list(clf.classes_)
-    p_up   = float(proba[classes.index(1)]) if 1 in classes else 0.5
+    p_up = float(proba[classes.index(1)]) if 1 in classes else 0.5
     p_down = float(proba[classes.index(0)]) if 0 in classes else 0.5
 
-    direction    = "up" if p_up >= p_down else "down"
-    confidence   = round(max(p_up, p_down) * 100)
-    edge         = confidence - 50
+    direction = "up" if p_up >= p_down else "down"
+    confidence = round(max(p_up, p_down) * 100)
+    edge = confidence - 50
 
     # ── Top-3 model-level signals ─────────────────────────────────────────────
     feature_names = [
-        "RSI", "RSI vs 50", "BB %B", "MACD hist", "MACD slope",
-        "RSI slope", "Ret 1d", "Ret 5d", "Ret 10d", "Vol ratio",
+        "RSI",
+        "RSI vs 50",
+        "BB %B",
+        "MACD hist",
+        "MACD slope",
+        "RSI slope",
+        "Ret 1d",
+        "Ret 5d",
+        "Ret 10d",
+        "Vol ratio",
     ]
-    top_idx  = np.argsort(clf.feature_importances_)[::-1][:3]
-    cur_vals = [float(rsi), float(rsi) - 50.0, bb_pct_b, float(mh), macd_slope,
-                rsi_slope, ret_1d, ret_5d, ret_10d, vol_ratio]
+    top_idx = np.argsort(clf.feature_importances_)[::-1][:3]
+    cur_vals = [
+        float(rsi),
+        float(rsi) - 50.0,
+        bb_pct_b,
+        float(mh),
+        macd_slope,
+        rsi_slope,
+        ret_1d,
+        ret_5d,
+        ret_10d,
+        vol_ratio,
+    ]
     top_features = []
     for idx in top_idx:
-        val  = cur_vals[idx]
+        val = cur_vals[idx]
         name = feature_names[idx]
         if name == "RSI":
             tag = " — overbought" if val > 70 else " — oversold" if val < 30 else ""
@@ -239,14 +290,19 @@ def compute_direction_forecast(
 
     logger.info(
         "[DIRECTION] %s %.0f%% confidence (+%d%% edge) | n=%d up=%d down=%d | %s",
-        direction.upper(), confidence, edge, len(X), n_up, n_down,
+        direction.upper(),
+        confidence,
+        edge,
+        len(X),
+        n_up,
+        n_down,
         " | ".join(top_features[:2]),
     )
 
     return {
-        "direction":      direction,
+        "direction": direction,
         "confidence_pct": confidence,
-        "edge_pct":       edge,
-        "top_features":   top_features,
-        "trained_on":     len(X),
+        "edge_pct": edge,
+        "top_features": top_features,
+        "trained_on": len(X),
     }

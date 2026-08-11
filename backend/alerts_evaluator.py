@@ -15,12 +15,13 @@ Design notes
   • Invoked only by the cron-secret-gated POST /alerts/evaluate endpoint — there
     is NO sleep loop. Recommended cadence: every 15 min during market hours.
 """
+
 import asyncio
 import html
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Set
+from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 import alerts_store
 import notifications
@@ -35,7 +36,7 @@ _NEEDS_EARNINGS = {"earnings_soon"}
 _NEEDS_FORECAST = {"forecast_breakout"}
 
 
-def _to_float(v: Any) -> Optional[float]:
+def _to_float(v: Any) -> float | None:
     try:
         return None if v is None else float(v)
     except (TypeError, ValueError):
@@ -46,7 +47,8 @@ def _to_float(v: Any) -> Optional[float]:
 # Pure rule evaluation — no I/O, fully unit-testable
 # ---------------------------------------------------------------------------
 
-def evaluate_rule(rule: Dict[str, Any], signals: Dict[str, Any]) -> tuple[bool, str, Optional[float]]:
+
+def evaluate_rule(rule: dict[str, Any], signals: dict[str, Any]) -> tuple[bool, str, float | None]:
     """Decide whether `rule` fires given pre-fetched `signals`.
 
     Returns (fired, message, value). When a required signal is missing the rule
@@ -90,7 +92,11 @@ def evaluate_rule(rule: Dict[str, Any], signals: Dict[str, Any]) -> tuple[bool, 
             fired = abs(mv) >= thr
         if fired:
             arrow = "up" if mv >= 0 else "down"
-            return True, f"{sym} moved {arrow} {abs(mv):.2f}% today (threshold {thr:.2f}%)", round(mv, 2)
+            return (
+                True,
+                f"{sym} moved {arrow} {abs(mv):.2f}% today (threshold {thr:.2f}%)",
+                round(mv, 2),
+            )
         return False, "", None
 
     if rtype == "earnings_soon":
@@ -110,9 +116,17 @@ def evaluate_rule(rule: Dict[str, Any], signals: Dict[str, Any]) -> tuple[bool, 
         if price is None or (hi is None and lo is None):
             return False, "", None
         if hi is not None and price > hi:
-            return True, f"{sym} broke above its forecast high ${hi:,.2f} (now ${price:,.2f})", round(price, 2)
+            return (
+                True,
+                f"{sym} broke above its forecast high ${hi:,.2f} (now ${price:,.2f})",
+                round(price, 2),
+            )
         if lo is not None and price < lo:
-            return True, f"{sym} broke below its forecast low ${lo:,.2f} (now ${price:,.2f})", round(price, 2)
+            return (
+                True,
+                f"{sym} broke below its forecast low ${lo:,.2f} (now ${price:,.2f})",
+                round(price, 2),
+            )
         return False, "", None
 
     return False, "", None
@@ -136,10 +150,12 @@ def _cooldown_active(last_fired: Any, now: datetime, cooldown: timedelta) -> boo
 # Live signal fetch (blocking — runs in a worker thread)
 # ---------------------------------------------------------------------------
 
-def _next_earnings_days(symbol: str, yf_svc: Any, today: Any) -> Optional[int]:
+
+def _next_earnings_days(symbol: str, yf_svc: Any, today: Any) -> int | None:
     """Days until the next earnings date (0 = today), or None if unknown."""
     try:
         import yfinance as yf
+
         cal = yf.Ticker(yf_svc._to_yf_symbol(symbol)).calendar
         if not cal:
             return None
@@ -149,9 +165,10 @@ def _next_earnings_days(symbol: str, yf_svc: Any, today: Any) -> Optional[int]:
         future = []
         for d in raw:
             try:
-                dt = d.date() if hasattr(d, "date") else datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
+                dt = d.date() if hasattr(d, "date") else date.fromisoformat(str(d)[:10])
                 future.append((dt - today).days)
-            except Exception:
+            except (ValueError, TypeError) as exc:
+                logger.debug("[ALERTS] invalid earnings date %r: %s", d, exc)
                 continue
         upcoming = [d for d in future if d >= 0]
         return min(upcoming) if upcoming else None
@@ -160,20 +177,26 @@ def _next_earnings_days(symbol: str, yf_svc: Any, today: Any) -> Optional[int]:
         return None
 
 
-def _fetch_symbol_signals(symbol: str, needed: Set[str], yf_svc: Any, forecast_store: Any) -> Dict[str, Any]:
+def _fetch_symbol_signals(
+    symbol: str, needed: set[str], yf_svc: Any, forecast_store: Any
+) -> dict[str, Any]:
     """Fetch the live signals required by the rule types present for `symbol`.
 
     Blocking (yfinance + InfluxDB). One symbol's failure raises to the caller,
     which logs and skips just that symbol.
     """
-    signals: Dict[str, Any] = {
-        "price": None, "prev_close": None, "pct_move": None,
-        "rsi": None, "earnings_days": None,
-        "forecast_high": None, "forecast_low": None,
+    signals: dict[str, Any] = {
+        "price": None,
+        "prev_close": None,
+        "pct_move": None,
+        "rsi": None,
+        "earnings_days": None,
+        "forecast_high": None,
+        "forecast_low": None,
     }
 
     # Price + recent closes (needed by nearly every rule type).
-    closes: List[float] = []
+    closes: list[float] = []
     try:
         df = yf_svc.fetch_history(symbol, period="3mo")
         if df is not None and not df.empty and "Close" in df.columns:
@@ -203,7 +226,9 @@ def _fetch_symbol_signals(symbol: str, needed: Set[str], yf_svc: Any, forecast_s
             logger.debug("[ALERTS] RSI calc failed for %s: %s", symbol, exc)
 
     if needed & _NEEDS_EARNINGS:
-        signals["earnings_days"] = _next_earnings_days(symbol, yf_svc, datetime.now(timezone.utc).date())
+        signals["earnings_days"] = _next_earnings_days(
+            symbol, yf_svc, datetime.now(timezone.utc).date()
+        )
 
     if needed & _NEEDS_FORECAST and forecast_store is not None:
         try:
@@ -222,6 +247,7 @@ def _fetch_symbol_signals(symbol: str, needed: Set[str], yf_svc: Any, forecast_s
 # Delivery
 # ---------------------------------------------------------------------------
 
+
 async def _deliver(user_id: str, title: str, body: str, url: str = "/alerts") -> None:
     """Push to all of a user's subscriptions (+ optional email). Best-effort."""
     try:
@@ -239,20 +265,22 @@ async def _deliver(user_id: str, title: str, body: str, url: str = "/alerts") ->
             except Exception as exc:
                 logger.warning(
                     "[ALERTS] failed to prune dead push subscription %s: %s",
-                    sub.get("endpoint", ""), exc,
+                    sub.get("endpoint", ""),
+                    exc,
                 )
 
     if notifications.email_configured():
         email = await alerts_store.admin_get_user_email(user_id)
         if email:
             await notifications.send_email(
-                email, title,
+                email,
+                title,
                 f"<p style='font-family:sans-serif'>{html.escape(body)}</p>"
                 f"<p style='color:#888;font-size:12px'>FiForesight — manage alerts in the app.</p>",
             )
 
 
-async def _fire(rule: Dict[str, Any], message: str, value: Optional[float], now: datetime) -> None:
+async def _fire(rule: dict[str, Any], message: str, value: float | None, now: datetime) -> None:
     """Record the fire, stamp last_fired, and deliver notifications."""
     rule_id = rule["id"]
     user_id = rule["user_id"]
@@ -267,13 +295,16 @@ async def _fire(rule: Dict[str, Any], message: str, value: Optional[float], now:
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-async def evaluate_alerts(yf_svc: Any, forecast_store: Any, *, now: Optional[datetime] = None) -> Dict[str, int]:
+
+async def evaluate_alerts(
+    yf_svc: Any, forecast_store: Any, *, now: datetime | None = None
+) -> dict[str, int]:
     """Evaluate every active rule and deliver notifications. Returns a summary."""
     now = now or datetime.now(timezone.utc)
     summary = {"rules_checked": 0, "fired": 0, "symbols": 0, "errors": 0, "skipped_cooldown": 0}
 
     rules = await alerts_store.admin_list_active_rules()
-    by_symbol: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    by_symbol: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for r in rules:
         sym = (r.get("symbol") or "").upper()
         if sym:
@@ -289,7 +320,9 @@ async def evaluate_alerts(yf_svc: Any, forecast_store: Any, *, now: Optional[dat
                 timeout=20,
             )
         except Exception as exc:
-            logger.warning("[ALERTS] signal fetch failed for %s: %s — skipping its rules", symbol, exc)
+            logger.warning(
+                "[ALERTS] signal fetch failed for %s: %s — skipping its rules", symbol, exc
+            )
             summary["errors"] += 1
             continue
 
@@ -321,10 +354,12 @@ async def evaluate_alerts(yf_svc: Any, forecast_store: Any, *, now: Optional[dat
 # Daily briefing digest
 # ---------------------------------------------------------------------------
 
-def _pct_change_today(symbol: str) -> Optional[float]:
+
+def _pct_change_today(symbol: str) -> float | None:
     """Today's % change vs previous close (blocking)."""
     try:
         import yfinance as yf
+
         hist = yf.Ticker(symbol).history(period="5d", interval="1d")
         if hist is None or len(hist) < 2:
             return None
@@ -338,6 +373,7 @@ def _pct_change_today(symbol: str) -> Optional[float]:
 async def _market_headline() -> str:
     """One-line market summary, reusing the cached /briefing data when present."""
     from redis_cache import cache_get
+
     cached = await cache_get("briefing:market")
     indices = (cached or {}).get("indices") if isinstance(cached, dict) else None
     if not indices:
@@ -349,6 +385,7 @@ async def _market_headline() -> str:
                 if pct is not None:
                     out.append({"label": label, "change_pct": pct})
             return out
+
         indices = await asyncio.wait_for(asyncio.to_thread(_fetch), timeout=12)
     parts = [
         f"{i['label']} {i['change_pct']:+.2f}%"
@@ -387,13 +424,15 @@ async def _user_movers_line(user_id: str, yf_svc: Any) -> str:
     return f"Your movers — {gainer[0]} {gainer[1]:+.2f}%, {loser[0]} {loser[1]:+.2f}%."
 
 
-async def build_and_send_digest(yf_svc: Any, *, now: Optional[datetime] = None) -> Dict[str, int]:
+async def build_and_send_digest(yf_svc: Any, *, now: datetime | None = None) -> dict[str, int]:
     """Daily push/email digest: market headline + each user's holdings movers."""
     summary = {"users": 0, "delivered": 0, "errors": 0}
     try:
         subs = await alerts_store.admin_list_all_push_subscriptions()
     except Exception as exc:
-        logger.error("[ALERTS] digest: could not load subscriptions — skipping all recipients: %s", exc)
+        logger.error(
+            "[ALERTS] digest: could not load subscriptions — skipping all recipients: %s", exc
+        )
         summary["errors"] += 1
         logger.info("[ALERTS] digest complete (no recipients): %s", summary)
         return summary

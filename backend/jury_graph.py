@@ -16,13 +16,15 @@ All three analyst nodes fire concurrently via LangGraph's parallel fan-out.
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Awaitable, Callable, Dict, List, Optional, TypedDict
+from typing import Annotated, TypedDict
 
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
 
 try:
     import yfinance as yf
+
     _YF_AVAILABLE = True
 except ImportError:  # pragma: no cover - yfinance always present in prod
     yf = None  # type: ignore
@@ -40,7 +42,7 @@ logger = logging.getLogger(__name__)
 # insider transactions, Treasury yield indices) — no paid APIs.
 # ===========================================================================
 
-JURY_TOOLS: List[dict] = [
+JURY_TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
@@ -89,6 +91,7 @@ JURY_TOOLS: List[dict] = [
 # as JSON strings (the shape Groq expects for role=tool messages).
 # ---------------------------------------------------------------------------
 
+
 def _norm_yield(value: float) -> float:
     """Yahoo Treasury indices (^TNX/^FVX/^IRX) quote yield ×10 (e.g. 42.5 = 4.25%).
     Newer feeds sometimes return the raw percent. Normalise to a plain percent."""
@@ -125,11 +128,19 @@ def _put_call_sync(symbol: str) -> dict:
         return {"error": f"no options chain for {symbol}"}
     expiry = expirations[0]
     chain = ticker.option_chain(expiry)
-    put_oi  = float(chain.puts.get("openInterest").fillna(0).sum())  if "openInterest" in chain.puts  else 0.0
-    call_oi = float(chain.calls.get("openInterest").fillna(0).sum()) if "openInterest" in chain.calls else 0.0
-    put_vol  = float(chain.puts.get("volume").fillna(0).sum())  if "volume" in chain.puts  else 0.0
+    put_oi = (
+        float(chain.puts.get("openInterest").fillna(0).sum())
+        if "openInterest" in chain.puts
+        else 0.0
+    )
+    call_oi = (
+        float(chain.calls.get("openInterest").fillna(0).sum())
+        if "openInterest" in chain.calls
+        else 0.0
+    )
+    put_vol = float(chain.puts.get("volume").fillna(0).sum()) if "volume" in chain.puts else 0.0
     call_vol = float(chain.calls.get("volume").fillna(0).sum()) if "volume" in chain.calls else 0.0
-    pcr_oi  = round(put_oi / call_oi, 3)   if call_oi  else None
+    pcr_oi = round(put_oi / call_oi, 3) if call_oi else None
     pcr_vol = round(put_vol / call_vol, 3) if call_vol else None
     primary = pcr_oi if pcr_oi is not None else pcr_vol
     if primary is None:
@@ -161,14 +172,18 @@ def _insider_sync(symbol: str) -> dict:
         if date_col is not None:
             try:
                 ts = row[date_col]
-                ts = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else datetime.fromisoformat(str(ts)[:10])
+                ts = (
+                    ts.to_pydatetime()
+                    if hasattr(ts, "to_pydatetime")
+                    else datetime.fromisoformat(str(ts)[:10])
+                )
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
                 if ts < cutoff:
                     continue
             except Exception as _exc:
                 logger.debug("[INSIDER] date parse error for row: %s", _exc)
-                pass  # undated row — count it rather than drop it
+                # undated row — count it rather than drop it
         text = f"{row.get('Text', '')} {row.get('Transaction', '')}".lower()
         if any(k in text for k in ("purchase", "buy", "acquisition", "bought")):
             buys += 1
@@ -184,7 +199,7 @@ def _insider_sync(symbol: str) -> dict:
 
 
 def _macro_sync() -> dict:
-    def _last_close(sym: str) -> Optional[float]:
+    def _last_close(sym: str) -> float | None:
         try:
             hist = yf.Ticker(sym).history(period="5d")
             if hist is None or hist.empty:
@@ -193,9 +208,9 @@ def _macro_sync() -> dict:
         except Exception:
             return None
 
-    tnx = _last_close("^TNX")   # 10Y Treasury yield
-    fvx = _last_close("^FVX")   # 5Y Treasury yield
-    irx = _last_close("^IRX")   # 13-week T-bill (short-end / fed-funds proxy)
+    tnx = _last_close("^TNX")  # 10Y Treasury yield
+    fvx = _last_close("^FVX")  # 5Y Treasury yield
+    irx = _last_close("^IRX")  # 13-week T-bill (short-end / fed-funds proxy)
     curve = round(tnx - irx, 3) if (tnx is not None and irx is not None) else None
     return {
         "ten_year_yield_pct": tnx,
@@ -230,7 +245,7 @@ def make_tool_dispatcher(symbol: str) -> Callable[[str, dict], Awaitable[str]]:
     the lifetime of the dispatcher so the three analysts sharing it don't each
     re-fetch the same market-wide data (VIX, macro) within one request.
     """
-    cache: Dict[str, str] = {}
+    cache: dict[str, str] = {}
 
     async def dispatch(name: str, args: dict) -> str:
         # Symbol-bearing tools trust the request symbol over model-supplied args
@@ -265,14 +280,21 @@ def make_tool_dispatcher(symbol: str) -> Callable[[str, dict], Awaitable[str]]:
 
 # Every persona vocabulary mapped onto one bullish(+)→bearish(−) bucket so a
 # 2-1 split is detected regardless of which rating words each analyst used.
-_DISSENT_BUCKET: Dict[str, int] = {
-    "Strong Buy": 1, "Buy": 1, "Accumulate": 1, "Low Risk": 1,
-    "Hold": 0, "Medium Risk": 0,
-    "Sell": -1, "Strong Sell": -1, "Distribute": -1, "High Risk": -1,
+_DISSENT_BUCKET: dict[str, int] = {
+    "Strong Buy": 1,
+    "Buy": 1,
+    "Accumulate": 1,
+    "Low Risk": 1,
+    "Hold": 0,
+    "Medium Risk": 0,
+    "Sell": -1,
+    "Strong Sell": -1,
+    "Distribute": -1,
+    "High Risk": -1,
 }
 
 
-def detect_dissent(verdicts: List[dict]) -> Optional[dict]:
+def detect_dissent(verdicts: list[dict]) -> dict | None:
     """Surface the minority opinion on a 2-1 jury split.
 
     Returns ``{"analyst", "verdict", "rationale"}`` for the lone dissenting
@@ -288,7 +310,7 @@ def detect_dissent(verdicts: List[dict]) -> Optional[dict]:
         return None
 
     buckets = [_DISSENT_BUCKET.get(v.get("rating", "Hold"), 0) for v in verdicts]
-    counts: Dict[int, int] = {}
+    counts: dict[int, int] = {}
     for b in buckets:
         counts[b] = counts.get(b, 0) + 1
 
@@ -299,8 +321,8 @@ def detect_dissent(verdicts: List[dict]) -> Optional[dict]:
     minority_bucket = next(b for b, c in counts.items() if c == 1)
     minority = verdicts[buckets.index(minority_bucket)]
     return {
-        "analyst":   minority.get("title", minority.get("id", "Analyst")),
-        "verdict":   minority.get("rating", "Hold"),
+        "analyst": minority.get("title", minority.get("id", "Analyst")),
+        "verdict": minority.get("rating", "Hold"),
         "rationale": minority.get("note", ""),
     }
 
@@ -309,22 +331,26 @@ def detect_dissent(verdicts: List[dict]) -> Optional[dict]:
 # State
 # ---------------------------------------------------------------------------
 
-def _merge_verdicts(a: Dict, b: Dict) -> Dict:
+
+def _merge_verdicts(a: dict, b: dict) -> dict:
     """Reducer: merge two partial verdict dicts (for parallel fan-out)."""
     return {**a, **b}
 
 
 class JuryState(TypedDict):
-    ctx: str                                              # shared market context
-    verdicts: Annotated[Dict[str, dict], _merge_verdicts] # analyst_id → verdict
-    errors:   Dict[str, str]                              # analyst_id → error msg (diagnostic)
+    ctx: str  # shared market context
+    verdicts: Annotated[dict[str, dict], _merge_verdicts]  # analyst_id → verdict
+    errors: dict[str, str]  # analyst_id → error msg (diagnostic)
 
 
 # ---------------------------------------------------------------------------
 # Node factory — one async node per analyst persona
 # ---------------------------------------------------------------------------
 
-def _make_analyst_node(persona: dict, analyst_jury_svc, tools=None, tool_dispatcher=None, force_tools=False):
+
+def _make_analyst_node(
+    persona: dict, analyst_jury_svc, tools=None, tool_dispatcher=None, force_tools=False
+):
     """
     Returns an async graph node function pinned to `persona`.
     The node writes its verdict (or error fallback) into state["verdicts"].
@@ -342,8 +368,10 @@ def _make_analyst_node(persona: dict, analyst_jury_svc, tools=None, tool_dispatc
         )
         try:
             verdict = await analyst_jury_svc.get_analyst_verdict(
-                persona, state["ctx"],
-                tools=tools, tool_dispatcher=tool_dispatcher,
+                persona,
+                state["ctx"],
+                tools=tools,
+                tool_dispatcher=tool_dispatcher,
                 force_tools=force_tools,
             )
             logger.info(
@@ -353,32 +381,36 @@ def _make_analyst_node(persona: dict, analyst_jury_svc, tools=None, tool_dispatc
             )
             return {"verdicts": {pid: verdict}}
         except Exception as exc:
-            logger.error(f"[JURY-GRAPH/{pid}] ✗ node failed: {exc}", exc_info=True)
+            logger.exception(f"[JURY-GRAPH/{pid}] ✗ node failed: {type(exc).__name__}")
             # Use the persona's own fallback_note as the base so each analyst card
             # tells users specifically which lens failed, then append a reason suffix.
             _base = persona.get("fallback_note", "Analysis unavailable.")
             exc_str = str(exc)
             if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
                 fallback_note = _base + " (request timed out)"
-            elif "429" in exc_str or "rate_limit" in exc_str.lower() or "rate limit" in exc_str.lower():
+            elif (
+                "429" in exc_str
+                or "rate_limit" in exc_str.lower()
+                or "rate limit" in exc_str.lower()
+            ):
                 fallback_note = _base + " (daily rate limit reached)"
             else:
                 fallback_note = _base
             fallback = {
-                "id":          persona["id"],
-                "avatar":      persona["avatar"],
-                "title":       persona["title"],
+                "id": persona["id"],
+                "avatar": persona["avatar"],
+                "title": persona["title"],
                 "model_label": persona["model_label"],
-                "color":       persona["color"],
-                "rating":      "Hold",
-                "note":        fallback_note,
-                "confidence":  25,
-                "model":       "error",
-                "tools_used":  [],
+                "color": persona["color"],
+                "rating": "Hold",
+                "note": fallback_note,
+                "confidence": 25,
+                "model": "error",
+                "tools_used": [],
             }
             return {
                 "verdicts": {pid: fallback},
-                "errors":   {pid: str(exc)},
+                "errors": {pid: str(exc)},
             }
 
     _node.__name__ = f"analyst_{pid.lower().replace('-', '_')}"
@@ -389,7 +421,10 @@ def _make_analyst_node(persona: dict, analyst_jury_svc, tools=None, tool_dispatc
 # Graph builder
 # ---------------------------------------------------------------------------
 
-def build_jury_graph(analyst_jury_svc, personas: List[dict], tools=None, tool_dispatcher=None, force_tools=False):
+
+def build_jury_graph(
+    analyst_jury_svc, personas: list[dict], tools=None, tool_dispatcher=None, force_tools=False
+):
     """
     Build and compile the jury StateGraph.
 
@@ -403,7 +438,9 @@ def build_jury_graph(analyst_jury_svc, personas: List[dict], tools=None, tool_di
     node_names = []
     for persona in personas:
         name = f"analyst_{persona['id'].lower().replace('-', '_')}"
-        builder.add_node(name, _make_analyst_node(persona, analyst_jury_svc, tools, tool_dispatcher, force_tools))
+        builder.add_node(
+            name, _make_analyst_node(persona, analyst_jury_svc, tools, tool_dispatcher, force_tools)
+        )
         builder.add_edge(START, name)
         builder.add_edge(name, END)
         node_names.append(name)
@@ -420,9 +457,10 @@ def build_jury_graph(analyst_jury_svc, personas: List[dict], tools=None, tool_di
 # Fallback executor (no LangGraph)
 # ---------------------------------------------------------------------------
 
+
 async def _run_nodes_direct(
     analyst_jury_svc,
-    personas: List[dict],
+    personas: list[dict],
     ctx: str,
     tools=None,
     tool_dispatcher=None,
@@ -442,13 +480,14 @@ async def _run_nodes_direct(
     the deployed image, so dropping them silently disables the entire
     tool-using jury in production.
     """
-    nodes = [_make_analyst_node(p, analyst_jury_svc, tools, tool_dispatcher, force_tools) for p in personas]
+    nodes = [
+        _make_analyst_node(p, analyst_jury_svc, tools, tool_dispatcher, force_tools)
+        for p in personas
+    ]
     base_state: JuryState = {"ctx": ctx, "verdicts": {}, "errors": {}}
-    results = await asyncio.gather(
-        *(node(base_state) for node in nodes), return_exceptions=True
-    )
-    verdicts: Dict[str, dict] = {}
-    errors: Dict[str, str] = {}
+    results = await asyncio.gather(*(node(base_state) for node in nodes), return_exceptions=True)
+    verdicts: dict[str, dict] = {}
+    errors: dict[str, str] = {}
     for persona, res in zip(personas, results):
         if isinstance(res, BaseException):
             errors[persona["id"]] = str(res)
@@ -462,14 +501,15 @@ async def _run_nodes_direct(
 # Public entry point
 # ---------------------------------------------------------------------------
 
+
 async def run_jury_graph(
     analyst_jury_svc,
-    personas: List[dict],
+    personas: list[dict],
     ctx: str,
-    symbol: Optional[str] = None,
+    symbol: str | None = None,
     enable_tools: bool = True,
     force_tools: bool = False,
-) -> List[dict]:
+) -> list[dict]:
     """
     Run the jury graph and return verdicts in the same order as `personas`.
 
@@ -490,15 +530,12 @@ async def run_jury_graph(
     graph = build_jury_graph(analyst_jury_svc, personas, tools, tool_dispatcher, force_tools)
 
     initial_state: JuryState = {
-        "ctx":      ctx,
+        "ctx": ctx,
         "verdicts": {},
-        "errors":   {},
+        "errors": {},
     }
 
-    logger.info(
-        f"[JURY-GRAPH] Invoking — {len(personas)} analysts, "
-        f"ctx_chars={len(ctx)}"
-    )
+    logger.info(f"[JURY-GRAPH] Invoking — {len(personas)} analysts, ctx_chars={len(ctx)}")
     try:
         final_state = await graph.ainvoke(initial_state)
     except Exception as exc:
@@ -506,10 +543,9 @@ async def run_jury_graph(
         # image and raises "FunctionWrapperBase() missing required argument
         # 'wrapper'", which would degrade the whole jury to Hold/25. Fall back to
         # running the same nodes directly so the jury still produces real verdicts.
-        logger.error(
-            f"[JURY-GRAPH] graph.ainvoke failed ({exc}) — "
+        logger.exception(
+            f"[JURY-GRAPH] graph.ainvoke failed ({type(exc).__name__}) — "
             f"falling back to direct concurrent execution",
-            exc_info=True,
         )
         final_state = await _run_nodes_direct(
             analyst_jury_svc, personas, ctx, tools, tool_dispatcher, force_tools
@@ -528,16 +564,16 @@ async def run_jury_graph(
             # Safety: should never happen if node ran
             logger.error(f"[JURY-GRAPH] Missing verdict for {pid} — inserting fallback")
             v = {
-                "id":          persona["id"],
-                "avatar":      persona["avatar"],
-                "title":       persona["title"],
+                "id": persona["id"],
+                "avatar": persona["avatar"],
+                "title": persona["title"],
                 "model_label": persona["model_label"],
-                "color":       persona["color"],
-                "rating":      "Hold",
-                "note":        "Analysis unavailable.",
-                "confidence":  25,
-                "model":       "error",
-                "tools_used":  [],
+                "color": persona["color"],
+                "rating": "Hold",
+                "note": "Analysis unavailable.",
+                "confidence": 25,
+                "model": "error",
+                "tools_used": [],
             }
         verdicts.append(v)
 

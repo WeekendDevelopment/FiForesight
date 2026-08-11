@@ -2,11 +2,12 @@
 
 Crypto pairs route to Coinbase (free L2 depth); stocks route to Alpaca (L1).
 """
-import pytest
-from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock, AsyncMock
+
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import main
+import pytest
+from fastapi.testclient import TestClient
 from routers import market
 
 
@@ -18,8 +19,10 @@ def client():
     # Stub the Redis cache for the whole test run — the endpoint imports
     # cache_get/cache_set from redis_cache at call-time, so patching the
     # source module keeps the suite network-free and free of stale reads.
-    with patch("redis_cache.cache_get", AsyncMock(return_value=None)), \
-         patch("redis_cache.cache_set", AsyncMock()):
+    with (
+        patch("redis_cache.cache_get", AsyncMock(return_value=None)),
+        patch("redis_cache.cache_set", AsyncMock()),
+    ):
         yield TestClient(main.app, raise_server_exceptions=False)
 
 
@@ -40,8 +43,10 @@ def _mock_async_client(json_payload):
 
 class TestOrderBookEndpoint:
     def test_returns_503_when_key_missing(self, client):
-        with patch.object(market.Config, "ALPACA_API_KEY", ""), \
-             patch.object(market.Config, "ALPACA_SECRET_KEY", ""):
+        with (
+            patch.object(market.Config, "ALPACA_API_KEY", ""),
+            patch.object(market.Config, "ALPACA_SECRET_KEY", ""),
+        ):
             resp = client.get("/orderbook/NVDA")
         assert resp.status_code == 503
         assert "not configured" in resp.json()["detail"]
@@ -51,13 +56,17 @@ class TestOrderBookEndpoint:
             "symbol": "NVDA",
             "quote": {
                 "t": "2025-05-22T14:32:11Z",
-                "bp": 135.20, "bs": 5,
-                "ap": 135.25, "as": 3,
+                "bp": 135.20,
+                "bs": 5,
+                "ap": 135.25,
+                "as": 3,
             },
         }
-        with patch.object(market.Config, "ALPACA_API_KEY", "key"), \
-             patch.object(market.Config, "ALPACA_SECRET_KEY", "secret"), \
-             patch("routers.market.httpx.AsyncClient", return_value=_mock_async_client(payload)):
+        with (
+            patch.object(market.Config, "ALPACA_API_KEY", "key"),
+            patch.object(market.Config, "ALPACA_SECRET_KEY", "secret"),
+            patch("routers.market.httpx.AsyncClient", return_value=_mock_async_client(payload)),
+        ):
             resp = client.get("/orderbook/nvda")
 
         assert resp.status_code == 200
@@ -72,9 +81,11 @@ class TestOrderBookEndpoint:
 
     def test_empty_quote_returns_404(self, client):
         payload = {"symbol": "ZZZZ", "quote": {}}
-        with patch.object(market.Config, "ALPACA_API_KEY", "key"), \
-             patch.object(market.Config, "ALPACA_SECRET_KEY", "secret"), \
-             patch("routers.market.httpx.AsyncClient", return_value=_mock_async_client(payload)):
+        with (
+            patch.object(market.Config, "ALPACA_API_KEY", "key"),
+            patch.object(market.Config, "ALPACA_SECRET_KEY", "secret"),
+            patch("routers.market.httpx.AsyncClient", return_value=_mock_async_client(payload)),
+        ):
             resp = client.get("/orderbook/ZZZZ")
         assert resp.status_code == 404
 
@@ -82,7 +93,9 @@ class TestOrderBookEndpoint:
 class TestBuildOrderBook:
     def test_one_sided_book_imbalance(self):
         # Only a bid present → imbalance should be 1.0, spread 0.
-        result = market._build_orderbook("AAPL", {"quote": {"bp": 100.0, "bs": 10, "ap": 0, "as": 0}})
+        result = market._build_orderbook(
+            "AAPL", {"quote": {"bp": 100.0, "bs": 10, "ap": 0, "as": 0}}
+        )
         assert result is not None
         assert result["bids"] == [{"price": 100.0, "size": 10}]
         assert result["asks"] == []
@@ -107,9 +120,11 @@ class TestCryptoRouting:
             "bids": [["60000.12", "0.5", 2], ["59999.00", "1.2", 5]],
             "asks": [["60001.00", "0.3", 1], ["60002.50", "0.8", 3]],
         }
-        with patch.object(market.Config, "ALPACA_API_KEY", ""), \
-             patch.object(market.Config, "ALPACA_SECRET_KEY", ""), \
-             patch("routers.market.httpx.AsyncClient", return_value=_mock_async_client(payload)):
+        with (
+            patch.object(market.Config, "ALPACA_API_KEY", ""),
+            patch.object(market.Config, "ALPACA_SECRET_KEY", ""),
+            patch("routers.market.httpx.AsyncClient", return_value=_mock_async_client(payload)),
+        ):
             resp = client.get("/orderbook/BTC-USD")
 
         assert resp.status_code == 200

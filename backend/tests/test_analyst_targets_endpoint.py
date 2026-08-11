@@ -4,17 +4,18 @@ Tests for the Analyst Price Targets endpoint (Feature 21):
 
 yfinance is mocked — no network required.
 """
+
 import importlib as _il
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
 from starlette.requests import Request
 
-from backend.routers import market  # noqa: E402
+from backend.routers import market
 
 _deps = _il.import_module("dependencies")
 limiter = _deps.limiter
@@ -43,22 +44,37 @@ def _mock_ticker(targets=None, recs_df=None, info=None):
 class TestAnalystTargetsEndpoint:
     def test_analyst_targets_returns_expected_keys(self):
         targets = {
-            "current": 226.5, "low": 200.0, "mean": 255.0,
-            "median": 250.0, "high": 310.0,
+            "current": 226.5,
+            "low": 200.0,
+            "mean": 255.0,
+            "median": 250.0,
+            "high": 310.0,
         }
-        recs_df = pd.DataFrame([
-            {"period": "0m", "strongBuy": 12, "buy": 20, "hold": 8, "sell": 2, "strongSell": 1},
-        ])
+        recs_df = pd.DataFrame(
+            [
+                {"period": "0m", "strongBuy": 12, "buy": 20, "hold": 8, "sell": 2, "strongSell": 1},
+            ]
+        )
         info = {"numberOfAnalystOpinions": 43}
-        with patch.object(market.yf, "Ticker",
-                          MagicMock(return_value=_mock_ticker(targets, recs_df, info))):
+        with patch.object(
+            market.yf, "Ticker", MagicMock(return_value=_mock_ticker(targets, recs_df, info))
+        ):
             resp = client.get("/analyst-targets/AAPL")
         assert resp.status_code == 200
         body = resp.json()
         for key in (
-            "symbol", "currentPrice", "targetLow", "targetMean", "targetMedian",
-            "targetHigh", "numberOfAnalysts",
-            "strongBuy", "buy", "hold", "sell", "strongSell",
+            "symbol",
+            "currentPrice",
+            "targetLow",
+            "targetMean",
+            "targetMedian",
+            "targetHigh",
+            "numberOfAnalysts",
+            "strongBuy",
+            "buy",
+            "hold",
+            "sell",
+            "strongSell",
         ):
             assert key in body
         assert body["symbol"] == "AAPL"
@@ -76,8 +92,9 @@ class TestAnalystTargetsEndpoint:
         # yfinance hands back nothing: no targets, no recommendations, empty info.
         # The endpoint degrades to a 200 with null targets + zero rating counts
         # (graceful fallback — the frontend renders its empty state).
-        with patch.object(market.yf, "Ticker",
-                          MagicMock(return_value=_mock_ticker(None, None, {}))):
+        with patch.object(
+            market.yf, "Ticker", MagicMock(return_value=_mock_ticker(None, None, {}))
+        ):
             resp = client.get("/analyst-targets/ZZZZ")
         assert resp.status_code == 200
         body = resp.json()
@@ -90,8 +107,7 @@ class TestAnalystTargetsEndpoint:
 
     def test_analyst_targets_returns_502_on_fetch_error(self):
         # A hard yfinance failure surfaces as a 502, never a 500 / traceback.
-        with patch.object(market.yf, "Ticker",
-                          MagicMock(side_effect=RuntimeError("network down"))):
+        with patch.object(market.yf, "Ticker", MagicMock(side_effect=RuntimeError("network down"))):
             resp = client.get("/analyst-targets/AAPL")
         assert resp.status_code == 502
 
@@ -99,11 +115,15 @@ class TestAnalystTargetsEndpoint:
         # yfinance can return NaN/inf — these must become null (Starlette serializes
         # with allow_nan=False, so an unsanitized NaN would 500 the response).
         targets = {
-            "current": float("nan"), "low": float("inf"), "mean": 255.0,
-            "median": 250.0, "high": float("-inf"),
+            "current": float("nan"),
+            "low": float("inf"),
+            "mean": 255.0,
+            "median": 250.0,
+            "high": float("-inf"),
         }
-        with patch.object(market.yf, "Ticker",
-                          MagicMock(return_value=_mock_ticker(targets, None, {}))):
+        with patch.object(
+            market.yf, "Ticker", MagicMock(return_value=_mock_ticker(targets, None, {}))
+        ):
             resp = client.get("/analyst-targets/AAPL")
         assert resp.status_code == 200
         body = resp.json()

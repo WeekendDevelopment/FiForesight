@@ -8,21 +8,57 @@ Kept deliberately small so the screener can build its snapshot on-demand
 
 SCREENER_UNIVERSE: list[str] = [
     # Magnificent 7
-    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA",
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "GOOGL",
+    "AMZN",
+    "META",
+    "TSLA",
     # Semiconductors
-    "AMD", "INTC", "AVGO", "QCOM", "MU", "ARM",
+    "AMD",
+    "INTC",
+    "AVGO",
+    "QCOM",
+    "MU",
+    "ARM",
     # Financials
-    "JPM", "BAC", "GS", "MS", "BRK-B", "V", "MA",
+    "JPM",
+    "BAC",
+    "GS",
+    "MS",
+    "BRK-B",
+    "V",
+    "MA",
     # Healthcare
-    "JNJ", "UNH", "PFE", "ABBV", "LLY", "MRK",
+    "JNJ",
+    "UNH",
+    "PFE",
+    "ABBV",
+    "LLY",
+    "MRK",
     # Energy
-    "XOM", "CVX", "COP",
+    "XOM",
+    "CVX",
+    "COP",
     # Consumer
-    "WMT", "COST", "HD", "NKE", "MCD",
+    "WMT",
+    "COST",
+    "HD",
+    "NKE",
+    "MCD",
     # Industrials
-    "CAT", "BA", "GE", "HON",
+    "CAT",
+    "BA",
+    "GE",
+    "HON",
     # Telecom / Media
-    "NFLX", "DIS", "CMCSA", "T",
+    "NFLX",
+    "DIS",
+    "CMCSA",
+    "T",
     # ETFs (sector proxies)
-    "SPY", "QQQ", "IWM",
+    "SPY",
+    "QQQ",
+    "IWM",
 ]

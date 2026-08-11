@@ -1,14 +1,12 @@
 # backend/routers/simulation.py
 import asyncio
 import logging
-from typing import List, Optional
 
+from dependencies import analyst_jury_svc, get_user_id, influx_svc, yf_svc
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, field_validator
-
 from models import run_ensemble_forecast
-from simulation_service import suggest_portfolio, get_portfolio_performance
-from dependencies import influx_svc, yf_svc, analyst_jury_svc, get_user_id
+from pydantic import BaseModel, Field, field_validator
+from simulation_service import get_portfolio_performance, suggest_portfolio
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -18,10 +16,11 @@ logger = logging.getLogger(__name__)
 # Simulation endpoints
 # ---------------------------------------------------------------------------
 
+
 class SimSuggestRequest(BaseModel):
-    sectors:    List[str]
-    risk_level: str   = "moderate"
-    budget:     float = Field(default=100_000.0, gt=0)
+    sectors: list[str]
+    risk_level: str = "moderate"
+    budget: float = Field(default=100_000.0, gt=0)
 
     @field_validator("risk_level")
     @classmethod
@@ -33,24 +32,25 @@ class SimSuggestRequest(BaseModel):
 
 
 class SimHolding(BaseModel):
-    symbol:        str
-    name:          Optional[str] = None
-    shares:        int   = Field(ge=0)
-    buyPrice:      float = Field(gt=0)
+    symbol: str
+    name: str | None = None
+    shares: int = Field(ge=0)
+    buyPrice: float = Field(gt=0)
     allocationUsd: float = 0.0
 
 
 class SimPerfRequest(BaseModel):
-    holdings:      List[SimHolding]
-    start_date:    str
+    holdings: list[SimHolding]
+    start_date: str
     spy_buy_price: float = Field(gt=0)
-    budget:        float = Field(default=100_000.0, gt=0)
-    interval:      str   = "1d"
+    budget: float = Field(default=100_000.0, gt=0)
+    interval: str = "1d"
 
     @field_validator("start_date")
     @classmethod
     def validate_start_date(cls, v: str) -> str:
         from datetime import datetime, timezone
+
         try:
             dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
         except ValueError as exc:
@@ -104,10 +104,11 @@ async def simulation_performance(req: SimPerfRequest):
 # Simulation state endpoints  (env-scoped, InfluxDB-backed)
 # ---------------------------------------------------------------------------
 
+
 class SimStateSaveRequest(BaseModel):
     sim_id: str
-    env:    str
-    state:  dict
+    env: str
+    state: dict
 
 
 @router.post("/simulation/state")
@@ -146,7 +147,9 @@ async def simulation_state_list(env: str = Query(...), user_id: str = Depends(ge
 
 
 @router.delete("/simulation/state/{sim_id}")
-async def simulation_state_delete(sim_id: str, env: str = Query(...), user_id: str = Depends(get_user_id)):
+async def simulation_state_delete(
+    sim_id: str, env: str = Query(...), user_id: str = Depends(get_user_id)
+):
     try:
         influx_svc._validate_sim_env(env)
         influx_svc._validate_sim_id(sim_id)

@@ -22,6 +22,7 @@ required to test predictions.
 """
 
 import os
+
 import httpx
 from fastmcp import FastMCP
 

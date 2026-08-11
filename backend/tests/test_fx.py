@@ -5,14 +5,15 @@ Offline: yfinance is patched at ``fx.yf``; Redis is inert in tests (no pool →
 ``cache_get`` returns None, ``cache_set`` no-ops), with explicit patches where
 a test asserts cache behaviour.
 """
+
 import asyncio
-from typing import Any, Coroutine
+from collections.abc import Coroutine
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import fx
 import pandas as pd
 import pytest
-
-import fx
 from routers.predict import PredictionResponse, _resolve_currency
 
 
@@ -31,6 +32,7 @@ def _ticker_returning(close: float) -> MagicMock:
 
 
 # ── get_usd_rate ─────────────────────────────────────────────────────────────
+
 
 def test_usd_identity() -> None:
     """USD (and missing currency) short-circuit to 1.0 without any fetch."""
@@ -61,8 +63,10 @@ def test_failure_returns_none() -> None:
     """A fetch failure yields None (degrade to native display) and caches nothing."""
     boom = MagicMock()
     boom.history.side_effect = RuntimeError("yfinance down")
-    with patch.object(fx.yf, "Ticker", return_value=boom), \
-         patch("redis_cache.cache_set", new=AsyncMock()) as cache_set:
+    with (
+        patch.object(fx.yf, "Ticker", return_value=boom),
+        patch("redis_cache.cache_set", new=AsyncMock()) as cache_set,
+    ):
         assert _run(fx.get_usd_rate("EUR")) is None
         cache_set.assert_not_called()
 
@@ -76,23 +80,37 @@ def test_empty_history_returns_none() -> None:
 
 def test_cache_hit_skips_fetch() -> None:
     """A cached rate is returned without touching yfinance."""
-    with patch("redis_cache.cache_get", new=AsyncMock(return_value={"rate": 0.5})), \
-         patch.object(fx.yf, "Ticker") as ticker:
+    with (
+        patch("redis_cache.cache_get", new=AsyncMock(return_value={"rate": 0.5})),
+        patch.object(fx.yf, "Ticker") as ticker,
+    ):
         assert _run(fx.get_usd_rate("GBp")) == 0.5
         ticker.assert_not_called()
 
 
 # ── /predict payload plumbing ────────────────────────────────────────────────
 
+
 def _minimal_response(**overrides: object) -> PredictionResponse:
-    base = dict(
-        symbol="BP.L", currentPrice="516.50", rsi="55.00",
-        prediction={"highRange": "520.00", "lowRange": "510.00", "trend": "Neutral"},
-        analystNote="n", confidence="medium", history=[], forecastDays=[],
-        modelStats={}, metrics={}, news=[], trending=[], indicators={},
-        lastUpdated="2026-01-01T00:00:00", juryAnalysts=[], modelWeights={},
-        sentiment={},
-    )
+    base = {
+        "symbol": "BP.L",
+        "currentPrice": "516.50",
+        "rsi": "55.00",
+        "prediction": {"highRange": "520.00", "lowRange": "510.00", "trend": "Neutral"},
+        "analystNote": "n",
+        "confidence": "medium",
+        "history": [],
+        "forecastDays": [],
+        "modelStats": {},
+        "metrics": {},
+        "news": [],
+        "trending": [],
+        "indicators": {},
+        "lastUpdated": "2026-01-01T00:00:00",
+        "juryAnalysts": [],
+        "modelWeights": {},
+        "sentiment": {},
+    }
     base.update(overrides)
     return PredictionResponse(**base)
 

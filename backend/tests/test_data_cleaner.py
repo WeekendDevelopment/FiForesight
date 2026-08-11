@@ -6,6 +6,7 @@ The 4σ outlier step uses rolling(min_periods=5); with <5 bars the rolling band
 is NaN, and a NaN comparison is False, so without a guard every row gets masked
 out → empty df → /predict spuriously 404s. These tests lock the fix in.
 """
+
 import pandas as pd
 
 from backend.services import DataCleaner

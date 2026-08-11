@@ -1,13 +1,11 @@
-# backend/models.py  # noqa
+# backend/models.py
 import logging
-import pandas as pd
-import numpy as np
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
-from typing import List, Dict, Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
 import newrelic.agent
+import numpy as np
+import pandas as pd
 
 # Suppress Prophet's "Importing plotly failed" warning — we don't use Prophet's
 # built-in plot() / plot_components() methods; all charting is done by Recharts.
@@ -16,9 +14,10 @@ logging.getLogger("prophet.plot").setLevel(logging.ERROR)
 
 MODELS_AVAILABLE = False
 try:
-    from statsmodels.tsa.statespace.sarimax import SARIMAX
     from prophet import Prophet
     from sklearn.ensemble import RandomForestRegressor
+    from statsmodels.tsa.statespace.sarimax import SARIMAX
+
     MODELS_AVAILABLE = True
     logging.getLogger(__name__).info(
         "[MODELS] ✓ All ML packages loaded — "
@@ -40,33 +39,35 @@ FORECAST_DAYS = 5
 # ---------------------------------------------------------------------------
 @newrelic.agent.function_trace()
 def calculate_macd(
-    prices: List[float],
+    prices: list[float],
     fast: int = 12,
     slow: int = 26,
     signal: int = 9,
-) -> Dict:
+) -> dict:
     """Returns per-point MACD line, signal line, and histogram lists."""
     logger.info(
         f"[MACD] calculate_macd — input: {len(prices)} prices | "
         f"params: fast_ema={fast}, slow_ema={slow}, signal_ema={signal}"
     )
-    series      = pd.Series(prices)
-    ema_fast    = series.ewm(span=fast,   adjust=False).mean()
-    ema_slow    = series.ewm(span=slow,   adjust=False).mean()
-    macd_line   = ema_fast - ema_slow
+    series = pd.Series(prices)
+    ema_fast = series.ewm(span=fast, adjust=False).mean()
+    ema_slow = series.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
     signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    histogram   = macd_line - signal_line
+    histogram = macd_line - signal_line
     result = {
-        "macd":   [round(v, 4) if not np.isnan(v) else None for v in macd_line],
+        "macd": [round(v, 4) if not np.isnan(v) else None for v in macd_line],
         "signal": [round(v, 4) if not np.isnan(v) else None for v in signal_line],
-        "hist":   [round(v, 4) if not np.isnan(v) else None for v in histogram],
+        "hist": [round(v, 4) if not np.isnan(v) else None for v in histogram],
     }
-    last_macd   = next((v for v in reversed(result["macd"])   if v is not None), None)
+    last_macd = next((v for v in reversed(result["macd"]) if v is not None), None)
     last_signal = next((v for v in reversed(result["signal"]) if v is not None), None)
-    last_hist   = next((v for v in reversed(result["hist"])   if v is not None), None)
+    last_hist = next((v for v in reversed(result["hist"]) if v is not None), None)
     label = (
-        "Bullish" if last_macd is not None and last_signal is not None and last_macd > last_signal
-        else "Bearish" if last_macd is not None and last_signal is not None
+        "Bullish"
+        if last_macd is not None and last_signal is not None and last_macd > last_signal
+        else "Bearish"
+        if last_macd is not None and last_signal is not None
         else "N/A"
     )
     logger.info(
@@ -75,12 +76,13 @@ def calculate_macd(
     )
     return result
 
+
 @newrelic.agent.function_trace()
 def calculate_bollinger_bands(
-    prices: List[float],
+    prices: list[float],
     window: int = 20,
     num_std: float = 2.0,
-) -> Dict:
+) -> dict:
     """Returns per-point upper, middle, lower Bollinger Band lists."""
     logger.info(
         f"[BB] calculate_bollinger_bands — input: {len(prices)} prices | "
@@ -88,37 +90,38 @@ def calculate_bollinger_bands(
     )
     series = pd.Series(prices)
     middle = series.rolling(window=window).mean()
-    std    = series.rolling(window=window).std()
-    upper  = middle + num_std * std
-    lower  = middle - num_std * std
+    std = series.rolling(window=window).std()
+    upper = middle + num_std * std
+    lower = middle - num_std * std
 
     def _clean(s):
         return [round(v, 4) if not np.isnan(v) else None for v in s]
 
     result = {"upper": _clean(upper), "middle": _clean(middle), "lower": _clean(lower)}
-    last_upper  = next((v for v in reversed(result["upper"])  if v is not None), None)
+    last_upper = next((v for v in reversed(result["upper"]) if v is not None), None)
     last_middle = next((v for v in reversed(result["middle"]) if v is not None), None)
-    last_lower  = next((v for v in reversed(result["lower"])  if v is not None), None)
+    last_lower = next((v for v in reversed(result["lower"]) if v is not None), None)
     logger.info(
         f"[BB] ✓ complete — latest bands: upper={last_upper}, mid={last_middle}, lower={last_lower}"
     )
     return result
 
+
 @newrelic.agent.function_trace()
-def calculate_sma_series(prices: List[float], period: int) -> List:
+def calculate_sma_series(prices: list[float], period: int) -> list:
     """Returns SMA array for given period, None where insufficient data."""
     logger.info(
         f"[SMA{period}] calculate_sma_series — input: {len(prices)} prices, period={period}"
     )
     series = pd.Series(prices)
-    sma    = series.rolling(window=period).mean()
+    sma = series.rolling(window=period).mean()
     result = [round(v, 4) if not np.isnan(v) else None for v in sma]
     last_val = next((v for v in reversed(result) if v is not None), None)
     logger.info(f"[SMA{period}] ✓ complete — latest SMA{period}={last_val}")
     return result
 
 
-def calculate_ema_series(prices: List[float], period: int) -> List:
+def calculate_ema_series(prices: list[float], period: int) -> list:
     """
     Returns EMA array for given period, None where insufficient data.
     Uses adjust=False (recursive EMA) and min_periods=period so early
@@ -129,34 +132,34 @@ def calculate_ema_series(prices: List[float], period: int) -> List:
         f"[EMA{period}] calculate_ema_series — input: {len(prices)} prices, period={period}"
     )
     series = pd.Series(prices)
-    ema    = series.ewm(span=period, adjust=False, min_periods=period).mean()
+    ema = series.ewm(span=period, adjust=False, min_periods=period).mean()
     result = [round(float(v), 4) if not np.isnan(v) else None for v in ema]
     last_val = next((v for v in reversed(result) if v is not None), None)
     logger.info(f"[EMA{period}] ✓ complete — latest EMA{period}={last_val}")
     return result
 
+
 @newrelic.agent.function_trace()
-def calculate_rsi_series(prices: List[float], periods: int = 14) -> List:
+def calculate_rsi_series(prices: list[float], periods: int = 14) -> list:
     """
     Returns full RSI series (same length as prices), None where insufficient data.
     Uses EWM (Wilder smoothing: alpha = 1/periods, equivalent to com = periods-1).
     """
-    logger.info(
-        f"[RSI] calculate_rsi_series — input: {len(prices)} prices, periods={periods}"
-    )
+    logger.info(f"[RSI] calculate_rsi_series — input: {len(prices)} prices, periods={periods}")
     series = pd.Series(prices)
-    delta  = series.diff()
-    gain   = delta.where(delta > 0, 0).ewm(com=periods - 1, min_periods=periods).mean()
-    loss   = (-delta.where(delta < 0, 0)).ewm(com=periods - 1, min_periods=periods).mean()
-    loss   = loss.replace(0, 1e-9)
-    rsi    = 100 - (100 / (1 + gain / loss))
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0).ewm(com=periods - 1, min_periods=periods).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(com=periods - 1, min_periods=periods).mean()
+    loss = loss.replace(0, 1e-9)
+    rsi = 100 - (100 / (1 + gain / loss))
     result = [round(float(v), 2) if not pd.isna(v) else None for v in rsi]
     last_rsi = next((v for v in reversed(result) if v is not None), None)
     logger.info(f"[RSI] ✓ rsi_series complete — latest RSI={last_rsi}")
     return result
 
+
 @newrelic.agent.function_trace()
-def calculate_rsi(prices: List[float], periods: int = 14) -> float:
+def calculate_rsi(prices: list[float], periods: int = 14) -> float:
     """
     Scalar RSI using EWM (Wilder smoothing) — identical method to calculate_rsi_series
     so both functions return consistent values for the same input.
@@ -164,9 +167,7 @@ def calculate_rsi(prices: List[float], periods: int = 14) -> float:
     FIX: was previously using simple rolling mean (different algorithm → 7pt divergence
     vs the EWM series used for charting).  Both now use ewm(com=periods-1).
     """
-    logger.info(
-        f"[RSI] calculate_rsi (scalar) — input: {len(prices)} prices, periods={periods}"
-    )
+    logger.info(f"[RSI] calculate_rsi (scalar) — input: {len(prices)} prices, periods={periods}")
     if len(prices) < periods + 1:
         logger.warning(
             f"[RSI] Insufficient data ({len(prices)} rows < {periods + 1} required) — "
@@ -174,11 +175,11 @@ def calculate_rsi(prices: List[float], periods: int = 14) -> float:
         )
         return 50.0
     series = pd.Series(prices)
-    delta  = series.diff()
-    gain   = delta.where(delta > 0, 0).ewm(com=periods - 1, min_periods=periods).mean()
-    loss   = (-delta.where(delta < 0, 0)).ewm(com=periods - 1, min_periods=periods).mean()
-    g      = gain.iloc[-1]
-    ls     = loss.iloc[-1]
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0).ewm(com=periods - 1, min_periods=periods).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(com=periods - 1, min_periods=periods).mean()
+    g = gain.iloc[-1]
+    ls = loss.iloc[-1]
     if pd.isna(g) or pd.isna(ls):
         logger.warning("[RSI] NaN in gain/loss — returning neutral 50.0")
         return 50.0
@@ -192,16 +193,17 @@ def calculate_rsi(prices: List[float], periods: int = 14) -> float:
     logger.info(f"[RSI] ✓ RSI={rsi_val:.2f} (ewm_gain={g:.4f}, ewm_loss={ls:.4f})")
     return rsi_val
 
+
 @newrelic.agent.function_trace()
 def calculate_support_resistance(
-    closes: List[float],
-    highs: Optional[List[float]] = None,
-    lows: Optional[List[float]] = None,
+    closes: list[float],
+    highs: list[float] | None = None,
+    lows: list[float] | None = None,
     lookback: int = 65,
     window: int = 5,
     cluster_tol_pct: float = 1.5,
     max_levels: int = 3,
-) -> Dict:
+) -> dict:
     """
     Identifies key support and resistance levels from recent price history.
 
@@ -233,17 +235,17 @@ def calculate_support_resistance(
         return {"support": [], "resistance": []}
 
     # Use intraday lows for support, highs for resistance when available
-    support_src    = np.array((lows  if using_ohlcv else closes)[-lookback:])
+    support_src = np.array((lows if using_ohlcv else closes)[-lookback:])
     resistance_src = np.array((highs if using_ohlcv else closes)[-lookback:])
-    close_arr      = np.array(closes[-lookback:])
+    close_arr = np.array(closes[-lookback:])
 
-    supports:    List[float] = []
-    resistances: List[float] = []
+    supports: list[float] = []
+    resistances: list[float] = []
 
     for i in range(window, len(close_arr) - window):
-        sup_neighbourhood = support_src[i - window: i + window + 1]
-        res_neighbourhood = resistance_src[i - window: i + window + 1]
-        if support_src[i]    == sup_neighbourhood.min():
+        sup_neighbourhood = support_src[i - window : i + window + 1]
+        res_neighbourhood = resistance_src[i - window : i + window + 1]
+        if support_src[i] == sup_neighbourhood.min():
             supports.append(float(support_src[i]))
         if resistance_src[i] == res_neighbourhood.max():
             resistances.append(float(resistance_src[i]))
@@ -255,11 +257,11 @@ def calculate_support_resistance(
         f"({'from highs' if using_ohlcv else 'from closes'})"
     )
 
-    def _cluster(levels: List[float]) -> List[float]:
+    def _cluster(levels: list[float]) -> list[float]:
         if not levels:
             return []
         levels = sorted(levels)
-        clusters: List[List[float]] = [[levels[0]]]
+        clusters: list[list[float]] = [[levels[0]]]
         for val in levels[1:]:
             centre = np.mean(clusters[-1])
             if abs(val - centre) / centre * 100 <= cluster_tol_pct:
@@ -268,12 +270,12 @@ def calculate_support_resistance(
                 clusters.append([val])
         return [round(float(np.mean(c)), 2) for c in clusters]
 
-    support_levels    = _cluster(supports)
+    support_levels = _cluster(supports)
     resistance_levels = _cluster(resistances)
-    last_price        = closes[-1]
+    last_price = closes[-1]
 
     support_levels = sorted(
-        [s for s in support_levels    if s < last_price],
+        [s for s in support_levels if s < last_price],
         key=lambda x: abs(x - last_price),
     )[:max_levels]
     resistance_levels = sorted(
@@ -287,6 +289,7 @@ def calculate_support_resistance(
     )
     return {"support": support_levels, "resistance": resistance_levels}
 
+
 # ---------------------------------------------------------------------------
 # Advanced Technical Signals (Feature 14)
 # ATR · Stochastic · ADX · OBV · RSI/MACD divergence
@@ -294,13 +297,14 @@ def calculate_support_resistance(
 # aborts a /predict request.
 # ---------------------------------------------------------------------------
 
+
 @newrelic.agent.function_trace()
 def calculate_atr(
-    highs: List[float],
-    lows: List[float],
-    closes: List[float],
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
     period: int = 14,
-) -> Optional[float]:
+) -> float | None:
     """
     Average True Range (ATR-14) — volatility in price units.
 
@@ -310,8 +314,11 @@ def calculate_atr(
     """
     try:
         if (
-            highs is None or lows is None or closes is None
-            or len(highs) != len(closes) or len(lows) != len(closes)
+            highs is None
+            or lows is None
+            or closes is None
+            or len(highs) != len(closes)
+            or len(lows) != len(closes)
             or len(closes) < period + 1
         ):
             return None
@@ -319,9 +326,7 @@ def calculate_atr(
         lo = pd.Series(lows, dtype=float)
         c = pd.Series(closes, dtype=float)
         prev_c = c.shift(1)
-        tr = pd.concat(
-            [(h - lo), (h - prev_c).abs(), (lo - prev_c).abs()], axis=1
-        ).max(axis=1)
+        tr = pd.concat([(h - lo), (h - prev_c).abs(), (lo - prev_c).abs()], axis=1).max(axis=1)
         atr = tr.ewm(span=period, adjust=False).mean().iloc[-1]
         if pd.isna(atr):
             return None
@@ -332,8 +337,9 @@ def calculate_atr(
         return None
 
 
-def calculate_fibonacci_levels(highs: list[float], lows: list[float],
-                               lookback: int = 60) -> Optional[dict]:
+def calculate_fibonacci_levels(
+    highs: list[float], lows: list[float], lookback: int = 60
+) -> dict | None:
     """Fib retracement levels from the swing high/low over the last `lookback` bars.
 
     Returns {"swing_high": float, "swing_low": float, "direction": "up"|"down",
@@ -345,9 +351,11 @@ def calculate_fibonacci_levels(highs: list[float], lows: list[float],
     """
     try:
         if (
-            not highs or not lows
+            not highs
+            or not lows
             or len(highs) != len(lows)
-            or len(highs) < 10 or len(lows) < 10
+            or len(highs) < 10
+            or len(lows) < 10
             or lookback <= 0
         ):
             return None
@@ -377,22 +385,25 @@ def calculate_fibonacci_levels(highs: list[float], lows: list[float],
 
 @newrelic.agent.function_trace()
 def calculate_stochastic(
-    highs: List[float],
-    lows: List[float],
-    closes: List[float],
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
     k_period: int = 14,
     d_period: int = 3,
-) -> Dict[str, Optional[float]]:
+) -> dict[str, float | None]:
     """
     Stochastic oscillator. %K = 100 × (close − lowest_low) / (highest_high −
     lowest_low) over `k_period`; %D = `d_period`-SMA of %K. Returns the latest
     {stoch_k, stoch_d} (None on insufficient data / failure).
     """
-    out: Dict[str, Optional[float]] = {"stoch_k": None, "stoch_d": None}
+    out: dict[str, float | None] = {"stoch_k": None, "stoch_d": None}
     try:
         if (
-            highs is None or lows is None or closes is None
-            or len(highs) != len(closes) or len(lows) != len(closes)
+            highs is None
+            or lows is None
+            or closes is None
+            or len(highs) != len(closes)
+            or len(lows) != len(closes)
             or len(closes) < k_period + d_period
         ):
             return out
@@ -416,20 +427,23 @@ def calculate_stochastic(
 
 @newrelic.agent.function_trace()
 def calculate_adx(
-    highs: List[float],
-    lows: List[float],
-    closes: List[float],
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
     period: int = 14,
-) -> Dict[str, Optional[float]]:
+) -> dict[str, float | None]:
     """
     Average Directional Index using Wilder smoothing (14-period). Returns the
     latest {adx_14, plus_di, minus_di} (None on insufficient data / failure).
     """
-    out: Dict[str, Optional[float]] = {"adx_14": None, "plus_di": None, "minus_di": None}
+    out: dict[str, float | None] = {"adx_14": None, "plus_di": None, "minus_di": None}
     try:
         if (
-            highs is None or lows is None or closes is None
-            or len(highs) != len(closes) or len(lows) != len(closes)
+            highs is None
+            or lows is None
+            or closes is None
+            or len(highs) != len(closes)
+            or len(lows) != len(closes)
             or len(closes) < 2 * period + 1
         ):
             return out
@@ -443,9 +457,7 @@ def calculate_adx(
         minus_dm = ((down_move > up_move) & (down_move > 0)) * down_move
 
         prev_c = c.shift(1)
-        tr = pd.concat(
-            [(h - lo), (h - prev_c).abs(), (lo - prev_c).abs()], axis=1
-        ).max(axis=1)
+        tr = pd.concat([(h - lo), (h - prev_c).abs(), (lo - prev_c).abs()], axis=1).max(axis=1)
 
         # Wilder smoothing ≈ EMA with alpha = 1/period
         alpha = 1.0 / period
@@ -460,9 +472,7 @@ def calculate_adx(
         out["adx_14"] = round(float(adx_last), 2) if not pd.isna(adx_last) else None
         out["plus_di"] = round(float(p_last), 2) if not pd.isna(p_last) else None
         out["minus_di"] = round(float(m_last), 2) if not pd.isna(m_last) else None
-        logger.info(
-            f"[ADX] ✓ ADX={out['adx_14']} +DI={out['plus_di']} −DI={out['minus_di']}"
-        )
+        logger.info(f"[ADX] ✓ ADX={out['adx_14']} +DI={out['plus_di']} −DI={out['minus_di']}")
         return out
     except Exception as exc:
         logger.debug("[ADX] calculate_adx failed: %s", exc, exc_info=True)
@@ -471,20 +481,17 @@ def calculate_adx(
 
 @newrelic.agent.function_trace()
 def calculate_obv(
-    closes: List[float],
-    volumes: List[float],
+    closes: list[float],
+    volumes: list[float],
     history: int = 30,
-) -> Optional[List[float]]:
+) -> list[float] | None:
     """
     On-Balance Volume — cumulative volume that adds on up-close days and
     subtracts on down-close days. Returns the last `history` OBV values, or
     None on insufficient data / failure.
     """
     try:
-        if (
-            closes is None or volumes is None
-            or len(closes) != len(volumes) or len(closes) < 2
-        ):
+        if closes is None or volumes is None or len(closes) != len(volumes) or len(closes) < 2:
             return None
         c = pd.Series(closes, dtype=float)
         v = pd.Series(volumes, dtype=float)
@@ -499,7 +506,7 @@ def calculate_obv(
         return None
 
 
-def _tail_clean(series: Optional[List], lookback: int) -> Optional[np.ndarray]:
+def _tail_clean(series: list | None, lookback: int) -> np.ndarray | None:
     """Last `lookback` values as a float array, or None if any are None/NaN."""
     if series is None or len(series) < lookback:
         return None
@@ -514,12 +521,12 @@ def _tail_clean(series: Optional[List], lookback: int) -> Optional[np.ndarray]:
 
 @newrelic.agent.function_trace()
 def detect_divergences(
-    closes: List[float],
-    rsi_series: List,
-    macd_hist: List,
+    closes: list[float],
+    rsi_series: list,
+    macd_hist: list,
     lookback: int = 20,
     min_distance: int = 5,
-) -> Dict[str, bool]:
+) -> dict[str, bool]:
     """
     RSI/MACD-histogram divergence over the last `lookback` bars.
 
@@ -533,8 +540,10 @@ def detect_divergences(
     (logged at DEBUG, never raises).
     """
     result = {
-        "rsi_bullish": False, "rsi_bearish": False,
-        "macd_bullish": False, "macd_bearish": False,
+        "rsi_bullish": False,
+        "rsi_bearish": False,
+        "macd_bullish": False,
+        "macd_bearish": False,
     }
     try:
         if closes is None or len(closes) < 30:
@@ -583,28 +592,28 @@ def detect_divergences(
 
 
 @newrelic.agent.function_trace()
-def calculate_model_stats(prices: List[float]) -> Dict:
+def calculate_model_stats(prices: list[float]) -> dict:
     """
     Returns a dict of descriptive statistics used both in the response
     and as context for the AI analysis layer later.
     """
     logger.debug(f"[STATS] calculate_model_stats — input: {len(prices)} prices")
-    arr     = np.array(prices)
+    arr = np.array(prices)
     returns = np.diff(arr) / arr[:-1]
 
-    ann_vol     = float(np.std(returns) * np.sqrt(252)) if len(returns) > 1 else 0.0
-    window_arr  = arr[-20:] if len(arr) >= 20 else arr
-    x           = np.arange(len(window_arr))
-    slope, _    = np.polyfit(x, window_arr, 1)
+    ann_vol = float(np.std(returns) * np.sqrt(252)) if len(returns) > 1 else 0.0
+    window_arr = arr[-20:] if len(arr) >= 20 else arr
+    x = np.arange(len(window_arr))
+    slope, _ = np.polyfit(x, window_arr, 1)
     trend_slope = float(slope)
-    sma20       = float(np.mean(arr[-20:])) if len(arr) >= 20 else float(np.mean(arr))
-    last        = float(arr[-1])
-    sma_pct     = ((last - sma20) / sma20 * 100) if sma20 > 0 else 0.0
+    sma20 = float(np.mean(arr[-20:])) if len(arr) >= 20 else float(np.mean(arr))
+    last = float(arr[-1])
+    sma_pct = ((last - sma20) / sma20 * 100) if sma20 > 0 else 0.0
 
     stats = {
         "ann_volatility_pct": round(ann_vol * 100, 2),
-        "trend_slope":        round(trend_slope, 4),
-        "sma_20":             round(sma20, 2),
+        "trend_slope": round(trend_slope, 4),
+        "sma_20": round(sma20, 2),
         "price_vs_sma20_pct": round(sma_pct, 2),
     }
     logger.info(
@@ -618,12 +627,12 @@ def calculate_model_stats(prices: List[float]) -> Dict:
 
 def classify_trend(
     price: float,
-    sma50: Optional[float],
-    sma200: Optional[float],
-    trend_slope: Optional[float],
-    macd: Optional[float],
-    macd_signal: Optional[float],
-    rsi: Optional[float],
+    sma50: float | None,
+    sma200: float | None,
+    trend_slope: float | None,
+    macd: float | None,
+    macd_signal: float | None,
+    rsi: float | None,
 ) -> str:
     """Composite short/medium-term trend label — "Bullish" | "Bearish" | "Neutral".
 
@@ -662,7 +671,7 @@ def classify_trend(
         # No structural signal available — keep the legacy behaviour as a floor.
         return "Bullish" if (rsi if rsi is not None else 50) > 50 else "Bearish"
 
-    norm = score / votes          # -1 (all bearish) .. +1 (all bullish)
+    norm = score / votes  # -1 (all bearish) .. +1 (all bullish)
     if norm >= 0.5:
         return "Bullish"
     if norm <= -0.5:
@@ -678,11 +687,11 @@ def classify_trend(
 
 
 def detect_candle_patterns(
-    opens: List[float],
-    highs: List[float],
-    lows: List[float],
-    closes: List[float],
-) -> Optional[Dict]:
+    opens: list[float],
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+) -> dict | None:
     """Detect a confirmed candlestick pattern on the most recent daily bar.
 
     Returns the single most significant pattern printed at the **last** bar — the
@@ -698,13 +707,13 @@ def detect_candle_patterns(
     if n < 2 or not (len(opens) == len(highs) == len(lows) == n):
         return None
     try:
-        o1, h1, l1, c1 = opens[-2], highs[-2], lows[-2], closes[-2]   # prior bar
-        o2, h2, l2, c2 = opens[-1], highs[-1], lows[-1], closes[-1]   # last bar
+        o1, h1, l1, c1 = opens[-2], highs[-2], lows[-2], closes[-2]  # prior bar
+        o2, h2, l2, c2 = opens[-1], highs[-1], lows[-1], closes[-1]  # last bar
         if any(v is None for v in (o1, h1, l1, c1, o2, h2, l2, c2)):
             return None
 
-        body2  = abs(c2 - o2)
-        rng2   = h2 - l2
+        body2 = abs(c2 - o2)
+        rng2 = h2 - l2
         upper2 = h2 - max(o2, c2)
         lower2 = min(o2, c2) - l2
 
@@ -715,28 +724,43 @@ def detect_candle_patterns(
 
         # ── Engulfing (strongest reversal signal) ──
         if prev_bear and last_bull and o2 <= c1 and c2 >= o1 and body2 > 0:
-            return {"pattern": "Bullish Engulfing", "direction": "bullish",
-                    "description": "Last candle's body engulfs the prior down candle — bullish reversal."}
+            return {
+                "pattern": "Bullish Engulfing",
+                "direction": "bullish",
+                "description": "Last candle's body engulfs the prior down candle — bullish reversal.",
+            }
         if prev_bull and last_bear and o2 >= c1 and c2 <= o1 and body2 > 0:
-            return {"pattern": "Bearish Engulfing", "direction": "bearish",
-                    "description": "Last candle's body engulfs the prior up candle — bearish reversal."}
+            return {
+                "pattern": "Bearish Engulfing",
+                "direction": "bearish",
+                "description": "Last candle's body engulfs the prior up candle — bearish reversal.",
+            }
 
         # ── Hammer / Shooting Star (single-bar long-wick rejection) ──
         if rng2 > 0 and body2 > 0:
             if lower2 >= 2 * body2 and upper2 <= body2:
-                return {"pattern": "Hammer", "direction": "bullish",
-                        "description": "Long lower wick, small body — buyers rejected lower prices."}
+                return {
+                    "pattern": "Hammer",
+                    "direction": "bullish",
+                    "description": "Long lower wick, small body — buyers rejected lower prices.",
+                }
             if upper2 >= 2 * body2 and lower2 <= body2:
-                return {"pattern": "Shooting Star", "direction": "bearish",
-                        "description": "Long upper wick, small body — sellers rejected higher prices."}
+                return {
+                    "pattern": "Shooting Star",
+                    "direction": "bearish",
+                    "description": "Long upper wick, small body — sellers rejected higher prices.",
+                }
 
         # ── Inside Bar (consolidation; direction neutral) ──
         # Require a real range on the last bar: a synthetic/flat live bar
         # (h2 == l2, appended when the current day has no real bar yet) sits
         # inside the prior range and would otherwise trip a false "Inside Bar".
         if rng2 > 0 and h2 < h1 and l2 > l1:
-            return {"pattern": "Inside Bar", "direction": "neutral",
-                    "description": "Range contained within the prior bar — consolidation; breakout pending."}
+            return {
+                "pattern": "Inside Bar",
+                "direction": "neutral",
+                "description": "Range contained within the prior bar — consolidation; breakout pending.",
+            }
 
         return None
     except Exception as exc:
@@ -748,11 +772,12 @@ def detect_candle_patterns(
 # Per-model forecast helpers
 # ---------------------------------------------------------------------------
 
+
 def _prophet_forecast(
-    prices: List[float],
+    prices: list[float],
     steps: int,
-    volumes: Optional[List[float]] = None,
-    hl_ranges: Optional[List[float]] = None,
+    volumes: list[float] | None = None,
+    hl_ranges: list[float] | None = None,
 ) -> np.ndarray:
     """
     Prophet univariate forecast on closing prices.
@@ -762,8 +787,10 @@ def _prophet_forecast(
     Future regressor values are estimated as the mean of the last 5 known days.
     """
     use_regressors = (
-        volumes   is not None and len(volumes)   == len(prices) and
-        hl_ranges is not None and len(hl_ranges) == len(prices)
+        volumes is not None
+        and len(volumes) == len(prices)
+        and hl_ranges is not None
+        and len(hl_ranges) == len(prices)
     )
     logger.debug(
         f"[PROPHET] Fitting — training_rows={len(prices)}, forecast_steps={steps} | "
@@ -781,10 +808,12 @@ def _prophet_forecast(
     if end.day_of_week >= 5:
         end = end - pd.tseries.offsets.BDay(1)
 
-    df = pd.DataFrame({
-        "ds": pd.date_range(end=end, periods=len(prices), freq="B"),
-        "y":  prices,
-    })
+    df = pd.DataFrame(
+        {
+            "ds": pd.date_range(end=end, periods=len(prices), freq="B"),
+            "y": prices,
+        }
+    )
 
     if use_regressors:
         # Log-scale volume — reduces magnitude spread (e.g. 1M → 13.8)
@@ -793,7 +822,7 @@ def _prophet_forecast(
         vol_fill = np.nanmean(vol_arr) if not np.all(np.isnan(vol_arr)) else 1.0
         vol_arr = np.where(np.isnan(vol_arr), vol_fill, vol_arr)
         df["volume_log"] = np.log1p(vol_arr)
-        df["hl_range"]   = hl_ranges
+        df["hl_range"] = hl_ranges
         logger.debug(
             f"[PROPHET] Regressors — volume_log: mean={df['volume_log'].mean():.3f}, "
             f"std={df['volume_log'].std():.3f} | "
@@ -818,14 +847,14 @@ def _prophet_forecast(
         vol_future = float(df["volume_log"].iloc[-5:].mean())
         hlr_future = float(df["hl_range"].iloc[-5:].mean())
         future["volume_log"] = vol_future
-        future["hl_range"]   = hlr_future
+        future["hl_range"] = hlr_future
         logger.debug(
             f"[PROPHET] Future regressor estimates (mean of last 5d) — "
             f"volume_log={vol_future:.3f}, hl_range={hlr_future:.4f}"
         )
 
-    fc     = m.predict(future).tail(steps)
-    result = fc[["yhat", "yhat_lower", "yhat_upper"]].values   # shape (steps, 3)
+    fc = m.predict(future).tail(steps)
+    result = fc[["yhat", "yhat_lower", "yhat_upper"]].values  # shape (steps, 3)
 
     logger.info(
         f"[PROPHET] ✓ Forecast complete — "
@@ -836,10 +865,10 @@ def _prophet_forecast(
 
 
 def _sarima_forecast(
-    prices: List[float],
+    prices: list[float],
     steps: int,
-    volumes: Optional[List[float]] = None,
-    hl_ranges: Optional[List[float]] = None,
+    volumes: list[float] | None = None,
+    hl_ranges: list[float] | None = None,
 ) -> np.ndarray:
     """
     SARIMAX(1,1,1) on closing prices.
@@ -849,8 +878,10 @@ def _sarima_forecast(
     Future exog values are approximated as the mean of the last 5 training days.
     """
     use_exog = (
-        volumes   is not None and len(volumes)   == len(prices) and
-        hl_ranges is not None and len(hl_ranges) == len(prices)
+        volumes is not None
+        and len(volumes) == len(prices)
+        and hl_ranges is not None
+        and len(hl_ranges) == len(prices)
     )
     logger.debug(
         f"[SARIMA] Fitting — training_rows={len(prices)}, forecast_steps={steps} | "
@@ -862,22 +893,22 @@ def _sarima_forecast(
         f"last_close=${prices[-1]:.2f}"
     )
 
-    exog        = None
+    exog = None
     exog_future = None
 
     if use_exog:
-        vol_arr  = np.array(volumes,   dtype=float)
-        hl_arr   = np.array(hl_ranges, dtype=float)
+        vol_arr = np.array(volumes, dtype=float)
+        hl_arr = np.array(hl_ranges, dtype=float)
 
         # Z-score normalise volume so it's on the same scale as hl_range
         vol_mean = vol_arr.mean()
-        vol_std  = vol_arr.std() + 1e-8
+        vol_std = vol_arr.std() + 1e-8
         vol_norm = (vol_arr - vol_mean) / vol_std
 
         exog = np.column_stack([vol_norm, hl_arr])
 
         # Future exog: mean of last 5 trading days
-        future_row  = exog[-5:].mean(axis=0)
+        future_row = exog[-5:].mean(axis=0)
         exog_future = np.tile(future_row, (steps, 1))
 
         logger.debug(
@@ -887,16 +918,17 @@ def _sarima_forecast(
             f"hl_range={future_row[1]:.4f}"
         )
 
-    model  = SARIMAX(prices, exog=exog, order=(1, 1, 1),
-                     enforce_stationarity=False, enforce_invertibility=False)
-    fit    = model.fit(disp=False)
-    fc     = fit.get_forecast(steps=steps, exog=exog_future)
+    model = SARIMAX(
+        prices, exog=exog, order=(1, 1, 1), enforce_stationarity=False, enforce_invertibility=False
+    )
+    fit = model.fit(disp=False)
+    fc = fit.get_forecast(steps=steps, exog=exog_future)
 
     mean_raw = fc.predicted_mean
-    mean     = mean_raw.values if hasattr(mean_raw, "values") else np.asarray(mean_raw)
-    ci_raw   = fc.conf_int(alpha=0.20)
-    ci       = ci_raw.values if hasattr(ci_raw, "values") else np.asarray(ci_raw)
-    result   = np.column_stack([mean, ci[:, 0], ci[:, 1]])   # shape (steps, 3)
+    mean = mean_raw.values if hasattr(mean_raw, "values") else np.asarray(mean_raw)
+    ci_raw = fc.conf_int(alpha=0.20)
+    ci = ci_raw.values if hasattr(ci_raw, "values") else np.asarray(ci_raw)
+    result = np.column_stack([mean, ci[:, 0], ci[:, 1]])  # shape (steps, 3)
 
     logger.info(
         f"[SARIMA] ✓ Forecast complete — "
@@ -906,7 +938,7 @@ def _sarima_forecast(
     return result
 
 
-def _rf_top_importances(rf, use_ohlcv: bool, window: int, top_n: int = 5) -> List[Dict]:
+def _rf_top_importances(rf, use_ohlcv: bool, window: int, top_n: int = 5) -> list[dict]:
     """
     Top-`top_n` RandomForest feature importances, normalised to sum 1.0 and
     sorted descending. Feature names encode the lag and (in OHLCV mode) which
@@ -922,22 +954,19 @@ def _rf_top_importances(rf, use_ohlcv: bool, window: int, top_n: int = 5) -> Lis
             names = [f"Close[t-{window - j}]" for j in range(len(imp))]
         pairs = sorted(zip(names, imp), key=lambda x: x[1], reverse=True)[:top_n]
         total = sum(float(v) for _, v in pairs) or 1.0
-        return [
-            {"feature": n, "importance": round(float(v) / total, 4)}
-            for n, v in pairs
-        ]
+        return [{"feature": n, "importance": round(float(v) / total, 4)} for n, v in pairs]
     except Exception as exc:
         logger.debug("[RF] feature importance extraction failed: %s", exc)
         return []
 
 
 def _rf_forecast(
-    prices: List[float],
+    prices: list[float],
     steps: int,
-    opens: Optional[List[float]] = None,
-    highs: Optional[List[float]] = None,
-    lows: Optional[List[float]] = None,
-    volumes: Optional[List[float]] = None,
+    opens: list[float] | None = None,
+    highs: list[float] | None = None,
+    lows: list[float] | None = None,
+    volumes: list[float] | None = None,
 ) -> tuple:
     """
     Random Forest on a sliding window of past observations.
@@ -954,11 +983,8 @@ def _rf_forecast(
 
     Band estimation: historical 20-day coefficient of variation × 1.5.
     """
-    window    = 10
-    use_ohlcv = all(
-        v is not None and len(v) == len(prices)
-        for v in [opens, highs, lows, volumes]
-    )
+    window = 10
+    use_ohlcv = all(v is not None and len(v) == len(prices) for v in [opens, highs, lows, volumes])
     logger.debug(
         f"[RF] Preparing — input_prices={len(prices)}, forecast_steps={steps}, "
         f"feature_window={window} | "
@@ -971,11 +997,13 @@ def _rf_forecast(
             f"returning flat estimate at last_price=${prices[-1]:.2f}"
         )
         last = prices[-1]
-        return np.column_stack([
-            np.full(steps, last),
-            np.full(steps, last),
-            np.full(steps, last),
-        ]), []
+        return np.column_stack(
+            [
+                np.full(steps, last),
+                np.full(steps, last),
+                np.full(steps, last),
+            ]
+        ), []
 
     vol = np.std(prices[-20:]) / np.mean(prices[-20:]) if len(prices) >= 20 else 0.02
 
@@ -986,17 +1014,19 @@ def _rf_forecast(
             f"vol range: ${min(volumes):.0f} – ${max(volumes):.0f}"
         )
         # Stack into (n, 5): Open, High, Low, Close, Volume
-        raw  = np.column_stack([
-            np.array(opens,   dtype=float),
-            np.array(highs,   dtype=float),
-            np.array(lows,    dtype=float),
-            np.array(prices,  dtype=float),
-            np.array(volumes, dtype=float),
-        ])
+        raw = np.column_stack(
+            [
+                np.array(opens, dtype=float),
+                np.array(highs, dtype=float),
+                np.array(lows, dtype=float),
+                np.array(prices, dtype=float),
+                np.array(volumes, dtype=float),
+            ]
+        )
         # Column-wise z-score normalisation
         col_means = raw.mean(axis=0)
-        col_stds  = raw.std(axis=0) + 1e-8
-        norm      = (raw - col_means) / col_stds
+        col_stds = raw.std(axis=0) + 1e-8
+        norm = (raw - col_means) / col_stds
 
         logger.debug(
             f"[RF] OHLCV normalisation (z-score per column) — "
@@ -1006,7 +1036,7 @@ def _rf_forecast(
 
         X, y = [], []
         for i in range(len(prices) - window):
-            X.append(norm[i: i + window].flatten())   # 10 × 5 = 50 features
+            X.append(norm[i : i + window].flatten())  # 10 × 5 = 50 features
             y.append(prices[i + window])
         X, y = np.array(X), np.array(y)
 
@@ -1018,14 +1048,14 @@ def _rf_forecast(
         rf.fit(X, y)
         rf_importance = _rf_top_importances(rf, use_ohlcv=True, window=window)
 
-        preds           = []
-        last_window_raw = raw[-window:].copy()   # shape (window, 5)
+        preds = []
+        last_window_raw = raw[-window:].copy()  # shape (window, 5)
         for step_i in range(steps):
             window_norm = ((last_window_raw - col_means) / col_stds).flatten()
-            p           = float(rf.predict([window_norm])[0])
+            p = float(rf.predict([window_norm])[0])
             preds.append(p)
             # Roll: shift window up, copy last row, update only Close (col 3)
-            new_row    = last_window_raw[-1].copy()
+            new_row = last_window_raw[-1].copy()
             new_row[3] = p
             last_window_raw = np.vstack([last_window_raw[1:], new_row])
             logger.debug(
@@ -1040,7 +1070,7 @@ def _rf_forecast(
         )
         X, y = [], []
         for i in range(len(prices) - window):
-            X.append(prices[i: i + window])
+            X.append(prices[i : i + window])
             y.append(prices[i + window])
         X, y = np.array(X), np.array(y)
 
@@ -1052,7 +1082,7 @@ def _rf_forecast(
         rf.fit(X, y)
         rf_importance = _rf_top_importances(rf, use_ohlcv=False, window=window)
 
-        preds       = []
+        preds = []
         last_window = list(prices[-window:])
         for step_i in range(steps):
             p = float(rf.predict([last_window])[0])
@@ -1060,8 +1090,8 @@ def _rf_forecast(
             last_window = last_window[1:] + [p]
             logger.debug(f"[RF] Step {step_i + 1}/{steps} (closes) — predicted=${p:.2f}")
 
-    preds  = np.array(preds)
-    band   = preds * vol * 1.5
+    preds = np.array(preds)
+    band = preds * vol * 1.5
     result = np.column_stack([preds, preds - band, preds + band])
 
     logger.info(
@@ -1077,12 +1107,13 @@ def _rf_forecast(
 # Monte Carlo GBM simulation
 # ---------------------------------------------------------------------------
 
+
 def run_monte_carlo(
-    closes: List[float],
+    closes: list[float],
     steps: int = 5,
     n_sims: int = 1000,
     method: str = "bootstrap",
-) -> Optional[Dict]:
+) -> dict | None:
     """
     Monte Carlo price-path simulation — fat-tailed by default.
 
@@ -1106,11 +1137,11 @@ def run_monte_carlo(
         )
         return None
     try:
-        arr         = np.array(closes, dtype=float)
+        arr = np.array(closes, dtype=float)
         log_returns = np.diff(np.log(arr))
-        mu          = float(np.mean(log_returns))
-        sigma       = float(np.std(log_returns))
-        S0          = float(arr[-1])
+        mu = float(np.mean(log_returns))
+        sigma = float(np.std(log_returns))
+        S0 = float(arr[-1])
 
         rng = np.random.default_rng(seed=42)
 
@@ -1120,44 +1151,43 @@ def run_monte_carlo(
             # empirical tails + skew (a single −15% day in history can recur in a
             # path), unlike the symmetric Normal which never produces moves it
             # wasn't told to.
-            idx              = rng.integers(0, len(log_returns), size=(n_sims, steps))
-            step_log_returns = log_returns[idx]       # per-step Δ log price
+            idx = rng.integers(0, len(log_returns), size=(n_sims, steps))
+            step_log_returns = log_returns[idx]  # per-step Δ log price
         else:
             # Normal GBM fallback (thin-tailed). Δt = 1 trading day; np.cumsum
             # builds temporally consistent Brownian-motion trajectories.
-            Z                = rng.standard_normal((n_sims, steps))
-            drift            = mu - 0.5 * sigma ** 2
+            Z = rng.standard_normal((n_sims, steps))
+            drift = mu - 0.5 * sigma**2
             step_log_returns = drift + sigma * Z
 
         log_paths = np.cumsum(step_log_returns, axis=1)
-        paths     = S0 * np.exp(log_paths)            # shape (n_sims, steps)
+        paths = S0 * np.exp(log_paths)  # shape (n_sims, steps)
 
-        final     = paths[:, -1]
-        p10       = float(np.percentile(final, 10))
-        p50       = float(np.percentile(final, 50))
-        p90       = float(np.percentile(final, 90))
+        final = paths[:, -1]
+        p10 = float(np.percentile(final, 10))
+        p50 = float(np.percentile(final, 50))
+        p90 = float(np.percentile(final, 90))
         prob_gain = float(np.mean(final > S0) * 100)
-        var_95    = float(max(0.0, S0 - np.percentile(final, 5)))
+        var_95 = float(max(0.0, S0 - np.percentile(final, 5)))
 
         # 50 representative paths for the 2D fan chart
-        sample_idx   = rng.choice(n_sims, size=min(50, n_sims), replace=False)
-        paths_sample = [
-            [round(float(paths[i, j]), 4) for j in range(steps)]
-            for i in sample_idx
-        ]
+        sample_idx = rng.choice(n_sims, size=min(50, n_sims), replace=False)
+        paths_sample = [[round(float(paths[i, j]), 4) for j in range(steps)] for i in sample_idx]
 
         # Per-day percentile surface (used by both fan chart and 3D surface)
         price_range_by_day = []
         for d in range(steps):
             dp = paths[:, d]
-            price_range_by_day.append({
-                "day": d + 1,
-                "p10": round(float(np.percentile(dp, 10)), 4),
-                "p25": round(float(np.percentile(dp, 25)), 4),
-                "p50": round(float(np.percentile(dp, 50)), 4),
-                "p75": round(float(np.percentile(dp, 75)), 4),
-                "p90": round(float(np.percentile(dp, 90)), 4),
-            })
+            price_range_by_day.append(
+                {
+                    "day": d + 1,
+                    "p10": round(float(np.percentile(dp, 10)), 4),
+                    "p25": round(float(np.percentile(dp, 25)), 4),
+                    "p50": round(float(np.percentile(dp, 50)), 4),
+                    "p75": round(float(np.percentile(dp, 75)), 4),
+                    "p90": round(float(np.percentile(dp, 90)), 4),
+                }
+            )
 
         logger.info(
             f"[MC] ✓ method={'bootstrap' if use_bootstrap else 'normal'}, "
@@ -1166,14 +1196,14 @@ def run_monte_carlo(
             f"prob_gain={prob_gain:.1f}%, VaR95=${var_95:.2f}"
         )
         return {
-            "p10":               round(p10,       4),
-            "p50":               round(p50,       4),
-            "p90":               round(p90,       4),
-            "prob_gain":         round(prob_gain, 2),
-            "var_95":            round(var_95,    4),
-            "paths_sample":      paths_sample,
+            "p10": round(p10, 4),
+            "p50": round(p50, 4),
+            "p90": round(p90, 4),
+            "prob_gain": round(prob_gain, 2),
+            "var_95": round(var_95, 4),
+            "paths_sample": paths_sample,
             "price_range_by_day": price_range_by_day,
-            "n_sims":            n_sims,
+            "n_sims": n_sims,
         }
     except Exception as exc:
         logger.warning(f"[MC] run_monte_carlo failed: {exc} — returning None")
@@ -1184,10 +1214,11 @@ def run_monte_carlo(
 # Ensemble weight helper
 # ---------------------------------------------------------------------------
 
+
 def _skill_to_weights(
-    maes: List[float],
-    naive_mae: Optional[float],
-) -> List[float]:
+    maes: list[float],
+    naive_mae: float | None,
+) -> list[float]:
     """
     Convert [prophet_mae, sarima_mae, rf_mae] + naive_mae into normalised
     ensemble weights.
@@ -1201,11 +1232,11 @@ def _skill_to_weights(
     eps = 1e-6
     if naive_mae and naive_mae > 0:
         skills = [max(0.0, 1.0 - m / naive_mae) for m in maes]
-        total  = sum(skills)
+        total = sum(skills)
         if total > 0:
             return [s / total for s in skills]
-        return [1 / 3, 1 / 3, 1 / 3]   # all ≤ naive — equal fallback
-    inv   = [1.0 / (m + eps) for m in maes]
+        return [1 / 3, 1 / 3, 1 / 3]  # all ≤ naive — equal fallback
+    inv = [1.0 / (m + eps) for m in maes]
     total = sum(inv)
     return [v / total for v in inv] if total > 0 else [1 / 3, 1 / 3, 1 / 3]
 
@@ -1215,25 +1246,25 @@ def _skill_to_weights(
 # ---------------------------------------------------------------------------
 
 # Documented static base — SARIMA-leaning because it fits autocorrelation.
-BASE_ENSEMBLE_WEIGHTS: Dict[str, float] = {"prophet": 0.30, "sarima": 0.40, "rf": 0.30}
+BASE_ENSEMBLE_WEIGHTS: dict[str, float] = {"prophet": 0.30, "sarima": 0.40, "rf": 0.30}
 
 # Per-regime multipliers applied to the base weights:
 #   - Trending markets: SARIMA fits the autocorrelation → boosted; RF (which
 #     ignores sequence) → trimmed.
 #   - Ranging markets: RF (pattern/level fitter) → boosted; SARIMA → trimmed.
 #   - Unknown: no change.
-REGIME_WEIGHT_MULTIPLIERS: Dict[str, Dict[str, float]] = {
-    "trending_up":   {"prophet": 1.0, "sarima": 1.4, "rf": 0.7},
+REGIME_WEIGHT_MULTIPLIERS: dict[str, dict[str, float]] = {
+    "trending_up": {"prophet": 1.0, "sarima": 1.4, "rf": 0.7},
     "trending_down": {"prophet": 1.0, "sarima": 1.4, "rf": 0.7},
-    "ranging":       {"prophet": 1.0, "sarima": 0.7, "rf": 1.4},
+    "ranging": {"prophet": 1.0, "sarima": 0.7, "rf": 1.4},
 }
 
 
 def adjust_weights_for_regime(
-    base: Dict[str, float],
-    regime: Optional[str],
+    base: dict[str, float],
+    regime: str | None,
     confidence: float,
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """Tilt ensemble weights toward the model that suits the detected regime.
 
     ``regime_weight = base × multiplier``. The shift is scaled by detection
@@ -1253,7 +1284,7 @@ def adjust_weights_for_regime(
     if not mult or conf <= 0:
         return dict(base)
 
-    adjusted: Dict[str, float] = {}
+    adjusted: dict[str, float] = {}
     for key, b in base.items():
         regime_w = b * mult.get(key, 1.0)
         adjusted[key] = b + (regime_w - b) * conf
@@ -1268,19 +1299,20 @@ def adjust_weights_for_regime(
 # Main ensemble entry point
 # ---------------------------------------------------------------------------
 
+
 def run_ensemble_forecast(
-    closes: List[float],
+    closes: list[float],
     symbol: str,
-    opens: Optional[List[float]] = None,
-    highs: Optional[List[float]] = None,
-    lows: Optional[List[float]] = None,
-    volumes: Optional[List[float]] = None,
-    historical_weights: Optional[List[float]] = None,
+    opens: list[float] | None = None,
+    highs: list[float] | None = None,
+    lows: list[float] | None = None,
+    volumes: list[float] | None = None,
+    historical_weights: list[float] | None = None,
     sample_count: int = 0,
-    ensemble_mae: Optional[Dict] = None,
-    regime: Optional[str] = None,
+    ensemble_mae: dict | None = None,
+    regime: str | None = None,
     regime_confidence: float = 0.0,
-) -> Dict:
+) -> dict:
     """
     Ensemble of Prophet + SARIMAX + RandomForest forecasting closing price.
 
@@ -1304,13 +1336,12 @@ def run_ensemble_forecast(
     logger.info(f"[ENSEMBLE] ══════════ Starting forecast for {symbol} ══════════")
 
     last_price = float(closes[-1]) if closes else 100.0
-    vol        = np.std(closes[-10:]) / np.mean(closes[-10:]) if len(closes) >= 10 else 0.02
-    stats      = calculate_model_stats(closes) if len(closes) >= 5 else {}
-    mc_result  = run_monte_carlo(closes, steps=FORECAST_DAYS)
+    vol = np.std(closes[-10:]) / np.mean(closes[-10:]) if len(closes) >= 10 else 0.02
+    stats = calculate_model_stats(closes) if len(closes) >= 5 else {}
+    mc_result = run_monte_carlo(closes, steps=FORECAST_DAYS)
 
     ohlcv_available = all(
-        v is not None and len(v) == len(closes)
-        for v in [opens, highs, lows, volumes]
+        v is not None and len(v) == len(closes) for v in [opens, highs, lows, volumes]
     )
     logger.debug(
         f"[ENSEMBLE] Input — price_points={len(closes)}, last_price=${last_price:.2f}, "
@@ -1332,12 +1363,9 @@ def run_ensemble_forecast(
         )
 
     # ── Compute HL range (intraday vol proxy) ─────────────────────────────────
-    hl_ranges: Optional[List[float]] = None
+    hl_ranges: list[float] | None = None
     if ohlcv_available:
-        hl_ranges = [
-            (h - lo) / c if c > 0 else 0.0
-            for h, lo, c in zip(highs, lows, closes)
-        ]
+        hl_ranges = [(h - lo) / c if c > 0 else 0.0 for h, lo, c in zip(highs, lows, closes)]
         logger.debug(
             f"[ENSEMBLE] HL range (intraday vol proxy = (H-L)/C) — "
             f"mean={float(np.mean(hl_ranges)):.4f}, "
@@ -1357,40 +1385,44 @@ def run_ensemble_forecast(
         )
         days = []
         for i in range(1, FORECAST_DAYS + 1):
-            dt        = datetime.now(timezone.utc) + timedelta(days=i)
+            dt = datetime.now(timezone.utc) + timedelta(days=i)
             predicted = round(last_price * (1 + (vol * 0.3 * (1 if i % 2 == 0 else -0.5))), 2)
-            days.append({
-                "date":           dt.strftime("%m/%d"),
-                "time":           int(dt.timestamp()),
-                "predicted":      predicted,
-                "high":           round(predicted * (1 + vol), 2),
-                "low":            round(predicted * (1 - vol), 2),
-                "confidence_pct": 30,
-            })
+            days.append(
+                {
+                    "date": dt.strftime("%m/%d"),
+                    "time": int(dt.timestamp()),
+                    "predicted": predicted,
+                    "high": round(predicted * (1 + vol), 2),
+                    "low": round(predicted * (1 - vol), 2),
+                    "confidence_pct": 30,
+                }
+            )
         overall_high = max(d["high"] for d in days)
-        overall_low  = min(d["low"]  for d in days)
+        overall_low = min(d["low"] for d in days)
         logger.info(
             f"[ENSEMBLE] Fallback result — "
             f"5d high=${overall_high:.2f}, 5d low=${overall_low:.2f}, conf=low"
         )
         return {
-            "forecast_days": days, "high": overall_high, "low": overall_low,
+            "forecast_days": days,
+            "high": overall_high,
+            "low": overall_low,
             "note": "Insufficient history for full model run — using volatility estimate.",
-            "conf": "low", "stats": stats,
-            "weights":       {"prophet": 0.0, "sarima": 0.0, "rf": 0.0},
-            "per_model_d1":  {"prophet": None, "sarima": None, "rf": None},
+            "conf": "low",
+            "stats": stats,
+            "weights": {"prophet": 0.0, "sarima": 0.0, "rf": 0.0},
+            "per_model_d1": {"prophet": None, "sarima": None, "rf": None},
             "rf_feature_importance": [],
-            "monte_carlo":   mc_result,
+            "monte_carlo": mc_result,
         }
 
     logger.debug(
-        f"[ENSEMBLE] Fallback path SKIPPED — "
-        f"MODELS_AVAILABLE=True, price_points={len(closes)} ≥ 20"
+        f"[ENSEMBLE] Fallback path SKIPPED — MODELS_AVAILABLE=True, price_points={len(closes)} ≥ 20"
     )
 
     # ── Run all three models concurrently ────────────────────────────────────
     p_fc = s_fc = r_fc = None
-    errors: List[str] = []
+    errors: list[str] = []
 
     logger.info("[ENSEMBLE] Running Prophet + SARIMAX + RF concurrently ...")
 
@@ -1401,12 +1433,14 @@ def run_ensemble_forecast(
         return _sarima_forecast(closes, FORECAST_DAYS, volumes=volumes, hl_ranges=hl_ranges)
 
     def _run_rf():
-        return _rf_forecast(closes, FORECAST_DAYS, opens=opens, highs=highs, lows=lows, volumes=volumes)
+        return _rf_forecast(
+            closes, FORECAST_DAYS, opens=opens, highs=highs, lows=lows, volumes=volumes
+        )
 
     model_fns = [
         ("Prophet", _run_prophet),
-        ("SARIMA",  _run_sarima),
-        ("RF",      _run_rf),
+        ("SARIMA", _run_sarima),
+        ("RF", _run_rf),
     ]
 
     with ThreadPoolExecutor(max_workers=3) as pool:
@@ -1427,7 +1461,7 @@ def run_ensemble_forecast(
     # _rf_forecast returns (forecast_array, feature_importance); a failed run
     # left None in the results map (set in the except above).
     rf_raw = results.get("RF")
-    rf_feature_importance: List[Dict] = []
+    rf_feature_importance: list[dict] = []
     if isinstance(rf_raw, tuple):
         r_fc, rf_feature_importance = rf_raw
     else:
@@ -1439,8 +1473,7 @@ def run_ensemble_forecast(
         f"[ENSEMBLE] Model run summary — {n_success}/3 succeeded | "
         f"Prophet={'✓' if p_fc is not None else '✗'}, "
         f"SARIMA={'✓' if s_fc is not None else '✗'}, "
-        f"RF={'✓' if r_fc is not None else '✗'}"
-        + (f" | failures: {errors}" if errors else "")
+        f"RF={'✓' if r_fc is not None else '✗'}" + (f" | failures: {errors}" if errors else "")
     )
 
     # ── Emergency fallback if ALL models failed ───────────────────────────────
@@ -1452,24 +1485,27 @@ def run_ensemble_forecast(
         days = []
         for i in range(1, FORECAST_DAYS + 1):
             dt = datetime.now(timezone.utc) + timedelta(days=i)
-            days.append({
-                "date":           dt.strftime("%m/%d"),
-                "time":           int(dt.timestamp()),
-                "predicted":      round(last_price * (1 + vol * 0.1 * i * 0.3), 2),
-                "high":           round(last_price * (1 + vol * i * 0.4), 2),
-                "low":            round(last_price * (1 - vol * i * 0.4), 2),
-                "confidence_pct": 20,
-            })
+            days.append(
+                {
+                    "date": dt.strftime("%m/%d"),
+                    "time": int(dt.timestamp()),
+                    "predicted": round(last_price * (1 + vol * 0.1 * i * 0.3), 2),
+                    "high": round(last_price * (1 + vol * i * 0.4), 2),
+                    "low": round(last_price * (1 - vol * i * 0.4), 2),
+                    "confidence_pct": 20,
+                }
+            )
         return {
             "forecast_days": days,
-            "high":          max(d["high"] for d in days),
-            "low":           min(d["low"]  for d in days),
-            "note":          f"Model errors: {'; '.join(errors)}. Using fallback estimate.",
-            "conf":          "low", "stats": stats,
-            "weights":       {"prophet": 0.0, "sarima": 0.0, "rf": 0.0},
-            "per_model_d1":  {"prophet": None, "sarima": None, "rf": None},
+            "high": max(d["high"] for d in days),
+            "low": min(d["low"] for d in days),
+            "note": f"Model errors: {'; '.join(errors)}. Using fallback estimate.",
+            "conf": "low",
+            "stats": stats,
+            "weights": {"prophet": 0.0, "sarima": 0.0, "rf": 0.0},
+            "per_model_d1": {"prophet": None, "sarima": None, "rf": None},
             "rf_feature_importance": [],
-            "monte_carlo":   mc_result,
+            "monte_carlo": mc_result,
         }
 
     # ── Dynamic weights: inverse day-1 error (realtime) ──────────────────────
@@ -1481,26 +1517,21 @@ def run_ensemble_forecast(
             err = abs(fc[0, 0] - last_price)
             raw_weights.append(1.0 / (err + 1e-6))
 
-    rt_total    = sum(raw_weights)
-    realtime_w  = [rw / rt_total if rt_total > 0 else 0.0 for rw in raw_weights]
+    rt_total = sum(raw_weights)
+    realtime_w = [rw / rt_total if rt_total > 0 else 0.0 for rw in raw_weights]
 
     # ── Blend with historical accuracy weights (RL feedback) ─────────────────
     # α ramps 0→0.7 over the first 10 resolved samples.
     # historical_weights are derived from inverse per-model MAE stored in InfluxDB.
-    if (
-        historical_weights is not None
-        and len(historical_weights) == 3
-        and sample_count > 0
-    ):
-        alpha   = min(0.7, sample_count / 10.0 * 0.7)
+    if historical_weights is not None and len(historical_weights) == 3 and sample_count > 0:
+        alpha = min(0.7, sample_count / 10.0 * 0.7)
         blended = [
-            alpha * hw + (1.0 - alpha) * rw
-            for hw, rw in zip(historical_weights, realtime_w)
+            alpha * hw + (1.0 - alpha) * rw for hw, rw in zip(historical_weights, realtime_w)
         ]
         # Zero out any model that failed (keep realtime zero respected)
         blended = [b if rt > 0 else 0.0 for b, rt in zip(blended, realtime_w)]
         b_total = sum(blended)
-        w       = [b / b_total if b_total > 0 else 0.0 for b in blended]
+        w = [b / b_total if b_total > 0 else 0.0 for b in blended]
         logger.info(
             f"[ENSEMBLE] RL weight blending — α={alpha:.2f} ({sample_count} samples) | "
             f"historical: {[f'{v:.3f}' for v in historical_weights]} | "
@@ -1512,7 +1543,11 @@ def run_ensemble_forecast(
         logger.info(
             "[ENSEMBLE] Realtime inverse-error weighting — "
             "w = 1/(|day1_pred - last_price| + 1e-6), normalised"
-            + (" | RL blending SKIPPED (no historical samples yet)" if not historical_weights else "")
+            + (
+                " | RL blending SKIPPED (no historical samples yet)"
+                if not historical_weights
+                else ""
+            )
         )
 
     # ── Regime-adaptive tilt (Feature 16) ────────────────────────────────────
@@ -1523,7 +1558,8 @@ def run_ensemble_forecast(
     if regime and regime_confidence > 0:
         tilted = adjust_weights_for_regime(
             {"prophet": w[0], "sarima": w[1], "rf": w[2]},
-            regime, regime_confidence,
+            regime,
+            regime_confidence,
         )
         w = [tilted["prophet"], tilted["sarima"], tilted["rf"]]
         logger.info(
@@ -1552,14 +1588,14 @@ def run_ensemble_forecast(
             if fc is None:
                 continue
             predicted += wi * fc[i, 0]
-            low_sum   += wi * fc[i, 1]
-            high_sum  += wi * fc[i, 2]
-            w_used    += wi
+            low_sum += wi * fc[i, 1]
+            high_sum += wi * fc[i, 2]
+            w_used += wi
 
         if w_used > 0:
             predicted /= w_used
-            high_sum  /= w_used
-            low_sum   /= w_used
+            high_sum /= w_used
+            low_sum /= w_used
 
         # ── FIX: widen the DISTANCE from predicted, not the absolute price ──
         # Old: day_high = max(high_sum, predicted) * horizon_factor  ← wrong
@@ -1568,51 +1604,57 @@ def run_ensemble_forecast(
         #      widens only the band width by 5% per extra day
         horizon_factor = 1 + i * 0.05
         raw_high = max(high_sum, predicted)
-        raw_low  = min(low_sum,  predicted)
+        raw_low = min(low_sum, predicted)
         day_high = round(predicted + (raw_high - predicted) * horizon_factor, 2)
-        day_low  = round(predicted - (predicted - raw_low)  * horizon_factor, 2)
+        day_low = round(predicted - (predicted - raw_low) * horizon_factor, 2)
 
-        n_models  = len(available)
+        n_models = len(available)
         horizon_key = f"ensemble_d{i + 1}"
-        hor_data    = (ensemble_mae or {}).get(horizon_key, {})
-        hor_mae     = hor_data.get("mae", 0.0)
+        hor_data = (ensemble_mae or {}).get(horizon_key, {})
+        hor_mae = hor_data.get("mae", 0.0)
         hor_samples = hor_data.get("samples", 0)
         if hor_samples > 0 and hor_mae > 0 and predicted > 0:
             # MAE as % of current price — lower = more accurate = higher confidence.
             # 1% error → ~91% conf, 3% → ~73%, 5% → ~55%, 10% → ~10% (floor).
-            mae_pct  = (hor_mae / predicted) * 100
+            mae_pct = (hor_mae / predicted) * 100
             conf_pct = max(10, min(95, round(95 - mae_pct * 8.5)))
         else:
             # No historical data yet — use heuristic, improves automatically over time
             base_conf = 40 + (len(closes) // 10) + (n_models * 10)
-            conf_pct  = max(10, min(90, base_conf - i * 5))
+            conf_pct = max(10, min(90, base_conf - i * 5))
 
         dt = datetime.now(timezone.utc) + timedelta(days=i + 1)
-        days.append({
-            "date":           dt.strftime("%m/%d"),
-            "time":           int(dt.timestamp()),
-            "predicted":      round(predicted, 2),
-            "high":           day_high,
-            "low":            day_low,
-            "confidence_pct": conf_pct,
-        })
+        days.append(
+            {
+                "date": dt.strftime("%m/%d"),
+                "time": int(dt.timestamp()),
+                "predicted": round(predicted, 2),
+                "high": day_high,
+                "low": day_low,
+                "confidence_pct": conf_pct,
+            }
+        )
 
     # ── Log 5-day forecast table ──────────────────────────────────────────────
     logger.info(f"[ENSEMBLE] 5-day forecast table ({symbol}):")
-    logger.info(f"[ENSEMBLE]   {'Day':<4}  {'Date':<6}  {'Predicted':>10}  {'High':>10}  {'Low':>10}  {'Conf%':>6}  {'Band±':>8}")
-    logger.info(f"[ENSEMBLE]   {'───':<4}  {'──────':<6}  {'─────────':>10}  {'────':>10}  {'───':>10}  {'─────':>6}  {'──────':>8}")
+    logger.info(
+        f"[ENSEMBLE]   {'Day':<4}  {'Date':<6}  {'Predicted':>10}  {'High':>10}  {'Low':>10}  {'Conf%':>6}  {'Band±':>8}"
+    )
+    logger.info(
+        f"[ENSEMBLE]   {'───':<4}  {'──────':<6}  {'─────────':>10}  {'────':>10}  {'───':>10}  {'─────':>6}  {'──────':>8}"
+    )
     for i, d in enumerate(days):
         band_size = (d["high"] - d["low"]) / 2
         logger.info(
-            f"[ENSEMBLE]   {i+1:<4}  {d['date']:<6}  "
+            f"[ENSEMBLE]   {i + 1:<4}  {d['date']:<6}  "
             f"${d['predicted']:>9.2f}  ${d['high']:>9.2f}  ${d['low']:>9.2f}  "
             f"{d['confidence_pct']:>5}%  ±${band_size:>6.2f}"
         )
 
     # ── Analyst narrative ─────────────────────────────────────────────────────
-    d1         = days[0]["predicted"]
-    d5         = days[-1]["predicted"]
-    direction  = "upward" if d5 > last_price else "downward"
+    d1 = days[0]["predicted"]
+    d5 = days[-1]["predicted"]
+    direction = "upward" if d5 > last_price else "downward"
     pct_change = abs((d5 - last_price) / last_price * 100)
 
     active_models = []
@@ -1634,11 +1676,11 @@ def run_ensemble_forecast(
     )
 
     overall_high = max(d["high"] for d in days)
-    overall_low  = min(d["low"]  for d in days)
+    overall_low = min(d["low"] for d in days)
     # Derive top-level confidence from the mean of per-horizon conf_pct values.
     # When MAE data exists these are calibrated; otherwise they use the heuristic.
     avg_conf_pct = sum(d["confidence_pct"] for d in days) / len(days) if days else 50
-    conf_label   = "high" if avg_conf_pct >= 70 else "medium" if avg_conf_pct >= 45 else "low"
+    conf_label = "high" if avg_conf_pct >= 70 else "medium" if avg_conf_pct >= 45 else "low"
 
     logger.info(
         f"[ENSEMBLE] ✓ Result — "
@@ -1651,17 +1693,17 @@ def run_ensemble_forecast(
 
     return {
         "forecast_days": days,
-        "high":          overall_high,
-        "low":           overall_low,
-        "note":          note,
-        "conf":          conf_label,
-        "stats":         stats,
-        "weights":       {"prophet": w[0], "sarima": w[1], "rf": w[2]},
-        "per_model_d1":  {
+        "high": overall_high,
+        "low": overall_low,
+        "note": note,
+        "conf": conf_label,
+        "stats": stats,
+        "weights": {"prophet": w[0], "sarima": w[1], "rf": w[2]},
+        "per_model_d1": {
             "prophet": float(p_fc[0, 0]) if p_fc is not None else None,
-            "sarima":  float(s_fc[0, 0]) if s_fc is not None else None,
-            "rf":      float(r_fc[0, 0]) if r_fc is not None else None,
+            "sarima": float(s_fc[0, 0]) if s_fc is not None else None,
+            "rf": float(r_fc[0, 0]) if r_fc is not None else None,
         },
         "rf_feature_importance": rf_feature_importance,
-        "monte_carlo":   mc_result,
+        "monte_carlo": mc_result,
     }

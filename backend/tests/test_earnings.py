@@ -6,14 +6,15 @@ yfinance is fully mocked (no network). Covers:
   - calendar=None falls back to get_earnings_dates → ticker still appears.
   - one bad ticker is skipped, the rest of the batch still returns.
 """
+
 from collections.abc import Generator
 from unittest.mock import patch
 
 import pandas as pd
 import pytest
 from fastapi import FastAPI, Request
-from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
 
 from backend.routers import market
@@ -92,8 +93,10 @@ def test_calendar_fallback_to_earnings_dates() -> None:
     fake = _FakeTicker(calendar=None, earnings_dates=df)
 
     client = _build_app()
-    with patch.object(market, "EARNINGS_WATCHLIST", ["MU"]), \
-            patch.object(market.yf, "Ticker", return_value=fake):
+    with (
+        patch.object(market, "EARNINGS_WATCHLIST", ["MU"]),
+        patch.object(market.yf, "Ticker", return_value=fake),
+    ):
         resp = client.get("/earnings/calendar")
 
     assert resp.status_code == 200, resp.text
@@ -110,8 +113,10 @@ def test_fallback_ignores_past_only_dates() -> None:
     fake = _FakeTicker(calendar=None, earnings_dates=df)
 
     client = _build_app()
-    with patch.object(market, "EARNINGS_WATCHLIST", ["MU"]), \
-            patch.object(market.yf, "Ticker", return_value=fake):
+    with (
+        patch.object(market, "EARNINGS_WATCHLIST", ["MU"]),
+        patch.object(market.yf, "Ticker", return_value=fake),
+    ):
         resp = client.get("/earnings/calendar")
 
     assert resp.status_code == 200, resp.text
@@ -126,11 +131,13 @@ def test_bad_ticker_skipped() -> None:
         return bad if symbol == "BADX" else good
 
     client = _build_app()
-    with patch.object(market, "EARNINGS_WATCHLIST", ["GOODX", "BADX"]), \
-            patch.object(market.yf, "Ticker", side_effect=_factory):
+    with (
+        patch.object(market, "EARNINGS_WATCHLIST", ["GOODX", "BADX"]),
+        patch.object(market.yf, "Ticker", side_effect=_factory),
+    ):
         resp = client.get("/earnings/calendar")
 
     assert resp.status_code == 200, resp.text
     symbols = _symbols_in(resp.json())
-    assert "GOODX" in symbols      # batch survived the bad ticker
+    assert "GOODX" in symbols  # batch survived the bad ticker
     assert "BADX" not in symbols

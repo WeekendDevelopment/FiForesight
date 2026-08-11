@@ -2,6 +2,7 @@
 Sector rotation endpoint tests (F27) — GET /sectors/rotation.
 yf.download is mocked; no network required.
 """
+
 from collections.abc import Generator
 from unittest.mock import patch
 
@@ -9,8 +10,8 @@ import numpy as np
 import pandas as pd
 import pytest
 from fastapi import FastAPI, Request
-from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
 
 from backend.routers import market
@@ -49,7 +50,9 @@ def _ramp(total_return_pct: float) -> list[float]:
     return list(np.linspace(100.0, end, _N))
 
 
-def _frame(series_by_ticker: dict[str, list[float] | None], drop: str | None = None) -> pd.DataFrame:
+def _frame(
+    series_by_ticker: dict[str, list[float] | None], drop: str | None = None
+) -> pd.DataFrame:
     """A grouped yfinance-style frame (MultiIndex [ticker, field]).
 
     `series_by_ticker` maps ticker -> close list (or None for all-NaN).
@@ -68,8 +71,8 @@ def _frame(series_by_ticker: dict[str, list[float] | None], drop: str | None = N
 
 def test_rotation_computes_relative_strength() -> None:
     # SPY flat-ish; XLK strongly outperforms, XLE underperforms.
-    leader = SECTOR_ETF_MAP["Technology"]    # XLK
-    laggard = SECTOR_ETF_MAP["Energy"]       # XLE
+    leader = SECTOR_ETF_MAP["Technology"]  # XLK
+    laggard = SECTOR_ETF_MAP["Energy"]  # XLE
     series = {etf: _ramp(5.0) for etf in SECTOR_ETF_MAP.values()}
     series["SPY"] = _ramp(5.0)
     series[leader] = _ramp(25.0)
@@ -93,9 +96,9 @@ def test_rotation_computes_relative_strength() -> None:
 
 def test_quadrant_classification() -> None:
     rows = [
-        {"rs_3m": 5.0,  "rs_momentum": 2.0,  "quadrant": "leading"},
-        {"rs_3m": 5.0,  "rs_momentum": -2.0, "quadrant": "weakening"},
-        {"rs_3m": -5.0, "rs_momentum": 2.0,  "quadrant": "improving"},
+        {"rs_3m": 5.0, "rs_momentum": 2.0, "quadrant": "leading"},
+        {"rs_3m": 5.0, "rs_momentum": -2.0, "quadrant": "weakening"},
+        {"rs_3m": -5.0, "rs_momentum": 2.0, "quadrant": "improving"},
         {"rs_3m": -5.0, "rs_momentum": -2.0, "quadrant": "lagging"},
     ]
     for case in rows:
@@ -128,7 +131,7 @@ def test_quadrant_classification_endpoint() -> None:
     def _shaped(r1: float, r3: float) -> list[float]:
         s = [100.0] * _N
         s[-1] = 100.0
-        s[-22] = 100.0 / (1 + r1 / 100.0)   # r1 = (last/anchor − 1)·100
+        s[-22] = 100.0 / (1 + r1 / 100.0)  # r1 = (last/anchor − 1)·100
         s[-64] = 100.0 / (1 + r3 / 100.0)
         return s
 

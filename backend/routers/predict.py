@@ -1,42 +1,66 @@
-# backend/routers/predict.py  # noqa: E501
+# backend/routers/predict.py
 import asyncio
 import hashlib
 import logging
 import re
-from datetime import datetime, timedelta, timezone, date
+from collections.abc import Awaitable, Callable
+from datetime import date, datetime, timedelta, timezone
 from typing import (
-    Any, Awaitable, Callable, Dict, List, Literal, Optional, Tuple, TYPE_CHECKING,
+    TYPE_CHECKING,
+    Any,
+    Literal,
 )
 
 if TYPE_CHECKING:
     import pandas as pd
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from slowapi.util import get_remote_address
-from pydantic import BaseModel
-
 from config import Config
-from models import (
-    calculate_rsi, calculate_rsi_series, run_ensemble_forecast,
-    calculate_macd, calculate_bollinger_bands, calculate_sma_series,
-    calculate_ema_series, calculate_support_resistance,
-    calculate_atr, calculate_stochastic, calculate_adx, calculate_obv,
-    detect_divergences, calculate_fibonacci_levels, classify_trend,
-    detect_candle_patterns,
-    _skill_to_weights,
-)
-from services import DataCleaner, ANALYST_PERSONAS
 from dependencies import (
-    influx_svc, forecast_store, serp_svc, yf_svc,
-    analyst_jury_svc, sentiment_svc, finnhub_svc, stocktwits_svc, yahoo_rss_svc,
-    fred_svc, insider_svc, short_interest_svc, regime_svc,
-    limiter, get_user_id, _user_rate_key,
+    _user_rate_key,
+    analyst_jury_svc,
+    finnhub_svc,
+    forecast_store,
+    fred_svc,
+    get_user_id,
+    influx_svc,
+    insider_svc,
+    limiter,
+    regime_svc,
+    sentiment_svc,
+    serp_svc,
+    short_interest_svc,
+    stocktwits_svc,
+    yahoo_rss_svc,
+    yf_svc,
 )
+from direction import compute_direction_forecast
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fx import get_usd_rate
-from jury_graph import run_jury_graph, detect_dissent
+from jury_graph import detect_dissent, run_jury_graph
+from models import (
+    _skill_to_weights,
+    calculate_adx,
+    calculate_atr,
+    calculate_bollinger_bands,
+    calculate_ema_series,
+    calculate_fibonacci_levels,
+    calculate_macd,
+    calculate_obv,
+    calculate_rsi,
+    calculate_rsi_series,
+    calculate_sma_series,
+    calculate_stochastic,
+    calculate_support_resistance,
+    classify_trend,
+    detect_candle_patterns,
+    detect_divergences,
+    run_ensemble_forecast,
+)
+from pydantic import BaseModel
 from redis_cache import cache_get, cache_set
 from reversal import compute_reversal_risk
-from direction import compute_direction_forecast
+from services import ANALYST_PERSONAS, DataCleaner
+from slowapi.util import get_remote_address
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -51,7 +75,9 @@ _in_progress_lock: asyncio.Lock = asyncio.Lock()
 async def _resolve_with_lock(symbol: str) -> None:
     async with _in_progress_lock:
         if symbol in _in_progress:
-            logger.info(f"[RL] resolve_past_forecasts already running for {symbol} — skipping duplicate")
+            logger.info(
+                f"[RL] resolve_past_forecasts already running for {symbol} — skipping duplicate"
+            )
             return
         _in_progress.add(symbol)
     try:
@@ -64,6 +90,7 @@ async def _resolve_with_lock(symbol: str) -> None:
 # ---------------------------------------------------------------------------
 # Response schema
 # ---------------------------------------------------------------------------
+
 
 class PredictRequest(BaseModel):
     data: str = "SPY"
@@ -80,8 +107,8 @@ class JuryReanalyzeRequest(BaseModel):
 class RegimeInfoResponse(BaseModel):
     regime: str
     confidence: float
-    state_means: Optional[Dict[str, float]] = None
-    bars_in_current_regime: Optional[int] = None
+    state_means: dict[str, float] | None = None
+    bars_in_current_regime: int | None = None
 
 
 class JuryDissentResponse(BaseModel):
@@ -93,53 +120,54 @@ class JuryDissentResponse(BaseModel):
 class GapAlertResponse(BaseModel):
     # camelCase mirrors the rest of PredictionResponse — these are the JSON wire
     # contract consumed by the TS `GapAlert` interface, not internal backend names.
-    gapPct:      float
-    direction:   Literal["up", "down"]
+    gapPct: float
+    direction: Literal["up", "down"]
     explanation: str
-    headlines:   List[str]
+    headlines: list[str]
 
 
 class PredictionResponse(BaseModel):
-    symbol:       str
+    symbol: str
     currentPrice: str
-    rsi:          str
-    prediction:   dict
-    analystNote:  str
-    confidence:   str
-    history:      List[dict]
-    forecastDays: List[dict]
-    modelStats:   dict
-    metrics:      dict
-    news:         List[dict]
-    trending:     List[dict]
-    indicators:   dict
-    lastUpdated:  str
-    juryAnalysts:  List[dict]
-    modelWeights:  dict
-    sentiment:     dict
-    stocktwits:      dict           = {}
-    monteCarlo:      Optional[dict] = None
-    earningsDates:   List[str]      = []
-    reversalRisk:       Optional[dict] = None
-    directionForecast:  Optional[dict] = None
+    rsi: str
+    prediction: dict
+    analystNote: str
+    confidence: str
+    history: list[dict]
+    forecastDays: list[dict]
+    modelStats: dict
+    metrics: dict
+    news: list[dict]
+    trending: list[dict]
+    indicators: dict
+    lastUpdated: str
+    juryAnalysts: list[dict]
+    modelWeights: dict
+    sentiment: dict
+    stocktwits: dict = {}
+    monteCarlo: dict | None = None
+    earningsDates: list[str] = []
+    reversalRisk: dict | None = None
+    directionForecast: dict | None = None
     # Alternative data (Feature 15) — populated fire-and-forget, never blocking.
-    insiderTransactions: List[dict]    = []
-    shortInterest:       Optional[dict] = None
+    insiderTransactions: list[dict] = []
+    shortInterest: dict | None = None
     # Market regime intelligence (Feature 16)
-    regime:        Optional[RegimeInfoResponse]  = None   # HMM regime label + confidence
-    juryDissent:   Optional[JuryDissentResponse] = None   # minority view on a 2-1 split, else None
+    regime: RegimeInfoResponse | None = None  # HMM regime label + confidence
+    juryDissent: JuryDissentResponse | None = None  # minority view on a 2-1 split, else None
     # Gap Explainer (Feature 22) — populated only on a >=3% daily move, else None
-    gap_alert:     Optional[GapAlertResponse]    = None
+    gap_alert: GapAlertResponse | None = None
     # Currency-aware display (Feature 35) — quote currency + →USD multiplier.
-    currency:      str             = "USD"   # yfinance info['currency'] ("GBp" = pence)
-    fxToUsd:       Optional[float] = None    # 1 quote unit → USD; None when FX unavailable
+    currency: str = "USD"  # yfinance info['currency'] ("GBp" = pence)
+    fxToUsd: float | None = None  # 1 quote unit → USD; None when FX unavailable
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-async def _resolve_currency(metrics: dict) -> Tuple[str, Optional[float]]:
+
+async def _resolve_currency(metrics: dict) -> tuple[str, float | None]:
     """Instrument quote currency + its →USD multiplier (Feature 35).
 
     Reads the currency fetch_info already put in ``metrics``; an FX failure
@@ -160,11 +188,11 @@ def _fmt_market_cap(cap) -> str:
     try:
         v = float(cap)
         if v >= 1e12:
-            return f"${v/1e12:.2f}T"
+            return f"${v / 1e12:.2f}T"
         if v >= 1e9:
-            return f"${v/1e9:.2f}B"
+            return f"${v / 1e9:.2f}B"
         if v >= 1e6:
-            return f"${v/1e6:.2f}M"
+            return f"${v / 1e6:.2f}M"
         return f"${v:,.0f}"
     except Exception:
         return str(cap) if cap else "N/A"
@@ -172,7 +200,7 @@ def _fmt_market_cap(cap) -> str:
 
 def _fmt_pct(val) -> str:
     try:
-        return f"{float(val)*100:.2f}%"
+        return f"{float(val) * 100:.2f}%"
     except Exception:
         return "N/A"
 
@@ -185,10 +213,10 @@ def _fmt_ratio(val, decimals: int = 2, suffix: str = "") -> str:
         return "N/A"
 
 
-def _dedup_news(items: List[dict]) -> List[dict]:
+def _dedup_news(items: list[dict]) -> list[dict]:
     """Deduplicate news items by lowercased title, preserving insertion order."""
     seen: set = set()
-    out: List[dict] = []
+    out: list[dict] = []
     for item in items:
         key = item.get("title", "").lower().strip()
         if key and key not in seen:
@@ -208,20 +236,22 @@ async def _safe_fetch(coro, *, empty, name: str):
 
 def _safe_background(coro_or_future, *, name: str = "background"):
     """Wrap a coroutine in a task that logs exceptions instead of dropping them."""
+
     async def _wrapper():
         try:
             await coro_or_future
         except Exception as e:
-            logger.error(f"[{name}] Background task failed: {e}", exc_info=True)
+            logger.exception(f"[{name}] Background task failed ({type(e).__name__})")
+
     return asyncio.create_task(_wrapper())
 
 
 async def _compute_gap_alert(
     symbol: str,
-    hist_df: "Optional[pd.DataFrame]",
-    news_headlines: List[str],
-    groq_call: Optional[Callable[[str, str, str, int], Awaitable[str]]] = None,
-) -> Optional[dict]:
+    hist_df: "pd.DataFrame | None",
+    news_headlines: list[str],
+    groq_call: Callable[[str, str, str, int], Awaitable[str]] | None = None,
+) -> dict | None:
     """Return a gap-alert dict when the latest daily move is >= 3% (abs), else None.
 
     `hist_df` is the cleaned OHLCV DataFrame (needs a ``Close`` column); the gap is
@@ -262,7 +292,9 @@ async def _compute_gap_alert(
                 raw = await asyncio.wait_for(
                     groq_call(
                         "meta-llama/llama-4-scout-17b-16e-instruct",
-                        system, user, 60,
+                        system,
+                        user,
+                        60,
                     ),
                     timeout=8.0,
                 )
@@ -282,13 +314,13 @@ async def _compute_gap_alert(
         return None
 
 
-async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict) -> str:
+async def _ai_note(symbol: str, closes: list[float], rsi: float, forecast: dict) -> str:
     """
     Header analyst note via Groq llama-3.1-8b-instant (14,400 RPD free — highest budget).
     Uses 8B instead of 70B to preserve llama-3.3-70b-versatile's 1K RPD exclusively for
     the LLAMA-70B jury analyst.  Falls back to the ensemble model's own note if unavailable.
     """
-    recent    = closes[-20:]
+    recent = closes[-20:]
     price_str = ", ".join(f"{p:.2f}" for p in recent)
     system = (
         "You are a concise quantitative financial analyst. "
@@ -309,13 +341,10 @@ async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict)
         f"data_sent: last 20 closes of {len(closes)} total"
     )
     try:
-        raw = await analyst_jury_svc._call_groq(
-            "llama-3.1-8b-instant", system, prompt
-        )
+        raw = await analyst_jury_svc._call_groq("llama-3.1-8b-instant", system, prompt)
         note = raw.strip()
         logger.info(
-            f"[AI-NOTE] ✓ Header note received — {len(note)} chars | "
-            f"ensemble note fallback SKIPPED"
+            f"[AI-NOTE] ✓ Header note received — {len(note)} chars | ensemble note fallback SKIPPED"
         )
         return note
     except Exception as e:
@@ -328,28 +357,28 @@ async def _ai_note(symbol: str, closes: List[float], rsi: float, forecast: dict)
 
 async def _run_analyst_jury(
     symbol: str,
-    closes: List[float],
+    closes: list[float],
     rsi: float,
     forecast: dict,
     stats: dict,
     info: dict,
     macd_data: dict,
     bb_data: dict,
-    sma50: List,
-    sma200: List,
+    sma50: list,
+    sma200: list,
     historical_prices: list,
     sr_levels: dict,
     *,
     news_task=None,
-    news_headlines: Optional[List[str]] = None,
+    news_headlines: list[str] | None = None,
     track_record: str = "",
-    sentiment: Optional[dict] = None,
-    stocktwits: Optional[dict] = None,
-    divergences: Optional[dict] = None,
-    macro: Optional[dict] = None,
-    regime: Optional[dict] = None,
+    sentiment: dict | None = None,
+    stocktwits: dict | None = None,
+    divergences: dict | None = None,
+    macro: dict | None = None,
+    regime: dict | None = None,
     ctx_only: bool = False,
-) -> List[dict]:
+) -> list[dict]:
     """
     Run all 3 analyst personas concurrently via AnalystJuryService.
 
@@ -375,54 +404,60 @@ async def _run_analyst_jury(
                 return v
         return None
 
-    price     = closes[-1]
-    recent    = closes[-10:]
+    price = closes[-1]
+    recent = closes[-10:]
     price_str = ", ".join(f"{p:.2f}" for p in recent)
 
     # Indicator snapshots
-    cur_macd   = _last(macd_data["macd"])
+    cur_macd = _last(macd_data["macd"])
     cur_signal = _last(macd_data["signal"])
-    cur_hist   = _last(macd_data["hist"])
-    cur_upper  = _last(bb_data["upper"])
+    cur_hist = _last(macd_data["hist"])
+    cur_upper = _last(bb_data["upper"])
     cur_middle = _last(bb_data["middle"])
-    cur_lower  = _last(bb_data["lower"])
-    cur_sma50  = _last(sma50)
+    cur_lower = _last(bb_data["lower"])
+    cur_sma50 = _last(sma50)
     cur_sma200 = _last(sma200)
 
     # Derived labels
     macd_label = (
         ("Bullish" if cur_macd > cur_signal else "Bearish")
-        if cur_macd is not None and cur_signal is not None else "N/A"
+        if cur_macd is not None and cur_signal is not None
+        else "N/A"
     )
     bb_pos_str = (
         f"{(price - cur_lower) / (cur_upper - cur_lower) * 100:.1f}% of band"
-        if cur_upper and cur_lower and cur_upper != cur_lower else "N/A"
+        if cur_upper and cur_lower and cur_upper != cur_lower
+        else "N/A"
     )
-    sma50_pct  = f"{(price - cur_sma50)  / cur_sma50  * 100:+.2f}%"  if cur_sma50  is not None else "N/A"
-    sma200_pct = f"{(price - cur_sma200) / cur_sma200 * 100:+.2f}%"  if cur_sma200 is not None else "N/A"
+    sma50_pct = f"{(price - cur_sma50) / cur_sma50 * 100:+.2f}%" if cur_sma50 is not None else "N/A"
+    sma200_pct = (
+        f"{(price - cur_sma200) / cur_sma200 * 100:+.2f}%" if cur_sma200 is not None else "N/A"
+    )
 
     # Volume trend
-    vols   = [float(p.get("volume", 0)) for p in historical_prices if p.get("volume", 0) > 0]
-    vol10  = sum(vols[-10:]) / len(vols[-10:]) if len(vols) >= 10 else None
-    vol30  = sum(vols[-30:]) / len(vols[-30:]) if len(vols) >= 30 else None
+    vols = [float(p.get("volume", 0)) for p in historical_prices if p.get("volume", 0) > 0]
+    vol10 = sum(vols[-10:]) / len(vols[-10:]) if len(vols) >= 10 else None
+    vol30 = sum(vols[-30:]) / len(vols[-30:]) if len(vols) >= 30 else None
     vol_line = (
-        f"10d avg {vol10/1e6:.2f}M vs 30d avg {vol30/1e6:.2f}M "
-        f"({(vol10-vol30)/vol30*100:+.1f}%)"
-        if vol10 and vol30 else "N/A"
+        f"10d avg {vol10 / 1e6:.2f}M vs 30d avg {vol30 / 1e6:.2f}M "
+        f"({(vol10 - vol30) / vol30 * 100:+.1f}%)"
+        if vol10 and vol30
+        else "N/A"
     )
 
     # Support / resistance (top 2 each)
-    sup_str = " / ".join(f"${v:.2f}" for v in sr_levels.get("support",    [])[:2]) or "N/A"
+    sup_str = " / ".join(f"${v:.2f}" for v in sr_levels.get("support", [])[:2]) or "N/A"
     res_str = " / ".join(f"${v:.2f}" for v in sr_levels.get("resistance", [])[:2]) or "N/A"
 
     # Fundamentals
-    pe_str  = str(info.get("pe_ratio", "N/A"))
+    pe_str = str(info.get("pe_ratio", "N/A"))
     cap_str = _fmt_market_cap(info.get("market_cap"))
     rng_str = info.get("range_52w", "N/A")
-    sec_str = info.get("sector",    "N/A")
+    sec_str = info.get("sector", "N/A")
     div_str = (
         _fmt_pct(info.get("dividend_yield"))
-        if info.get("dividend_yield") not in (None, "N/A") else "N/A"
+        if info.get("dividend_yield") not in (None, "N/A")
+        else "N/A"
     )
 
     # News headlines — prefer pre-resolved list, fall back to opportunistic task check
@@ -444,7 +479,7 @@ async def _run_analyst_jury(
                     lines.append(f"  - {h.get('title', '')} [{src}]")
                 news_block = "Recent news:\n" + "\n".join(lines) + "\n"
         except Exception:
-            logging.debug("Failed to build opportunistic news block", exc_info=True)
+            logger.debug("Failed to build opportunistic news block", exc_info=True)
 
     # Formatted indicator lines
     macd_line = (
@@ -454,13 +489,15 @@ async def _run_analyst_jury(
     )
     bb_line = (
         f"BB: Upper={cur_upper:.2f} Mid={cur_middle:.2f} Lower={cur_lower:.2f} | Price: {bb_pos_str}"
-        if cur_upper is not None else "BB: N/A"
+        if cur_upper is not None
+        else "BB: N/A"
     )
     # Each arm is only formatted if its value actually exists
-    sma50_str  = f"SMA50: {cur_sma50:.2f} ({sma50_pct})"    if cur_sma50  is not None else "SMA50: N/A"
-    sma200_str = f"SMA200: {cur_sma200:.2f} ({sma200_pct})" if cur_sma200 is not None else "SMA200: N/A"
-    sma_line   = f"{sma50_str} | {sma200_str}"
-
+    sma50_str = f"SMA50: {cur_sma50:.2f} ({sma50_pct})" if cur_sma50 is not None else "SMA50: N/A"
+    sma200_str = (
+        f"SMA200: {cur_sma200:.2f} ({sma200_pct})" if cur_sma200 is not None else "SMA200: N/A"
+    )
+    sma_line = f"{sma50_str} | {sma200_str}"
 
     sentiment_line = ""
     if sentiment and sentiment.get("headline_count", 0) > 0:
@@ -480,20 +517,26 @@ async def _run_analyst_jury(
 
     _mc = forecast.get("monte_carlo")
     mc_line = (
-        f"Monte Carlo (1000 sims, 5d): "
-        f"prob_gain={_mc['prob_gain']:.1f}%, VaR95=${_mc['var_95']:.2f}\n"
-    ) if _mc else ""
+        (
+            f"Monte Carlo (1000 sims, 5d): "
+            f"prob_gain={_mc['prob_gain']:.1f}%, VaR95=${_mc['var_95']:.2f}\n"
+        )
+        if _mc
+        else ""
+    )
 
     # Divergence signals (Feature 14) — only surfaced when at least one fired.
     div_line = ""
     if divergences:
         active = [
-            label for key, label in (
-                ("rsi_bullish",  "Bullish RSI divergence"),
-                ("rsi_bearish",  "Bearish RSI divergence"),
+            label
+            for key, label in (
+                ("rsi_bullish", "Bullish RSI divergence"),
+                ("rsi_bearish", "Bearish RSI divergence"),
                 ("macd_bullish", "Bullish MACD divergence"),
                 ("macd_bearish", "Bearish MACD divergence"),
-            ) if divergences.get(key)
+            )
+            if divergences.get(key)
         ]
         if active:
             div_line = f"Divergence signals: {', '.join(active)}\n"
@@ -501,14 +544,18 @@ async def _run_analyst_jury(
     # Macro backdrop (Feature 15) — live FRED snapshot, only when available.
     macro_line = ""
     if macro:
+
         def _m(key: str) -> str:
             d = macro.get(key)
             if not isinstance(d, dict) or d.get("value") is None:
                 return "N/A"
             return f"{d['value']:.2f} ({d['delta_30d']:+.2f} 30d)"
+
         curve = macro.get("t10y2y", {})
         curve_str = (
-            f"{curve.get('value'):+.2f}" if isinstance(curve, dict) and curve.get("value") is not None else "N/A"
+            f"{curve.get('value'):+.2f}"
+            if isinstance(curve, dict) and curve.get("value") is not None
+            else "N/A"
         )
         macro_line = (
             f"Macro (FRED): 10Y={_m('dgs10')} | CPI={_m('cpiaucsl')} | "
@@ -545,8 +592,7 @@ async def _run_analyst_jury(
         f"{macro_line}"
         f"{regime_line}"
         f"{sentiment_line}"
-        f"{news_block}"
-        + (f"{track_record}\n" if track_record else "")
+        f"{news_block}" + (f"{track_record}\n" if track_record else "")
     )
 
     # ------------------------------------------------------------------
@@ -564,7 +610,9 @@ async def _run_analyst_jury(
         logger.debug(f"[JURY-GRAPH] ctx cache_set failed (non-fatal): {exc}")
 
     if ctx_only:
-        logger.info(f"[JURY-GRAPH] ctx_only — context cached for {symbol}, jury deferred to /jury/reanalyze")
+        logger.info(
+            f"[JURY-GRAPH] ctx_only — context cached for {symbol}, jury deferred to /jury/reanalyze"
+        )
         return []
 
     try:
@@ -573,8 +621,7 @@ async def _run_analyst_jury(
         # within a short window (prices identical → prompts would otherwise match).
         # The cached `ctx` above stays clean (no timestamp) for /jury/reanalyze.
         ts_prefix = (
-            f"[Analysis timestamp: "
-            f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC]\n"
+            f"[Analysis timestamp: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC]\n"
         )
         # 30s budget accommodates tool-call round-trips (Groq function calling).
         return await asyncio.wait_for(
@@ -582,19 +629,19 @@ async def _run_analyst_jury(
             timeout=30.0,
         )
     except Exception as exc:
-        logger.error("[JURY-GRAPH] invocation failed: %s", exc, exc_info=True)
+        logger.exception("[JURY-GRAPH] invocation failed: %s", type(exc).__name__)
         return [
             {
-                "id":          persona["id"],
-                "avatar":      persona["avatar"],
-                "title":       persona["title"],
+                "id": persona["id"],
+                "avatar": persona["avatar"],
+                "title": persona["title"],
                 "model_label": persona["model_label"],
-                "color":       persona["color"],
-                "rating":      "Hold",
-                "note":        "Analysis unavailable.",
-                "confidence":  25,
-                "model":       "error",
-                "tools_used":  [],
+                "color": persona["color"],
+                "rating": "Hold",
+                "note": "Analysis unavailable.",
+                "confidence": 25,
+                "model": "error",
+                "tools_used": [],
             }
             for persona in ANALYST_PERSONAS
         ]
@@ -604,9 +651,12 @@ async def _run_analyst_jury(
 # Jury re-analysis — re-run the jury with live tools forced on
 # ---------------------------------------------------------------------------
 
+
 @router.post("/jury/reanalyze")
 @limiter.limit(lambda: Config.RATE_LIMIT_JURY, key_func=_user_rate_key)
-async def reanalyze_jury(request: Request, payload: JuryReanalyzeRequest, user: str = Depends(get_user_id)):
+async def reanalyze_jury(
+    request: Request, payload: JuryReanalyzeRequest, user: str = Depends(get_user_id)
+):
     """
     Run the analyst jury on demand for a symbol.
 
@@ -653,8 +703,12 @@ async def reanalyze_jury(request: Request, payload: JuryReanalyzeRequest, user: 
     try:
         jury = await asyncio.wait_for(
             run_jury_graph(
-                analyst_jury_svc, ANALYST_PERSONAS, ctx,
-                symbol=symbol, enable_tools=use_tools, force_tools=use_tools,
+                analyst_jury_svc,
+                ANALYST_PERSONAS,
+                ctx,
+                symbol=symbol,
+                enable_tools=use_tools,
+                force_tools=use_tools,
             ),
             timeout=40.0,
         )
@@ -662,7 +716,7 @@ async def reanalyze_jury(request: Request, payload: JuryReanalyzeRequest, user: 
         logger.error(f"[JURY-REANALYZE] {symbol} timed out after 40s")
         raise HTTPException(status_code=504, detail="Re-analysis timed out — please try again.")
     except Exception as exc:
-        logger.error(f"[JURY-REANALYZE] {symbol} failed: {exc}", exc_info=True)
+        logger.exception(f"[JURY-REANALYZE] {symbol} failed: {type(exc).__name__}")
         raise HTTPException(status_code=502, detail="Re-analysis failed — please try again.")
 
     tools_total = sum(len(v.get("tools_used", [])) for v in jury)
@@ -674,6 +728,7 @@ async def reanalyze_jury(request: Request, payload: JuryReanalyzeRequest, user: 
 # RL feedback: resolve past forecasts against actual closes
 # ---------------------------------------------------------------------------
 
+
 async def resolve_past_forecasts(symbol: str) -> None:
     """
     Background task — matches forecast records against actual market closes,
@@ -684,31 +739,23 @@ async def resolve_past_forecasts(symbol: str) -> None:
     try:
         logger.debug(f"[RL] resolve_past_forecasts — starting for {symbol}")
 
-        records = await asyncio.to_thread(
-            forecast_store.query_forecast_records, symbol, 10
-        )
+        records = await asyncio.to_thread(forecast_store.query_forecast_records, symbol, 10)
         if not records:
             logger.info(f"[RL] No forecast records to resolve for {symbol}")
             return
 
-        existing_outcomes = await asyncio.to_thread(
-            forecast_store.query_price_outcomes, symbol, 15
-        )
+        existing_outcomes = await asyncio.to_thread(forecast_store.query_price_outcomes, symbol, 15)
 
         # Resolution markers prevent double-applying errors under concurrent
         # /predict calls (each call spawns resolve_past_forecasts as a task).
-        resolved_set = await asyncio.to_thread(
-            forecast_store.query_resolved_timestamps, symbol, 30
-        )
+        resolved_set = await asyncio.to_thread(forecast_store.query_resolved_timestamps, symbol, 30)
 
         # Fetch 30d yfinance history → build date → actual_close map
         df = await asyncio.to_thread(yf_svc.fetch_history, symbol, "30d")
-        actual_map: Dict[date, float] = {}
+        actual_map: dict[date, float] = {}
         if not df.empty:
             for ts, row in df.iterrows():
-                actual_map[ts.date()] = float(
-                    row.get("Close", row.get("close", 0)) or 0
-                )
+                actual_map[ts.date()] = float(row.get("Close", row.get("close", 0)) or 0)
 
         # Merge already-stored outcomes (takes precedence)
         actual_map.update(existing_outcomes)
@@ -744,7 +791,7 @@ async def resolve_past_forecasts(symbol: str) -> None:
                 hops += 1
             return d
 
-        def resolve_actual(target_date: date) -> Optional[float]:
+        def resolve_actual(target_date: date) -> float | None:
             """
             Return actual close for target_date, or None.
             Searches forward up to 3 calendar days for the first entry in
@@ -782,16 +829,15 @@ async def resolve_past_forecasts(symbol: str) -> None:
                 # Write price_outcome once per record
                 if target_d1 not in existing_outcomes:
                     outcome_dt = datetime(
-                        target_d1.year, target_d1.month, target_d1.day,
-                        tzinfo=timezone.utc
+                        target_d1.year, target_d1.month, target_d1.day, tzinfo=timezone.utc
                     )
                     new_outcomes.append((outcome_dt, actual_d1))
 
                 # Per-model d1 errors (only on first pass)
                 for model_name, field_key in [
                     ("prophet", "p_d1"),
-                    ("sarima",  "s_d1"),
-                    ("rf",      "r_d1"),
+                    ("sarima", "s_d1"),
+                    ("rf", "r_d1"),
                 ]:
                     pred_val = float(rec.get(field_key, 0) or 0)
                     if pred_val > 0:
@@ -804,7 +850,7 @@ async def resolve_past_forecasts(symbol: str) -> None:
 
                 # Band accuracy check (once per record)
                 e_d1_high = float(rec.get("e_d1_high", 0) or 0)
-                e_d1_low  = float(rec.get("e_d1_low",  0) or 0)
+                e_d1_low = float(rec.get("e_d1_low", 0) or 0)
                 if e_d1_high > 0 and e_d1_low > 0:
                     hit = 1 if e_d1_low <= actual_d1 <= e_d1_high else 0
                     band_hits.append(hit)
@@ -819,7 +865,7 @@ async def resolve_past_forecasts(symbol: str) -> None:
                 if target_dn > now_date:
                     break  # this and later horizons not yet closed
                 field_key = f"e_d{horizon}"
-                pred_val  = float(rec.get(field_key, 0) or 0)
+                pred_val = float(rec.get(field_key, 0) or 0)
                 if pred_val <= 0:
                     newly_resolved[pred_time] = max(newly_resolved.get(pred_time, 0), horizon)
                     continue
@@ -844,13 +890,11 @@ async def resolve_past_forecasts(symbol: str) -> None:
         # resolution markers.  If an accuracy write fails the markers are never
         # advanced, so the next cron pass can safely retry from scratch.
         # Decay=0.85 means recent errors count ~6× more than 10-day-old errors.
-        existing_acc = await asyncio.to_thread(
-            forecast_store.query_model_accuracy, symbol
-        )
+        existing_acc = await asyncio.to_thread(forecast_store.query_model_accuracy, symbol)
         ema_decay = 0.85
 
-        def _apply_ema(prev: Dict[str, float], errs: List[float]) -> Tuple[float, int]:
-            prev_n   = prev.get("samples", 0)
+        def _apply_ema(prev: dict[str, float], errs: list[float]) -> tuple[float, int]:
+            prev_n = prev.get("samples", 0)
             prev_mae = prev.get("mae", 0.0)
             cur_mae, cur_n = prev_mae, prev_n
             for err in errs:
@@ -871,9 +915,7 @@ async def resolve_past_forecasts(symbol: str) -> None:
                 forecast_store.write_model_accuracy, symbol, model_name, cur_mae, cur_n
             )
             if ok:
-                logger.info(
-                    f"[RL] {symbol}/{model_name} MAE → ${cur_mae:.3f} (n={cur_n})"
-                )
+                logger.info(f"[RL] {symbol}/{model_name} MAE → ${cur_mae:.3f} (n={cur_n})")
             else:
                 logger.warning(
                     f"[RL] {symbol}/{model_name} accuracy write failed — "
@@ -882,9 +924,7 @@ async def resolve_past_forecasts(symbol: str) -> None:
                 all_accuracy_ok = False
 
         # Update per-horizon ensemble accuracy
-        existing_ens = await asyncio.to_thread(
-            forecast_store.query_ensemble_mae, symbol
-        )
+        existing_ens = await asyncio.to_thread(forecast_store.query_ensemble_mae, symbol)
         for horizon_key, errs in errors_per_horizon.items():
             if not errs:
                 continue
@@ -893,9 +933,7 @@ async def resolve_past_forecasts(symbol: str) -> None:
                 forecast_store.write_model_accuracy, symbol, horizon_key, cur_mae, cur_n
             )
             if ok:
-                logger.info(
-                    f"[RL] {symbol}/{horizon_key} MAE → ${cur_mae:.3f} (n={cur_n})"
-                )
+                logger.info(f"[RL] {symbol}/{horizon_key} MAE → ${cur_mae:.3f} (n={cur_n})")
             else:
                 logger.warning(
                     f"[RL] {symbol}/{horizon_key} accuracy write failed — "
@@ -908,9 +946,7 @@ async def resolve_past_forecasts(symbol: str) -> None:
         # InfluxDB), so a future retry is safe.
         if all_accuracy_ok:
             for rt, max_h in newly_resolved.items():
-                await asyncio.to_thread(
-                    forecast_store.mark_forecast_resolved, symbol, rt, max_h
-                )
+                await asyncio.to_thread(forecast_store.mark_forecast_resolved, symbol, rt, max_h)
         else:
             logger.warning(
                 f"[RL] {symbol}: skipping {len(newly_resolved)} resolution marker(s) "
@@ -918,14 +954,18 @@ async def resolve_past_forecasts(symbol: str) -> None:
             )
 
         band_pct = (
-            f"{sum(band_hits)/len(band_hits)*100:.0f}% ({sum(band_hits)}/{len(band_hits)})"
-            if band_hits else "no data yet"
+            f"{sum(band_hits) / len(band_hits) * 100:.0f}% ({sum(band_hits)}/{len(band_hits)})"
+            if band_hits
+            else "no data yet"
         )
-        ens_summary = ", ".join(
-            f"d{i}={len(errors_per_horizon[f'ensemble_d{i}'])}err"
-            for i in range(1, 6)
-            if errors_per_horizon[f"ensemble_d{i}"]
-        ) or "none"
+        ens_summary = (
+            ", ".join(
+                f"d{i}={len(errors_per_horizon[f'ensemble_d{i}'])}err"
+                for i in range(1, 6)
+                if errors_per_horizon[f"ensemble_d{i}"]
+            )
+            or "none"
+        )
         logger.info(
             f"[RL] ✓ resolve_past_forecasts complete — {symbol}: "
             f"{len(new_outcomes)} new outcomes | {len(newly_resolved)} records advanced | "
@@ -935,14 +975,13 @@ async def resolve_past_forecasts(symbol: str) -> None:
         )
 
     except Exception as e:
-        logger.warning(
-            f"[RL] resolve_past_forecasts failed for {symbol}: {e}", exc_info=True
-        )
+        logger.warning(f"[RL] resolve_past_forecasts failed for {symbol}: {e}", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @router.get("/health")
 async def health():
@@ -960,8 +999,12 @@ def _fetch_intraday_bars(symbol: str) -> dict:
 
     try:
         df = _yf.download(
-            symbol, period="1d", interval="5m",
-            progress=False, auto_adjust=True, timeout=10,
+            symbol,
+            period="1d",
+            interval="5m",
+            progress=False,
+            auto_adjust=True,
+            timeout=10,
         )
         if df is None or df.empty:
             return {}
@@ -976,9 +1019,9 @@ def _fetch_intraday_bars(symbol: str) -> dict:
             idx = idx.tz_localize("UTC")
         idx_et = idx.tz_convert("America/New_York")
         mask = (
-            ((idx_et.hour == 9)  & (idx_et.minute >= 30)) |
-            ((idx_et.hour > 9)   & (idx_et.hour < 16))    |
-            ((idx_et.hour == 16) & (idx_et.minute == 0))
+            ((idx_et.hour == 9) & (idx_et.minute >= 30))
+            | ((idx_et.hour > 9) & (idx_et.hour < 16))
+            | ((idx_et.hour == 16) & (idx_et.minute == 0))
         )
         df = df[mask][:78]  # max 78 bars (full trading day)
 
@@ -986,13 +1029,13 @@ def _fetch_intraday_bars(symbol: str) -> dict:
             return {}
 
         close_col = "Close" if "Close" in df.columns else "close"
-        closes_s  = df[close_col].dropna()
+        closes_s = df[close_col].dropna()
         if len(closes_s) < 2:
             return {}
 
         first_close = float(closes_s.iloc[0])
-        last_close  = float(closes_s.iloc[-1])
-        change_pct  = ((last_close - first_close) / first_close * 100) if first_close else 0.0
+        last_close = float(closes_s.iloc[-1])
+        change_pct = ((last_close - first_close) / first_close * 100) if first_close else 0.0
 
         bars = [
             {"t": ts.strftime("%Y-%m-%dT%H:%M:%S"), "c": round(float(v), 4)}
@@ -1009,7 +1052,7 @@ def _fetch_intraday_bars(symbol: str) -> dict:
 
 @router.get("/sparklines")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def sparklines(request: Request, tickers: str = "", extra: str = "") -> List[Dict[str, Any]]:
+async def sparklines(request: Request, tickers: str = "", extra: str = "") -> list[dict[str, Any]]:
     """Return intraday 1d/5m bar data for trending tickers + optional extra symbols.
 
     Query params:
@@ -1023,10 +1066,10 @@ async def sparklines(request: Request, tickers: str = "", extra: str = "") -> Li
     Each symbol is cached individually for 5 minutes to avoid redundant yfinance calls.
     """
     # Build deduplicated symbol list (base + extras, max 24)
-    base   = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    base = [t.strip().upper() for t in tickers.split(",") if t.strip()]
     extras = [t.strip().upper() for t in extra.split(",") if t.strip()]
     seen: set = set()
-    symbols: List[str] = []
+    symbols: list[str] = []
     for s in base + extras:
         if s and s not in seen:
             seen.add(s)
@@ -1035,7 +1078,7 @@ async def sparklines(request: Request, tickers: str = "", extra: str = "") -> Li
 
     _SPARKLINE_TTL = 300  # 5 minutes
 
-    async def _get_one(sym: str) -> Optional[dict]:
+    async def _get_one(sym: str) -> dict | None:
         cache_key = f"sparkline:{sym}"
         cached = await cache_get(cache_key)
         if cached is not None:
@@ -1053,7 +1096,7 @@ async def sparklines(request: Request, tickers: str = "", extra: str = "") -> Li
     tasks = [asyncio.create_task(_get_one(s)) for s in symbols]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    output: List[dict] = []
+    output: list[dict] = []
     for sym, res in zip(symbols, results):
         if isinstance(res, Exception):
             logger.warning("[sparklines] %s failed: %s", sym, res)
@@ -1069,11 +1112,11 @@ async def debug():
     from services import YFINANCE_AVAILABLE
 
     results: dict = {
-        "yfinance_installed":   YFINANCE_AVAILABLE,
-        "ml_models_available":  MODELS_AVAILABLE,
-        "serp_api_key_set":     bool(Config.SERP_API_KEY),
-        "groq_key_set":         bool(Config.GROQ_API_KEY),
-        "influxdb_token_set":   bool(Config.INFLUXDB_TOKEN),
+        "yfinance_installed": YFINANCE_AVAILABLE,
+        "ml_models_available": MODELS_AVAILABLE,
+        "serp_api_key_set": bool(Config.SERP_API_KEY),
+        "groq_key_set": bool(Config.GROQ_API_KEY),
+        "influxdb_token_set": bool(Config.INFLUXDB_TOKEN),
     }
 
     # Test InfluxDB connectivity
@@ -1082,23 +1125,28 @@ async def debug():
         results["influxdb_reachable"] = True
     except Exception as e:
         results["influxdb_reachable"] = False
-        results["influxdb_error"]     = str(e)
+        results["influxdb_error"] = str(e)
 
     # Test yfinance (quick 5-day fetch)
     if YFINANCE_AVAILABLE:
         try:
             import yfinance as _yf
+
             df = await asyncio.to_thread(
                 lambda: _yf.download(
-                    "AAPL", period="5d", interval="1d",
-                    progress=False, auto_adjust=True, timeout=10,
+                    "AAPL",
+                    period="5d",
+                    interval="1d",
+                    progress=False,
+                    auto_adjust=True,
+                    timeout=10,
                 )
             )
             results["yfinance_reachable"] = not df.empty
-            results["yfinance_rows"]      = int(len(df))
+            results["yfinance_rows"] = len(df)
         except Exception as e:
             results["yfinance_reachable"] = False
-            results["yfinance_error"]     = str(e)
+            results["yfinance_error"] = str(e)
 
     return results
 
@@ -1109,7 +1157,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     symbol = payload.data.upper()
     if not re.fullmatch(r"[A-Za-z0-9.\-:]{1,15}", symbol):
         raise HTTPException(status_code=422, detail="Invalid symbol.")
-    now    = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
 
     logger.info("[REQUEST] ════════════════════════════════════════════")
     logger.info(f"[REQUEST] /predict → symbol={symbol} | {now.isoformat()}")
@@ -1127,24 +1175,28 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     #   • InfluxDB write_price (Step 7) still tracks intraday live-price history
     # Steps 1 + 3 in parallel — fetch_info is skipped if cached in Redis (1h TTL).
     info_cache_key = f"info:{symbol.upper()}"
-    cached_info    = await cache_get(info_cache_key)
+    cached_info = await cache_get(info_cache_key)
 
     if cached_info is not None:
         logger.info(f"[STEP-1+3] fetch_info cache HIT for {symbol} — fetching history only")
         df_result = await asyncio.to_thread(yf_svc.fetch_history, symbol, "2y")
-        df         = df_result
+        df = df_result
         info: dict = cached_info
     else:
-        logger.info("[STEP-1+3] fetch_info cache MISS — fetching history + fundamentals concurrently ...")
+        logger.info(
+            "[STEP-1+3] fetch_info cache MISS — fetching history + fundamentals concurrently ..."
+        )
         _gather_results = await asyncio.gather(
             asyncio.to_thread(yf_svc.fetch_history, symbol, "2y"),
             asyncio.to_thread(yf_svc.fetch_info, symbol),
             return_exceptions=True,
         )
-        df         = _gather_results[0]
+        df = _gather_results[0]
         _info_result = _gather_results[1]
         if isinstance(_info_result, Exception):
-            logger.error(f"[STEP-3] fetch_info failed for {symbol}: {_info_result} — using empty fundamentals")
+            logger.error(
+                f"[STEP-3] fetch_info failed for {symbol}: {_info_result} — using empty fundamentals"
+            )
             info = {}
         else:
             info = _info_result
@@ -1182,14 +1234,12 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     has_fresh = await asyncio.to_thread(influx_svc.has_recent_data, symbol)
     if not has_fresh:
         logger.debug(
-            "[STEP-1] [INFLUXDB] Cache MISS — "
-            "writing last 29d rows to InfluxDB for analytics ..."
+            "[STEP-1] [INFLUXDB] Cache MISS — writing last 29d rows to InfluxDB for analytics ..."
         )
         await asyncio.to_thread(influx_svc.write_ohlcv_batch, symbol, df)
     else:
         logger.debug(
-            "[STEP-1] [INFLUXDB] Cache HIT — "
-            "InfluxDB write SKIPPED (fresh data already present)"
+            "[STEP-1] [INFLUXDB] Cache HIT — InfluxDB write SKIPPED (fresh data already present)"
         )
 
     historical_prices.sort(key=lambda x: x["_time"])
@@ -1202,23 +1252,28 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         # with the live price instead of appending a duplicate — otherwise the
         # chart sees two bars with the same date and lightweight-charts fails
         # its strict-ascending assertion.
-        last_time: Optional[Any]       = historical_prices[-1]["_time"] if historical_prices else None
-        last_date: Optional[date]      = last_time.date() if hasattr(last_time, "date") else None
+        last_time: Any | None = historical_prices[-1]["_time"] if historical_prices else None
+        last_date: date | None = last_time.date() if hasattr(last_time, "date") else None
         if last_date == now.date():
-            last_bar: Dict[str, Any]   = historical_prices[-1]
+            last_bar: dict[str, Any] = historical_prices[-1]
             last_bar["close"] = live_price
-            last_bar["high"]  = max(float(last_bar.get("high", live_price)), live_price)
-            last_bar["low"]   = min(float(last_bar.get("low",  live_price)), live_price)
+            last_bar["high"] = max(float(last_bar.get("high", live_price)), live_price)
+            last_bar["low"] = min(float(last_bar.get("low", live_price)), live_price)
             logger.info(
                 f"[STEP-2] ✓ Live price ${live_price:.2f} merged into today's "
                 f"existing bar (total bars: {len(historical_prices)})"
             )
         else:
-            historical_prices.append({
-                "_time": now, "close": live_price,
-                "open":  live_price, "high": live_price,
-                "low":   live_price, "volume": 0.0,
-            })
+            historical_prices.append(
+                {
+                    "_time": now,
+                    "close": live_price,
+                    "open": live_price,
+                    "high": live_price,
+                    "low": live_price,
+                    "volume": 0.0,
+                }
+            )
             logger.info(
                 f"[STEP-2] ✓ Live price ${live_price:.2f} injected as latest bar "
                 f"(total bars now: {len(historical_prices)})"
@@ -1226,29 +1281,44 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     else:
         live_price = float(historical_prices[-1]["close"])
         logger.info(
-            f"[STEP-2] Live price unavailable — "
-            f"using last historical close: ${live_price:.2f}"
+            f"[STEP-2] Live price unavailable — using last historical close: ${live_price:.2f}"
         )
 
     # ── Step 3. Fundamentals (info already fetched concurrently at Step 1+3) ──
     metrics = {
-        "market_cap":     _fmt_market_cap(info.get("market_cap")),
-        "pe_ratio":       str(info.get("pe_ratio", "N/A")),
-        "yield":          _fmt_pct(info.get("dividend_yield")) if info.get("dividend_yield") not in (None, "N/A") else "N/A",
-        "prev_close":     str(info.get("prev_close", "N/A")),
-        "range_52w":      info.get("range_52w",  "N/A"),
-        "sector":         info.get("sector",     "N/A"),
-        "industry":       info.get("industry",   "N/A"),
-        "currency":       info.get("currency",   "USD"),
+        "market_cap": _fmt_market_cap(info.get("market_cap")),
+        "pe_ratio": str(info.get("pe_ratio", "N/A")),
+        "yield": _fmt_pct(info.get("dividend_yield"))
+        if info.get("dividend_yield") not in (None, "N/A")
+        else "N/A",
+        "prev_close": str(info.get("prev_close", "N/A")),
+        "range_52w": info.get("range_52w", "N/A"),
+        "sector": info.get("sector", "N/A"),
+        "industry": info.get("industry", "N/A"),
+        "currency": info.get("currency", "USD"),
         # Extended quant fundamentals
-        "beta":           _fmt_ratio(info.get("beta"))          if info.get("beta")          not in (None, "N/A") else "N/A",
-        "forward_pe":     _fmt_ratio(info.get("forward_pe"))    if info.get("forward_pe")    not in (None, "N/A") else "N/A",
-        "peg_ratio":      _fmt_ratio(info.get("peg_ratio"))     if info.get("peg_ratio")     not in (None, "N/A") else "N/A",
-        "price_to_book":  _fmt_ratio(info.get("price_to_book")) if info.get("price_to_book") not in (None, "N/A") else "N/A",
-        "ev_to_ebitda":   _fmt_ratio(info.get("ev_to_ebitda"))  if info.get("ev_to_ebitda")  not in (None, "N/A") else "N/A",
-        "free_cash_flow": _fmt_market_cap(info.get("free_cash_flow")) if info.get("free_cash_flow") not in (None, "N/A") else "N/A",
-        "revenue_growth": _fmt_pct(info.get("revenue_growth"))  if info.get("revenue_growth") not in (None, "N/A") else "N/A",
-        "total_debt":     _fmt_market_cap(info.get("total_debt"))     if info.get("total_debt")     not in (None, "N/A") else "N/A",
+        "beta": _fmt_ratio(info.get("beta")) if info.get("beta") not in (None, "N/A") else "N/A",
+        "forward_pe": _fmt_ratio(info.get("forward_pe"))
+        if info.get("forward_pe") not in (None, "N/A")
+        else "N/A",
+        "peg_ratio": _fmt_ratio(info.get("peg_ratio"))
+        if info.get("peg_ratio") not in (None, "N/A")
+        else "N/A",
+        "price_to_book": _fmt_ratio(info.get("price_to_book"))
+        if info.get("price_to_book") not in (None, "N/A")
+        else "N/A",
+        "ev_to_ebitda": _fmt_ratio(info.get("ev_to_ebitda"))
+        if info.get("ev_to_ebitda") not in (None, "N/A")
+        else "N/A",
+        "free_cash_flow": _fmt_market_cap(info.get("free_cash_flow"))
+        if info.get("free_cash_flow") not in (None, "N/A")
+        else "N/A",
+        "revenue_growth": _fmt_pct(info.get("revenue_growth"))
+        if info.get("revenue_growth") not in (None, "N/A")
+        else "N/A",
+        "total_debt": _fmt_market_cap(info.get("total_debt"))
+        if info.get("total_debt") not in (None, "N/A")
+        else "N/A",
     }
     logger.info(
         f"[STEP-3] ✓ Fundamentals — sector={metrics['sector']}, industry={metrics['industry']}, "
@@ -1260,17 +1330,17 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     # ── Step 4. Analytics & ensemble forecast ────────────────────────────────
     # FIX (Issue 3): extract full OHLCV arrays — all are now passed to models
     # so Prophet/SARIMAX/RF can use volume and intraday range as additional context.
-    closes  = [float(p["close"])              for p in historical_prices]
-    opens   = [float(p.get("open",  p["close"])) for p in historical_prices]
-    highs   = [float(p.get("high",  p["close"])) for p in historical_prices]
-    lows    = [float(p.get("low",   p["close"])) for p in historical_prices]
+    closes = [float(p["close"]) for p in historical_prices]
+    opens = [float(p.get("open", p["close"])) for p in historical_prices]
+    highs = [float(p.get("high", p["close"])) for p in historical_prices]
+    lows = [float(p.get("low", p["close"])) for p in historical_prices]
 
     # Replace zero-volume rows (e.g. live-price injection) with rolling mean
     # so the synthetic bar doesn't skew normalisation inside the models.
-    volumes_raw  = [float(p.get("volume", 0)) for p in historical_prices]
+    volumes_raw = [float(p.get("volume", 0)) for p in historical_prices]
     nonzero_vols = [v for v in volumes_raw if v > 0]
-    vol_fill     = float(np.mean(nonzero_vols)) if nonzero_vols else 1.0
-    volumes      = [v if v > 0 else vol_fill for v in volumes_raw]
+    vol_fill = float(np.mean(nonzero_vols)) if nonzero_vols else 1.0
+    volumes = [v if v > 0 else vol_fill for v in volumes_raw]
 
     zero_vol_count = sum(1 for v in volumes_raw if v == 0)
     logger.debug(
@@ -1293,18 +1363,18 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
 
     model_acc, ensemble_mae, naive_mae_val = await asyncio.gather(
         _rl_query(forecast_store.query_model_accuracy, {}),
-        _rl_query(forecast_store.query_ensemble_mae,   {}),
-        _rl_query(forecast_store.query_naive_mae,      None),
+        _rl_query(forecast_store.query_ensemble_mae, {}),
+        _rl_query(forecast_store.query_naive_mae, None),
     )
 
     historical_weights = None
-    rl_sample_count    = 0
-    track_record       = ""
+    rl_sample_count = 0
+    track_record = ""
 
     if model_acc:
         p_acc = model_acc.get("prophet", {})
-        s_acc = model_acc.get("sarima",  {})
-        r_acc = model_acc.get("rf",      {})
+        s_acc = model_acc.get("sarima", {})
+        r_acc = model_acc.get("rf", {})
         min_samples = min(
             p_acc.get("samples", 0),
             s_acc.get("samples", 0),
@@ -1320,10 +1390,11 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             historical_weights = _skill_to_weights(maes, naive_mae_val)
             using_skill = naive_mae_val is not None and naive_mae_val > 0
             logger.debug(
-                "[RL] %s weights — prophet=%.3f sarima=%.3f rf=%.3f | "
-                "naive_mae=%s | samples=%d",
+                "[RL] %s weights — prophet=%.3f sarima=%.3f rf=%.3f | naive_mae=%s | samples=%d",
                 "Skill-based" if using_skill else "Inv-MAE (no naive baseline yet)",
-                historical_weights[0], historical_weights[1], historical_weights[2],
+                historical_weights[0],
+                historical_weights[1],
+                historical_weights[2],
                 "N/A" if naive_mae_val is None else f"{naive_mae_val:.4f}",
                 rl_sample_count,
             )
@@ -1351,18 +1422,24 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     # failure (or <30 bars), so it never blocks or breaks the forecast.
     regime_result = await _safe_fetch(
         regime_svc.get_regime(symbol, closes),
-        empty={"regime": "unknown", "confidence": 0.0}, name="REGIME",
+        empty={"regime": "unknown", "confidence": 0.0},
+        name="REGIME",
     )
     logger.info(
         "[STEP-4a] Regime — %s (conf=%.2f, %s bars)",
-        regime_result.get("regime"), regime_result.get("confidence", 0.0),
+        regime_result.get("regime"),
+        regime_result.get("confidence", 0.0),
         regime_result.get("bars_in_current_regime", 0),
     )
 
     forecast = await asyncio.to_thread(
         run_ensemble_forecast,
-        closes, symbol,
-        opens=opens, highs=highs, lows=lows, volumes=volumes,
+        closes,
+        symbol,
+        opens=opens,
+        highs=highs,
+        lows=lows,
+        volumes=volumes,
         historical_weights=historical_weights,
         sample_count=rl_sample_count,
         ensemble_mae=ensemble_mae,
@@ -1375,33 +1452,37 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         _safe_background(
             asyncio.to_thread(
                 influx_svc.write_market_regime,
-                symbol, regime_result["regime"],
+                symbol,
+                regime_result["regime"],
                 float(regime_result.get("confidence", 0.0)),
             ),
             name="REGIME-WRITE",
         )
 
     # ── RL: record this forecast + resolve old ones (background) ─────────────
-    fweights    = forecast.get("weights",      {"prophet": 0.0, "sarima": 0.0, "rf": 0.0})
-    per_model   = forecast.get("per_model_d1", {"prophet": None, "sarima": None, "rf": None})
+    fweights = forecast.get("weights", {"prophet": 0.0, "sarima": 0.0, "rf": 0.0})
+    per_model = forecast.get("per_model_d1", {"prophet": None, "sarima": None, "rf": None})
     forecast_days = forecast.get("forecast_days", [])
     ensemble_d1_preds = [d["predicted"] for d in forecast_days]
     d1_high = forecast_days[0]["high"] if forecast_days else None
-    d1_low  = forecast_days[0]["low"]  if forecast_days else None
-    _safe_background(asyncio.to_thread(
-        forecast_store.write_forecast_record,
-        symbol,
-        float(closes[-1]),
-        per_model.get("prophet"),
-        per_model.get("sarima"),
-        per_model.get("rf"),
-        fweights.get("prophet", 0.0),
-        fweights.get("sarima",  0.0),
-        fweights.get("rf",      0.0),
-        ensemble_d1_preds,
-        d1_high,
-        d1_low,
-    ), name="RL-WRITE")
+    d1_low = forecast_days[0]["low"] if forecast_days else None
+    _safe_background(
+        asyncio.to_thread(
+            forecast_store.write_forecast_record,
+            symbol,
+            float(closes[-1]),
+            per_model.get("prophet"),
+            per_model.get("sarima"),
+            per_model.get("rf"),
+            fweights.get("prophet", 0.0),
+            fweights.get("sarima", 0.0),
+            fweights.get("rf", 0.0),
+            ensemble_d1_preds,
+            d1_high,
+            d1_low,
+        ),
+        name="RL-WRITE",
+    )
     _safe_background(_resolve_with_lock(symbol), name="RL-RESOLVE")
 
     # ── Step 4b. Technical indicators (close-based — correct by definition) ──
@@ -1410,11 +1491,11 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         "MACD(12,26,9), BB(window=20, std=2), SMA50, SMA200, EMA20, EMA50 ..."
     )
     macd_data = calculate_macd(closes)
-    bb_data   = calculate_bollinger_bands(closes)
-    sma50     = calculate_sma_series(closes, 50)
-    sma200    = calculate_sma_series(closes, 200)
-    ema20     = calculate_ema_series(closes, 20)
-    ema50     = calculate_ema_series(closes, 50)
+    bb_data = calculate_bollinger_bands(closes)
+    sma50 = calculate_sma_series(closes, 50)
+    sma200 = calculate_sma_series(closes, 200)
+    ema20 = calculate_ema_series(closes, 20)
+    ema50 = calculate_ema_series(closes, 50)
     logger.info(f"[STEP-4b] ✓ All indicator series computed ({len(closes)} points each)")
 
     # ── Step 4b+. RSI series + reversal-risk classifier ──────────────────────
@@ -1427,12 +1508,10 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     # Each helper is self-contained and returns None / all-false on failure, so
     # the whole block is non-fatal — a bad indicator never aborts /predict.
     atr_14 = await asyncio.to_thread(calculate_atr, highs, lows, closes)
-    stoch  = await asyncio.to_thread(calculate_stochastic, highs, lows, closes)
-    adx    = await asyncio.to_thread(calculate_adx, highs, lows, closes)
+    stoch = await asyncio.to_thread(calculate_stochastic, highs, lows, closes)
+    adx = await asyncio.to_thread(calculate_adx, highs, lows, closes)
     obv_history = await asyncio.to_thread(calculate_obv, closes, volumes)
-    divergences = await asyncio.to_thread(
-        detect_divergences, closes, rsi_full, macd_data["hist"]
-    )
+    divergences = await asyncio.to_thread(detect_divergences, closes, rsi_full, macd_data["hist"])
     # Fibonacci retracement levels (Feature 25) — swing high/low over the chart
     # window. None when insufficient data; the frontend handles null gracefully.
     fibonacci = await asyncio.to_thread(calculate_fibonacci_levels, highs, lows)
@@ -1442,20 +1521,30 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     logger.info(
         "[STEP-4b#] ✓ Advanced signals — ATR-14=%s | Stoch %%K=%s %%D=%s | "
         "ADX=%s | OBV=%s pts | divergences=%s",
-        atr_14, stoch.get("stoch_k"), stoch.get("stoch_d"),
-        adx.get("adx_14"), len(obv_history) if obv_history else 0, divergences,
+        atr_14,
+        stoch.get("stoch_k"),
+        stoch.get("stoch_d"),
+        adx.get("adx_14"),
+        len(obv_history) if obv_history else 0,
+        divergences,
     )
 
     try:
         reversal_risk = await asyncio.to_thread(
             compute_reversal_risk,
-            closes, rsi_full, bb_data["upper"], bb_data["lower"],
-            macd_data["hist"], volumes,
+            closes,
+            rsi_full,
+            bb_data["upper"],
+            bb_data["lower"],
+            macd_data["hist"],
+            volumes,
         )
         if reversal_risk:
             logger.info(
                 "[STEP-4b+] ✓ Reversal risk: %d%% (%s) — trained on %d bars",
-                reversal_risk["risk_pct"], reversal_risk["signal"], reversal_risk["trained_on"],
+                reversal_risk["risk_pct"],
+                reversal_risk["signal"],
+                reversal_risk["trained_on"],
             )
         else:
             logger.info("[STEP-4b+] Reversal risk skipped (insufficient data)")
@@ -1467,19 +1556,27 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     try:
         direction_forecast = await asyncio.to_thread(
             compute_direction_forecast,
-            closes, rsi_full, bb_data["upper"], bb_data["lower"],
-            macd_data["hist"], volumes,
+            closes,
+            rsi_full,
+            bb_data["upper"],
+            bb_data["lower"],
+            macd_data["hist"],
+            volumes,
         )
         if direction_forecast:
             logger.info(
                 "[STEP-4b++] ✓ Direction: %s %.0f%% confidence (+%d%% edge) — trained on %d bars",
-                direction_forecast["direction"].upper(), direction_forecast["confidence_pct"],
-                direction_forecast["edge_pct"], direction_forecast["trained_on"],
+                direction_forecast["direction"].upper(),
+                direction_forecast["confidence_pct"],
+                direction_forecast["edge_pct"],
+                direction_forecast["trained_on"],
             )
         else:
             logger.info("[STEP-4b++] Direction forecast skipped (insufficient data)")
     except Exception as exc:
-        logger.warning("[STEP-4b++] Direction forecast failed for %s: %s", symbol, exc, exc_info=True)
+        logger.warning(
+            "[STEP-4b++] Direction forecast failed for %s: %s", symbol, exc, exc_info=True
+        )
         direction_forecast = None
 
     # ── Step 4c. Fire news + earnings fetch concurrently ─────────────────────
@@ -1498,7 +1595,8 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         yf_news_task = asyncio.create_task(
             _safe_fetch(
                 asyncio.to_thread(yf_svc.fetch_news, symbol),
-                empty=[], name="YF-NEWS",
+                empty=[],
+                name="YF-NEWS",
             )
         )
         finnhub_task = asyncio.create_task(
@@ -1531,7 +1629,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
 
     # Earnings surprise history (last 4 quarters) — Redis-cached 24h since it
     # only changes once per quarter. Fired concurrently, 12s timeout.
-    async def _get_earnings_surprise() -> List[dict]:
+    async def _get_earnings_surprise() -> list[dict]:
         cache_key = f"earnings_surprise:{symbol.upper()}"
         cached = await cache_get(cache_key)
         if cached is not None:
@@ -1559,34 +1657,33 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         _safe_fetch(fred_svc.get_macro_snapshot(), empty={}, name="FRED-MACRO")
     )
     insider_task = asyncio.create_task(
-        _safe_fetch(
-            insider_svc.get_insider_transactions(symbol), empty=[], name="INSIDER"
-        )
+        _safe_fetch(insider_svc.get_insider_transactions(symbol), empty=[], name="INSIDER")
     )
     short_interest_task = asyncio.create_task(
-        _safe_fetch(
-            short_interest_svc.get_short_interest(symbol), empty=None, name="SHORT-INT"
-        )
+        _safe_fetch(short_interest_svc.get_short_interest(symbol), empty=None, name="SHORT-INT")
     )
 
     # ── Support/resistance — now uses intraday highs/lows ────────────────────
     logger.debug(
-        "[STEP-4d] Computing support/resistance levels "
-        "(using intraday High/Low extrema) ..."
+        "[STEP-4d] Computing support/resistance levels (using intraday High/Low extrema) ..."
     )
     sr_levels = calculate_support_resistance(closes, highs=highs, lows=lows)
 
     # ── Step 4e. Resolve news + score VADER sentiment ─────────────────────────
-    news: list           = []
-    trending: list       = []
-    sentiment: dict      = {"compound": 0.0, "label": "Neutral", "scores": [], "headline_count": 0}
+    news: list = []
+    trending: list = []
+    sentiment: dict = {"compound": 0.0, "label": "Neutral", "scores": [], "headline_count": 0}
     stocktwits_data: dict = {"bullish": 0, "bearish": 0, "sentiment": 0.0}
 
     if cached_news_payload is not None:
-        news           = cached_news_payload.get("news", [])
-        trending       = cached_news_payload.get("trending", [])
-        sentiment      = cached_news_payload.get("sentiment", {"compound": 0.0, "label": "Neutral", "headline_count": 0})
-        stocktwits_data = cached_news_payload.get("stocktwits", {"bullish": 0, "bearish": 0, "sentiment": 0.0})
+        news = cached_news_payload.get("news", [])
+        trending = cached_news_payload.get("trending", [])
+        sentiment = cached_news_payload.get(
+            "sentiment", {"compound": 0.0, "label": "Neutral", "headline_count": 0}
+        )
+        stocktwits_data = cached_news_payload.get(
+            "stocktwits", {"bullish": 0, "bearish": 0, "sentiment": 0.0}
+        )
         logger.info(f"[STEP-4e] Using cached news/sentiment/stocktwits for {symbol}")
     else:
         logger.info("[STEP-4e] Awaiting news sources (SerpAPI, yfinance, Finnhub, Yahoo RSS) ...")
@@ -1595,15 +1692,15 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             serp_data = await serp_task
             serp_news = [
                 {
-                    "title":        n.get("title",  ""),
-                    "link":         n.get("link",   ""),
-                    "source":       (
+                    "title": n.get("title", ""),
+                    "link": n.get("link", ""),
+                    "source": (
                         n.get("source", {}).get("name", "")
                         if isinstance(n.get("source"), dict)
                         else str(n.get("source", ""))
                     ),
-                    "thumbnail":    n.get("thumbnail", ""),
-                    "date":         n.get("date",   ""),
+                    "thumbnail": n.get("thumbnail", ""),
+                    "date": n.get("date", ""),
                     "source_label": "SerpAPI",
                 }
                 for n in serp_data.get("news_results", [])[:8]
@@ -1611,13 +1708,15 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             for category, items in serp_data.get("markets", {}).items():
                 if isinstance(items, list):
                     for t in items[:3]:
-                        trending.append({
-                            "symbol":   t.get("symbol") or t.get("name", "N/A"),
-                            "name":     t.get("name",  ""),
-                            "price":    str(t.get("price", "N/A")),
-                            "change":   str(t.get("price_change_percentage", "0%")),
-                            "category": category,
-                        })
+                        trending.append(
+                            {
+                                "symbol": t.get("symbol") or t.get("name", "N/A"),
+                                "name": t.get("name", ""),
+                                "price": str(t.get("price", "N/A")),
+                                "change": str(t.get("price_change_percentage", "0%")),
+                                "category": category,
+                            }
+                        )
             # Primary trending source: google_finance `discover_more` (related/
             # most-active tickers), parsed in SerpService. Dedupe by symbol against
             # anything already added from the legacy markets block.
@@ -1638,9 +1737,9 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             serp_news = []
 
         # Await all non-blocking tasks
-        yf_news: List[dict]      = await yf_news_task
-        finnhub_news: List[dict] = await finnhub_task
-        yahoo_rss: List[dict]    = await yahoo_rss_task
+        yf_news: list[dict] = await yf_news_task
+        finnhub_news: list[dict] = await finnhub_task
+        yahoo_rss: list[dict] = await yahoo_rss_task
         if stocktwits_task is not None:
             stocktwits_data = await stocktwits_task
 
@@ -1671,9 +1770,9 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
             await cache_set(
                 news_cache_key,
                 {
-                    "news":       news,
-                    "trending":   trending,
-                    "sentiment":  sentiment,
+                    "news": news,
+                    "trending": trending,
+                    "sentiment": sentiment,
                     "stocktwits": stocktwits_data,
                 },
                 ttl_seconds=1800,
@@ -1683,14 +1782,14 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
 
     # Resolve earnings dates (fired concurrently at Step 4c)
     try:
-        earnings_dates: List[str] = await earnings_task
+        earnings_dates: list[str] = await earnings_task
     except Exception as e:
         logger.warning(f"[STEP-4e] earnings_task failed: {e}")
         earnings_dates = []
 
     # Resolve earnings surprise history (fired concurrently at Step 4c)
     try:
-        earnings_surprise: List[dict] = await earnings_surprise_task
+        earnings_surprise: list[dict] = await earnings_surprise_task
     except Exception as e:
         logger.warning(f"[STEP-4e] earnings_surprise_task failed: {e}")
         earnings_surprise = []
@@ -1701,7 +1800,8 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     # headlines. Fired concurrently with the jury; resolved before the response.
     gap_alert_task = asyncio.create_task(
         _compute_gap_alert(
-            symbol, df,
+            symbol,
+            df,
             [n["title"] for n in news[:3] if n.get("title")],
             analyst_jury_svc.call_groq,
         )
@@ -1724,8 +1824,8 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     _jury_fp = hashlib.md5(
         f"{rsi:.1f}|{forecast['high']:.2f}|{forecast['low']:.2f}|{closes[-1]:.2f}|{sentiment.get('label', '')}".encode()
     ).hexdigest()[:12]
-    jury_cache_key       = f"jury:{symbol.upper()}:{_jury_fp}"
-    jury_stale_cache_key = f"jury_stale:{symbol.upper()}"   # symbol-level, 8h TTL
+    jury_cache_key = f"jury:{symbol.upper()}:{_jury_fp}"
+    jury_stale_cache_key = f"jury_stale:{symbol.upper()}"  # symbol-level, 8h TTL
 
     if not Config.JURY_AUTO_RUN:
         # On-demand jury: assemble + cache the market context (so POST
@@ -1735,10 +1835,18 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         note, jury = await asyncio.gather(
             _ai_note(symbol, closes, rsi, forecast),
             _run_analyst_jury(
-                symbol, closes, rsi, forecast,
+                symbol,
+                closes,
+                rsi,
+                forecast,
                 forecast.get("stats", {}),
-                info, macd_data, bb_data, sma50, sma200,
-                historical_prices, sr_levels,
+                info,
+                macd_data,
+                bb_data,
+                sma50,
+                sma200,
+                historical_prices,
+                sr_levels,
                 news_headlines=[n["title"] for n in news if n.get("title")],
                 track_record=track_record,
                 sentiment=sentiment,
@@ -1758,10 +1866,18 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         note, jury = await asyncio.gather(
             _ai_note(symbol, closes, rsi, forecast),
             _run_analyst_jury(
-                symbol, closes, rsi, forecast,
+                symbol,
+                closes,
+                rsi,
+                forecast,
                 forecast.get("stats", {}),
-                info, macd_data, bb_data, sma50, sma200,
-                historical_prices, sr_levels,
+                info,
+                macd_data,
+                bb_data,
+                sma50,
+                sma200,
+                historical_prices,
+                sr_levels,
                 news_headlines=[n["title"] for n in news if n.get("title")],
                 track_record=track_record,
                 sentiment=sentiment,
@@ -1773,13 +1889,14 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         )
 
         all_fallback = jury and all(
-            v.get("note") in ("Analysis unavailable.", "Rate limit reached — daily Groq quota exhausted.")
+            v.get("note")
+            in ("Analysis unavailable.", "Rate limit reached — daily Groq quota exhausted.")
             for v in jury
         )
 
         if jury and not all_fallback:
             # Successful jury — warm both hot cache (2h) and stale fallback (8h)
-            await cache_set(jury_cache_key,       jury, ttl_seconds=7200)   # 2h hot
+            await cache_set(jury_cache_key, jury, ttl_seconds=7200)  # 2h hot
             await cache_set(jury_stale_cache_key, jury, ttl_seconds=28800)  # 8h stale
             logger.info(f"[STEP-5] Jury cached for {symbol} (hot=2h, stale=8h)")
         elif all_fallback:
@@ -1792,10 +1909,11 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
                 logger.info(f"[STEP-5] Using stale jury for {symbol} — Groq quota likely exhausted")
             # Cache fallback/stale result for 5 min to prevent re-hammering Groq on every request
             await cache_set(jury_cache_key, jury, ttl_seconds=300)
-            logger.info(f"[STEP-5] Jury failure cached for {symbol} (5 min — quota likely exhausted)")
+            logger.info(
+                f"[STEP-5] Jury failure cached for {symbol} (5 min — quota likely exhausted)"
+            )
     logger.info(
-        f"[STEP-5] ✓ AI layer complete — "
-        f"note={len(note)} chars | jury={len(jury)} verdicts"
+        f"[STEP-5] ✓ AI layer complete — note={len(note)} chars | jury={len(jury)} verdicts"
     )
     for v in jury:
         logger.info(
@@ -1804,7 +1922,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         )
 
     # ── Step 5b. Resolve gap explainer (F22) ─────────────────────────────────
-    gap_alert: Optional[dict] = None
+    gap_alert: dict | None = None
     try:
         gap_alert = await asyncio.wait_for(gap_alert_task, timeout=10.0)
     except Exception as _ge:
@@ -1824,8 +1942,7 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
 
     # ── Step 7. Background price snapshot ────────────────────────────────────
     logger.debug(
-        f"[STEP-7] Scheduling background InfluxDB price snapshot — "
-        f"{symbol} @ ${live_price:.2f}"
+        f"[STEP-7] Scheduling background InfluxDB price snapshot — {symbol} @ ${live_price:.2f}"
     )
     _safe_background(
         asyncio.to_thread(influx_svc.write_price, symbol, live_price),
@@ -1839,13 +1956,15 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         _safe_background(
             asyncio.to_thread(
                 influx_svc.write_sentiment_score,
-                symbol, sentiment["compound"], sentiment["label"],
+                symbol,
+                sentiment["compound"],
+                sentiment["label"],
             ),
             name="SENTIMENT-WRITE",
         )
 
     # ── Step 8. Build chart history (last 90 trading days) ───────────────────
-    total       = len(historical_prices)
+    total = len(historical_prices)
     slice_start = max(0, total - 90)
     logger.debug(
         f"[STEP-8] Building chart history — total_bars={total}, "
@@ -1854,25 +1973,29 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     )
     history = []
     for idx, p in enumerate(historical_prices[slice_start:], start=slice_start):
-        history.append({
-            "date":        p["_time"].strftime("%m/%d") if hasattr(p["_time"], "strftime") else str(p["_time"])[:10],
-            "time":        int(p["_time"].timestamp()) if hasattr(p["_time"], "timestamp") else None,
-            "price":       round(float(p["close"]),                 2),
-            "open":        round(float(p.get("open",  p["close"])), 2),
-            "high":        round(float(p.get("high",  p["close"])), 2),
-            "low":         round(float(p.get("low",   p["close"])), 2),
-            "volume":      round(float(p.get("volume", 0)),         0),
-            "bb_upper":    bb_data["upper"][idx],
-            "bb_middle":   bb_data["middle"][idx],
-            "bb_lower":    bb_data["lower"][idx],
-            "sma50":       sma50[idx],
-            "sma200":      sma200[idx],
-            "ema20":       ema20[idx],
-            "ema50":       ema50[idx],
-            "macd":        macd_data["macd"][idx],
-            "macd_signal": macd_data["signal"][idx],
-            "macd_hist":   macd_data["hist"][idx],
-        })
+        history.append(
+            {
+                "date": p["_time"].strftime("%m/%d")
+                if hasattr(p["_time"], "strftime")
+                else str(p["_time"])[:10],
+                "time": int(p["_time"].timestamp()) if hasattr(p["_time"], "timestamp") else None,
+                "price": round(float(p["close"]), 2),
+                "open": round(float(p.get("open", p["close"])), 2),
+                "high": round(float(p.get("high", p["close"])), 2),
+                "low": round(float(p.get("low", p["close"])), 2),
+                "volume": round(float(p.get("volume", 0)), 0),
+                "bb_upper": bb_data["upper"][idx],
+                "bb_middle": bb_data["middle"][idx],
+                "bb_lower": bb_data["lower"][idx],
+                "sma50": sma50[idx],
+                "sma200": sma200[idx],
+                "ema20": ema20[idx],
+                "ema50": ema50[idx],
+                "macd": macd_data["macd"][idx],
+                "macd_signal": macd_data["signal"][idx],
+                "macd_hist": macd_data["hist"][idx],
+            }
+        )
 
     # RSI series — last 90 points aligned to chart window (rsi_full computed at Step 4b+)
     rsi_series = rsi_full[slice_start:]
@@ -1884,11 +2007,12 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     # ── Alternative data resolution (Feature 15) ─────────────────────────────
     # Fired at Step 4c; resolved here. _safe_fetch already bounds each to 12s and
     # falls back to []/None, so a slow EDGAR/FINRA call can't stall the response.
-    insider_transactions: List[dict] = await insider_task
-    short_interest: Optional[dict]   = await short_interest_task
+    insider_transactions: list[dict] = await insider_task
+    short_interest: dict | None = await short_interest_task
     logger.info(
         "[STEP-7b] Alt-data — insider=%d filings, short_interest=%s, macro=%s",
-        len(insider_transactions), "yes" if short_interest else "none",
+        len(insider_transactions),
+        "yes" if short_interest else "none",
         "yes" if macro_snapshot else "none",
     )
 
@@ -1910,13 +2034,13 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
         return next((v for v in reversed(seq) if v is not None), None)
 
     trend_label = classify_trend(
-        price        = live_price,
-        sma50        = _last_valid(sma50),
-        sma200       = _last_valid(sma200),
-        trend_slope  = forecast.get("stats", {}).get("trend_slope"),
-        macd         = _last_valid(macd_data["macd"]),
-        macd_signal  = _last_valid(macd_data["signal"]),
-        rsi          = rsi,
+        price=live_price,
+        sma50=_last_valid(sma50),
+        sma200=_last_valid(sma200),
+        trend_slope=forecast.get("stats", {}).get("trend_slope"),
+        macd=_last_valid(macd_data["macd"]),
+        macd_signal=_last_valid(macd_data["signal"]),
+        rsi=rsi,
     )
     logger.info(f"[TREND] {symbol} composite trend → {trend_label} (RSI={rsi:.1f})")
 
@@ -1925,56 +2049,56 @@ async def _predict_inner(payload: PredictRequest) -> PredictionResponse:
     currency_code, fx_to_usd = await _resolve_currency(metrics)
 
     return PredictionResponse(
-        symbol       = symbol,
-        currentPrice = f"{live_price:.2f}",
-        rsi          = f"{rsi:.2f}",
-        prediction   = {
+        symbol=symbol,
+        currentPrice=f"{live_price:.2f}",
+        rsi=f"{rsi:.2f}",
+        prediction={
             "highRange": f"{forecast['high']:.2f}",
-            "lowRange":  f"{forecast['low']:.2f}",
-            "trend":     trend_label,
+            "lowRange": f"{forecast['low']:.2f}",
+            "trend": trend_label,
         },
-        analystNote  = note,
-        confidence   = forecast["conf"],
-        history      = history,
-        forecastDays = forecast["forecast_days"],
-        modelStats   = forecast.get("stats", {}),
-        metrics      = metrics,
-        news         = news,
-        trending     = trending,
-        indicators   = {
+        analystNote=note,
+        confidence=forecast["conf"],
+        history=history,
+        forecastDays=forecast["forecast_days"],
+        modelStats=forecast.get("stats", {}),
+        metrics=metrics,
+        news=news,
+        trending=trending,
+        indicators={
             "rsi_series": rsi_series,
-            "support":    sr_levels["support"],
+            "support": sr_levels["support"],
             "resistance": sr_levels["resistance"],
             # ── Advanced technical signals (Feature 14) ──
-            "atr_14":      atr_14,
-            "stoch_k":     stoch.get("stoch_k"),
-            "stoch_d":     stoch.get("stoch_d"),
-            "adx_14":      adx.get("adx_14"),
-            "plus_di":     adx.get("plus_di"),
-            "minus_di":    adx.get("minus_di"),
+            "atr_14": atr_14,
+            "stoch_k": stoch.get("stoch_k"),
+            "stoch_d": stoch.get("stoch_d"),
+            "adx_14": adx.get("adx_14"),
+            "plus_di": adx.get("plus_di"),
+            "minus_di": adx.get("minus_di"),
             "obv_history": obv_history,
             "divergences": divergences,
-            "fibonacci":   fibonacci,
+            "fibonacci": fibonacci,
             "rf_feature_importance": forecast.get("rf_feature_importance", []),
-            "earnings_surprise":     earnings_surprise,
-            "candle_pattern":        candle_pattern,
+            "earnings_surprise": earnings_surprise,
+            "candle_pattern": candle_pattern,
         },
-        lastUpdated  = now.isoformat(),
-        juryAnalysts  = jury,
-        modelWeights  = forecast.get("weights", {"prophet": 0.0, "sarima": 0.0, "rf": 0.0}),
-        sentiment    = sentiment,
-        stocktwits   = stocktwits_data,
-        monteCarlo      = forecast.get("monte_carlo"),
-        earningsDates   = earnings_dates,
-        reversalRisk       = reversal_risk,
-        directionForecast  = direction_forecast,
-        insiderTransactions = insider_transactions,
-        shortInterest       = short_interest,
-        regime             = regime_result,
-        juryDissent        = detect_dissent(jury),
-        gap_alert          = gap_alert,
-        currency           = currency_code,
-        fxToUsd            = fx_to_usd,
+        lastUpdated=now.isoformat(),
+        juryAnalysts=jury,
+        modelWeights=forecast.get("weights", {"prophet": 0.0, "sarima": 0.0, "rf": 0.0}),
+        sentiment=sentiment,
+        stocktwits=stocktwits_data,
+        monteCarlo=forecast.get("monte_carlo"),
+        earningsDates=earnings_dates,
+        reversalRisk=reversal_risk,
+        directionForecast=direction_forecast,
+        insiderTransactions=insider_transactions,
+        shortInterest=short_interest,
+        regime=regime_result,
+        juryDissent=detect_dissent(jury),
+        gap_alert=gap_alert,
+        currency=currency_code,
+        fxToUsd=fx_to_usd,
     )
 
 
@@ -2002,7 +2126,7 @@ async def compare_peers(symbols: str = Query(..., description="Comma-separated t
     """
     raw = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     # Validate: only alphanumeric, hyphens, and dots (e.g. BRK.B, BTC-USD)
-    syms = [s for s in raw if re.match(r'^[A-Z0-9.\-]{1,10}$', s)][:6]
+    syms = [s for s in raw if re.match(r"^[A-Z0-9.\-]{1,10}$", s)][:6]
     if not syms:
         raise HTTPException(status_code=400, detail="Provide at least one valid symbol (max 6).")
 
@@ -2016,21 +2140,35 @@ async def compare_peers(symbols: str = Query(..., description="Comma-separated t
                 await cache_set(f"info:{sym}", info, ttl_seconds=3600)
         price = info.get("current_price", 0)
         return {
-            "symbol":         sym,
-            "name":           info.get("short_name", sym),
-            "sector":         info.get("sector",      "N/A"),
-            "price":          f"{float(price):.2f}" if price else "N/A",
-            "market_cap":     _fmt_market_cap(info.get("market_cap")),
-            "pe_ratio":       _fmt_ratio(info.get("pe_ratio"))     if info.get("pe_ratio")     not in (None, "N/A") else "N/A",
-            "forward_pe":     _fmt_ratio(info.get("forward_pe"))   if info.get("forward_pe")   not in (None, "N/A") else "N/A",
-            "peg_ratio":      _fmt_ratio(info.get("peg_ratio"))    if info.get("peg_ratio")    not in (None, "N/A") else "N/A",
-            "ev_to_ebitda":   _fmt_ratio(info.get("ev_to_ebitda")) if info.get("ev_to_ebitda") not in (None, "N/A") else "N/A",
-            "beta":           _fmt_ratio(info.get("beta"))         if info.get("beta")         not in (None, "N/A") else "N/A",
-            "revenue_growth": _fmt_pct(info.get("revenue_growth")) if info.get("revenue_growth") not in (None, "N/A") else "N/A",
-            "range_52w":      info.get("range_52w", "N/A"),
+            "symbol": sym,
+            "name": info.get("short_name", sym),
+            "sector": info.get("sector", "N/A"),
+            "price": f"{float(price):.2f}" if price else "N/A",
+            "market_cap": _fmt_market_cap(info.get("market_cap")),
+            "pe_ratio": _fmt_ratio(info.get("pe_ratio"))
+            if info.get("pe_ratio") not in (None, "N/A")
+            else "N/A",
+            "forward_pe": _fmt_ratio(info.get("forward_pe"))
+            if info.get("forward_pe") not in (None, "N/A")
+            else "N/A",
+            "peg_ratio": _fmt_ratio(info.get("peg_ratio"))
+            if info.get("peg_ratio") not in (None, "N/A")
+            else "N/A",
+            "ev_to_ebitda": _fmt_ratio(info.get("ev_to_ebitda"))
+            if info.get("ev_to_ebitda") not in (None, "N/A")
+            else "N/A",
+            "beta": _fmt_ratio(info.get("beta"))
+            if info.get("beta") not in (None, "N/A")
+            else "N/A",
+            "revenue_growth": _fmt_pct(info.get("revenue_growth"))
+            if info.get("revenue_growth") not in (None, "N/A")
+            else "N/A",
+            "range_52w": info.get("range_52w", "N/A"),
         }
 
     results = await asyncio.gather(*[_peer(s) for s in syms], return_exceptions=True)
     peers = [r for r in results if not isinstance(r, Exception)]
-    logger.info(f"[COMPARE] ✓ {len(peers)}/{len(syms)} peers resolved: {[p['symbol'] for p in peers]}")
+    logger.info(
+        f"[COMPARE] ✓ {len(peers)}/{len(syms)} peers resolved: {[p['symbol'] for p in peers]}"
+    )
     return {"peers": peers}

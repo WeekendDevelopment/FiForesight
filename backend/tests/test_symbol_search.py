@@ -2,13 +2,14 @@
 Symbol search endpoint tests (F33) — GET /symbols/search.
 The Yahoo search HTTP call is mocked; no network.
 """
+
 from collections.abc import Generator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI, Request
-from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
 
 from backend.routers import market
@@ -16,19 +17,44 @@ from backend.routers import market
 _FAKE_QUOTES = [
     # NYSE ADR + LSE listing of the same name — the multi-exchange case the
     # palette surfaces (BP NYSE vs BP.L London).
-    {"symbol": "BP",    "shortname": "BP p.l.c.", "quoteType": "EQUITY",
-     "exchDisp": "NYSE", "exchange": "NYQ"},
-    {"symbol": "BP.L",  "shortname": "BP PLC",    "quoteType": "EQUITY",
-     "exchDisp": "London", "exchange": "LSE"},
+    {
+        "symbol": "BP",
+        "shortname": "BP p.l.c.",
+        "quoteType": "EQUITY",
+        "exchDisp": "NYSE",
+        "exchange": "NYQ",
+    },
+    {
+        "symbol": "BP.L",
+        "shortname": "BP PLC",
+        "quoteType": "EQUITY",
+        "exchDisp": "London",
+        "exchange": "LSE",
+    },
     # Caret index — passes Yahoo but must be filtered (backend /predict rejects ^).
-    {"symbol": "^GSPC", "shortname": "S&P 500",   "quoteType": "INDEX",
-     "exchDisp": "SNP", "exchange": "SNP"},
+    {
+        "symbol": "^GSPC",
+        "shortname": "S&P 500",
+        "quoteType": "INDEX",
+        "exchDisp": "SNP",
+        "exchange": "SNP",
+    },
     # Unsupported quote type.
-    {"symbol": "BPOPT", "shortname": "BP Option", "quoteType": "OPTION",
-     "exchDisp": "OPR", "exchange": "OPR"},
+    {
+        "symbol": "BPOPT",
+        "shortname": "BP Option",
+        "quoteType": "OPTION",
+        "exchDisp": "OPR",
+        "exchange": "OPR",
+    },
     # longname-only fallback.
-    {"symbol": "BPCL.NS", "longname": "Bharat Petroleum Corporation Limited",
-     "quoteType": "EQUITY", "exchDisp": "NSE", "exchange": "NSI"},
+    {
+        "symbol": "BPCL.NS",
+        "longname": "Bharat Petroleum Corporation Limited",
+        "quoteType": "EQUITY",
+        "exchDisp": "NSE",
+        "exchange": "NSI",
+    },
 ]
 
 
@@ -72,8 +98,7 @@ def _response(quotes: list) -> MagicMock:
 
 
 def _get(q: str, get_kwargs: dict):
-    with patch("backend.routers.market.httpx.AsyncClient",
-               return_value=_mock_client(get_kwargs)):
+    with patch("backend.routers.market.httpx.AsyncClient", return_value=_mock_client(get_kwargs)):
         return client.get("/symbols/search", params={"q": q})
 
 
@@ -83,8 +108,8 @@ def test_maps_and_filters_quotes() -> None:
     rows = resp.json()
     symbols = [r["symbol"] for r in rows]
     assert symbols == ["BP", "BP.L", "BPCL.NS"]  # order preserved, junk dropped
-    assert "^GSPC" not in symbols       # caret filtered
-    assert "BPOPT" not in symbols       # OPTION type filtered
+    assert "^GSPC" not in symbols  # caret filtered
+    assert "BPOPT" not in symbols  # OPTION type filtered
     by_symbol = {r["symbol"]: r for r in rows}
     assert by_symbol["BP"]["exchange"] == "NYSE"
     assert by_symbol["BP.L"]["exchange"] == "London"

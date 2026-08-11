@@ -20,12 +20,12 @@ realized close on/after its target date):
 across every symbol that has forecast history. The math lives in side-effect-free
 helpers (`_score_records` / `_aggregate`) so it is trivially unit-testable.
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import math
-from typing import Optional
 
 from dependencies import forecast_store
 
@@ -45,7 +45,7 @@ def _sign(x: float) -> int:
     return 1 if x > 0 else -1 if x < 0 else 0
 
 
-def _num(rec: dict, *keys) -> Optional[float]:
+def _num(rec: dict, *keys) -> float | None:
     """First present, finite, parseable value among `keys` (else None)."""
     for k in keys:
         v = rec.get(k)
@@ -75,7 +75,7 @@ def _score_records(records: list, outcomes_sorted: list) -> list[dict]:
     field, else reconstructed from the previous record's last_price (same symbol).
     """
     scored: list[dict] = []
-    prev_last: Optional[float] = None
+    prev_last: float | None = None
 
     for rec in records:
         pred_time = rec.get("_time")
@@ -138,17 +138,17 @@ def _score_records(records: list, outcomes_sorted: list) -> list[dict]:
     return scored
 
 
-def _verdict(coverage: Optional[float]) -> Optional[str]:
+def _verdict(coverage: float | None) -> str | None:
     if coverage is None:
         return None
     if coverage > _COVERAGE_TARGET + _COVERAGE_TOLERANCE:
-        return "underconfident"   # bands too wide — realized price almost always inside
+        return "underconfident"  # bands too wide — realized price almost always inside
     if coverage < _COVERAGE_TARGET - _COVERAGE_TOLERANCE:
-        return "overconfident"    # bands too tight — realized price often escapes
+        return "overconfident"  # bands too tight — realized price often escapes
     return "well_calibrated"
 
 
-def _pct(hits: int, total: int) -> Optional[float]:
+def _pct(hits: int, total: int) -> float | None:
     return round(100.0 * hits / total, 1) if total else None
 
 
@@ -157,15 +157,15 @@ def _aggregate(scored: list[dict]) -> dict:
     samples = len(scored)
 
     empty = {
-        "samples":                  samples,
-        "p10_p90_coverage_pct":     None,
-        "range_coverage_pct":       None,
+        "samples": samples,
+        "p10_p90_coverage_pct": None,
+        "range_coverage_pct": None,
         "directional_accuracy_pct": None,
-        "naive_accuracy_pct":       None,
-        "edge_pct":                 None,
-        "mean_signed_error":        None,
-        "calibration_verdict":      None,
-        "coverage_target_pct":      _COVERAGE_TARGET,
+        "naive_accuracy_pct": None,
+        "edge_pct": None,
+        "mean_signed_error": None,
+        "calibration_verdict": None,
+        "coverage_target_pct": _COVERAGE_TARGET,
     }
     if samples < MIN_CALIBRATION_SAMPLES:
         return empty
@@ -201,15 +201,15 @@ def _aggregate(scored: list[dict]) -> dict:
     verdict = _verdict(p10_p90_coverage if p10_p90_coverage is not None else range_coverage)
 
     return {
-        "samples":                  samples,
-        "p10_p90_coverage_pct":     p10_p90_coverage,
-        "range_coverage_pct":       range_coverage,
+        "samples": samples,
+        "p10_p90_coverage_pct": p10_p90_coverage,
+        "range_coverage_pct": range_coverage,
         "directional_accuracy_pct": directional,
-        "naive_accuracy_pct":       naive,
-        "edge_pct":                 edge,
-        "mean_signed_error":        mean_signed_error,
-        "calibration_verdict":      verdict,
-        "coverage_target_pct":      _COVERAGE_TARGET,
+        "naive_accuracy_pct": naive,
+        "edge_pct": edge,
+        "mean_signed_error": mean_signed_error,
+        "calibration_verdict": verdict,
+        "coverage_target_pct": _COVERAGE_TARGET,
     }
 
 
@@ -218,7 +218,7 @@ def _compute_calibration(records: list, outcomes: dict) -> dict:
     return _aggregate(_score_records(records, sorted(outcomes.items())))
 
 
-async def compute_calibration(symbol: Optional[str]) -> dict:
+async def compute_calibration(symbol: str | None) -> dict:
     """Coverage + directional edge + bias for `symbol`.
 
     `symbol=None` or "ALL" aggregates across every symbol with forecast history.
