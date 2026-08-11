@@ -3,13 +3,14 @@ Stock Report Card endpoint tests (F31) — GET /report-card/{symbol}.
 yfinance is mocked (no network); Redis is inert so the endpoint always fetches.
 Mirrors the mocking style of test_dividends.py / test_analyst_targets_endpoint.py.
 """
+
 from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI, Request
-from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
 
 from backend.routers import market
@@ -43,11 +44,18 @@ def _mock_ticker(info: dict) -> MagicMock:
 def test_strong_company_high_grade() -> None:
     client = _build_app()
     info = {
-        "trailingPE": 12, "priceToBook": 2, "pegRatio": 0.8,
-        "revenueGrowth": 0.20, "earningsGrowth": 0.30,
-        "profitMargins": 0.25, "returnOnEquity": 0.30,
-        "currentPrice": 95, "fiftyTwoWeekHigh": 100, "fiftyTwoWeekLow": 50,
-        "debtToEquity": 30, "currentRatio": 2.5,
+        "trailingPE": 12,
+        "priceToBook": 2,
+        "pegRatio": 0.8,
+        "revenueGrowth": 0.20,
+        "earningsGrowth": 0.30,
+        "profitMargins": 0.25,
+        "returnOnEquity": 0.30,
+        "currentPrice": 95,
+        "fiftyTwoWeekHigh": 100,
+        "fiftyTwoWeekLow": 50,
+        "debtToEquity": 30,
+        "currentRatio": 2.5,
     }
     with patch.object(market.yf, "Ticker", return_value=_mock_ticker(info)):
         resp = client.get("/report-card/AAA")
@@ -63,11 +71,18 @@ def test_strong_company_high_grade() -> None:
 def test_weak_company_low_grade() -> None:
     client = _build_app()
     info = {
-        "trailingPE": 90, "priceToBook": 15, "pegRatio": 4,
-        "revenueGrowth": -0.20, "earningsGrowth": -0.30,
-        "profitMargins": -0.10, "returnOnEquity": -0.20,
-        "currentPrice": 55, "fiftyTwoWeekHigh": 100, "fiftyTwoWeekLow": 50,
-        "debtToEquity": 300, "currentRatio": 0.3,
+        "trailingPE": 90,
+        "priceToBook": 15,
+        "pegRatio": 4,
+        "revenueGrowth": -0.20,
+        "earningsGrowth": -0.30,
+        "profitMargins": -0.10,
+        "returnOnEquity": -0.20,
+        "currentPrice": 55,
+        "fiftyTwoWeekHigh": 100,
+        "fiftyTwoWeekLow": 50,
+        "debtToEquity": 300,
+        "currentRatio": 0.3,
     }
     with patch.object(market.yf, "Ticker", return_value=_mock_ticker(info)):
         resp = client.get("/report-card/BBB")

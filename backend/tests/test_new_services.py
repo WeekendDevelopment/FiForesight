@@ -2,17 +2,19 @@
 Tests for FinnhubService, StockTwitsService, and the _dedup_news helper.
 All HTTP calls are mocked — no network required.
 """
+
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from backend.services import FinnhubService, StockTwitsService
-from backend.routers.predict import _dedup_news
+import pytest
 
+from backend.routers.predict import _dedup_news
+from backend.services import FinnhubService, StockTwitsService
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def run(coro):
     # asyncio.run creates and manages a fresh loop per call. The old
@@ -24,6 +26,7 @@ def run(coro):
 # ---------------------------------------------------------------------------
 # FinnhubService
 # ---------------------------------------------------------------------------
+
 
 class TestFinnhubService:
     def setup_method(self):
@@ -37,8 +40,20 @@ class TestFinnhubService:
 
     def test_parses_articles(self):
         payload = [
-            {"headline": "Apple hits $4T market cap", "source": "Reuters", "url": "https://example.com", "image": "", "datetime": 1234567890},
-            {"headline": "iPhone sales miss estimates", "source": "Bloomberg", "url": "", "image": "", "datetime": 1234567891},
+            {
+                "headline": "Apple hits $4T market cap",
+                "source": "Reuters",
+                "url": "https://example.com",
+                "image": "",
+                "datetime": 1234567890,
+            },
+            {
+                "headline": "iPhone sales miss estimates",
+                "source": "Bloomberg",
+                "url": "",
+                "image": "",
+                "datetime": 1234567891,
+            },
         ]
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
@@ -49,8 +64,10 @@ class TestFinnhubService:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_client.get = AsyncMock(return_value=mock_resp)
 
-        with patch("backend.services.Config") as mock_cfg, \
-             patch("backend.services.httpx.AsyncClient", return_value=mock_client):
+        with (
+            patch("backend.services.Config") as mock_cfg,
+            patch("backend.services.httpx.AsyncClient", return_value=mock_client),
+        ):
             mock_cfg.FINNHUB_API_KEY = "test-key"
             result = run(self.svc.fetch_company_news("AAPL"))
 
@@ -75,8 +92,10 @@ class TestFinnhubService:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_client.get = AsyncMock(return_value=mock_resp)
 
-        with patch("backend.services.Config") as mock_cfg, \
-             patch("backend.services.httpx.AsyncClient", return_value=mock_client):
+        with (
+            patch("backend.services.Config") as mock_cfg,
+            patch("backend.services.httpx.AsyncClient", return_value=mock_client),
+        ):
             mock_cfg.FINNHUB_API_KEY = "test-key"
             result = run(self.svc.fetch_company_news("AAPL"))
 
@@ -89,8 +108,10 @@ class TestFinnhubService:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_client.get = AsyncMock(side_effect=Exception("timeout"))
 
-        with patch("backend.services.Config") as mock_cfg, \
-             patch("backend.services.httpx.AsyncClient", return_value=mock_client):
+        with (
+            patch("backend.services.Config") as mock_cfg,
+            patch("backend.services.httpx.AsyncClient", return_value=mock_client),
+        ):
             mock_cfg.FINNHUB_API_KEY = "test-key"
             result = run(self.svc.fetch_company_news("AAPL"))
 
@@ -100,6 +121,7 @@ class TestFinnhubService:
 # ---------------------------------------------------------------------------
 # StockTwitsService
 # ---------------------------------------------------------------------------
+
 
 class TestStockTwitsService:
     def setup_method(self):

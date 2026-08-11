@@ -5,8 +5,10 @@ Tests for the Gap Explainer (Feature 22):
 The Groq call is never exercised here (groq_call=None), so these run with no
 network and no native deps — only the pure gap-detection logic is under test.
 """
+
 import asyncio
-from typing import Any, Coroutine, List
+from collections.abc import Coroutine
+from typing import Any
 
 import pandas as pd
 
@@ -18,7 +20,7 @@ def run(coro: "Coroutine[Any, Any, Any]") -> Any:
     return asyncio.run(coro)
 
 
-def _df(closes: List[float]) -> pd.DataFrame:
+def _df(closes: list[float]) -> pd.DataFrame:
     """Build a minimal OHLCV frame carrying just the Close column the helper reads."""
     return pd.DataFrame({"Close": closes})
 

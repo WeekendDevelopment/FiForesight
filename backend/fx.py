@@ -5,6 +5,7 @@ yfinance quotes some exchanges in *minor* units (LSE in GBp = pence, JSE in
 ZAc = cents): those map to the major-unit FX pair with a /100 scale so the
 returned multiplier converts one displayed unit straight into USD.
 """
+
 import asyncio
 import logging
 

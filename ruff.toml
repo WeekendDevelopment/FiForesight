@@ -1,0 +1,27 @@
+# FiForesight project-wide ruff configuration.
+#
+# We deliberately keep BLE001 (blind `except Exception:`) enabled-but-ignored
+# as a project-wide convention: the backend's resilience contract (see
+# CLAUDE.md — "Backend services fail gracefully, logged, non-fatal") relies on
+# broad exception catches so that a single failing integration (yfinance,
+# InfluxDB, Groq, FRED, EDGAR, FINRA, Web Push…) can never bubble up and 500
+# the request. Each such catch must log a warning/debug line rather than
+# `pass` silently. Dev runs with `--per-file-ignores` for tests if a specific
+# test site warrants more precision — but the convention stands.
+#
+# These rules apply to the backend Python sources. The frontend is TypeScript
+# (handled by ESLint, also scope-limited here via `src`).
+line-length = 100
+
+extend-exclude = [
+    "frontend",       # not Python
+]
+
+[lint]
+# BLE001 is ignored by policy (see header rationale).
+ignore = [
+    "BLE001",  # broad `except Exception` is the documented graceful-degradation pattern
+]
+
+[lint.per-file-ignores]
+# Test files may legitimately catch broad exceptions to assert failure paths.

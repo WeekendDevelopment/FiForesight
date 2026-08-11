@@ -14,15 +14,16 @@ Coverage:
   • sparklines partial failure — one symbol erroring out does not suppress the rest
   • sparklines extra param — ?extra= symbols are merged and deduplicated
 """
-from unittest.mock import AsyncMock, patch
+
 import importlib as _il
+from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
 
-from backend.routers import watchlist, predict
+from backend.routers import predict, watchlist
 
 _deps = _il.import_module("dependencies")
 require_user = _deps.require_user
@@ -32,6 +33,7 @@ limiter = _deps.limiter
 # ---------------------------------------------------------------------------
 # Shared rate-limit error handler (mirrors production)
 # ---------------------------------------------------------------------------
+
 
 async def _rl_handler(req, exc: RateLimitExceeded) -> JSONResponse:
     return JSONResponse(status_code=429, content={"detail": "Too many requests."})
@@ -76,6 +78,7 @@ spark = TestClient(_spark_app, raise_server_exceptions=False)
 # Watchlist — auth enforcement
 # ---------------------------------------------------------------------------
 
+
 def test_watchlist_post_requires_auth() -> None:
     """POST /watchlist without a Bearer token → 401."""
     resp = anon.post("/watchlist", json={"symbol": "AAPL"})
@@ -92,6 +95,7 @@ def test_watchlist_delete_requires_auth() -> None:
 # Watchlist — anonymous GET
 # ---------------------------------------------------------------------------
 
+
 def test_watchlist_get_anon_returns_empty() -> None:
     """GET /watchlist with no valid JWT → 200 {"watchlist": []}."""
     # get_user_id is called directly inside the handler (not via Depends).
@@ -105,6 +109,7 @@ def test_watchlist_get_anon_returns_empty() -> None:
 # ---------------------------------------------------------------------------
 # Watchlist — authenticated GET
 # ---------------------------------------------------------------------------
+
 
 def test_watchlist_get_authed_returns_items() -> None:
     """GET /watchlist with a valid user → returns items from Supabase."""
@@ -126,6 +131,7 @@ def test_watchlist_get_authed_returns_items() -> None:
 # ---------------------------------------------------------------------------
 # Watchlist — POST (validation + success)
 # ---------------------------------------------------------------------------
+
 
 def test_watchlist_post_rejects_bad_symbol() -> None:
     """POST /watchlist with invalid symbol characters → 422 (Pydantic)."""
@@ -155,6 +161,7 @@ def test_watchlist_post_accepts_valid_symbol() -> None:
 # ---------------------------------------------------------------------------
 # Watchlist — DELETE
 # ---------------------------------------------------------------------------
+
 
 def test_watchlist_delete_not_found() -> None:
     """DELETE /watchlist/{symbol} when symbol is absent → 404."""
@@ -221,6 +228,7 @@ def test_sparklines_returns_bars() -> None:
 
 def test_sparklines_partial_failure_returns_other_symbols() -> None:
     """If one symbol fails (_fetch_intraday_bars returns {}), the rest are still returned."""
+
     def _fake(sym: str) -> dict:
         return {} if sym == "AAPL" else _BARS_MSFT
 
@@ -238,10 +246,11 @@ def test_sparklines_partial_failure_returns_other_symbols() -> None:
 
 def test_sparklines_extra_param_merged() -> None:
     """?extra=NVDA symbols are merged with ?tickers= and returned."""
+
     def _fake(sym: str) -> dict:
         if sym == "NVDA":
             return _BARS_NVDA
-        return {}   # AAPL has no data
+        return {}  # AAPL has no data
 
     with patch("backend.routers.predict._fetch_intraday_bars", side_effect=_fake):
         resp = spark.get("/sparklines?tickers=AAPL&extra=NVDA")

@@ -2,14 +2,15 @@
 Sector heatmap endpoint tests (F23) — GET /sectors/heatmap.
 yf.download is mocked; no network required.
 """
+
 from collections.abc import Generator
 from unittest.mock import patch
 
 import pandas as pd
 import pytest
 from fastapi import FastAPI, Request
-from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
 
 from backend.routers import market

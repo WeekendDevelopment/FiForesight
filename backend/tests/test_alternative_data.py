@@ -8,19 +8,24 @@ Tests for the Alternative Data sources (Feature 15):
 
 All HTTP/yfinance calls are mocked — no network required.
 """
+
 import asyncio
 import importlib as _il
-from typing import Any, Coroutine
+from collections.abc import Coroutine
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
 from starlette.requests import Request
 
 from backend.services import (
-    FREDService, InsiderService, ShortInterestService, _parse_fred_csv,
+    FREDService,
+    InsiderService,
+    ShortInterestService,
+    _parse_fred_csv,
 )
 
 
@@ -40,6 +45,7 @@ def _async_client(get_mock: AsyncMock) -> MagicMock:
 # ---------------------------------------------------------------------------
 # FREDService
 # ---------------------------------------------------------------------------
+
 
 def _fred_csv(values: list) -> str:
     """Build a fredgraph.csv body with one row per value."""
@@ -85,9 +91,13 @@ class TestFREDService:
         resp = MagicMock()
         resp.raise_for_status = MagicMock()
         resp.text = _fred_csv(vals)
-        with patch("backend.services.httpx.AsyncClient",
-                   return_value=_async_client(AsyncMock(return_value=resp))), \
-             patch("backend.services.Config") as cfg:
+        with (
+            patch(
+                "backend.services.httpx.AsyncClient",
+                return_value=_async_client(AsyncMock(return_value=resp)),
+            ),
+            patch("backend.services.Config") as cfg,
+        ):
             cfg.FRED_API_KEY = ""
             snap = run(self.svc.get_macro_snapshot())
         assert "dgs10" in snap
@@ -102,9 +112,13 @@ class TestFREDService:
         resp = MagicMock()
         resp.raise_for_status = MagicMock()
         resp.text = _fred_csv(vals)
-        with patch("backend.services.httpx.AsyncClient",
-                   return_value=_async_client(AsyncMock(return_value=resp))), \
-             patch("backend.services.Config") as cfg:
+        with (
+            patch(
+                "backend.services.httpx.AsyncClient",
+                return_value=_async_client(AsyncMock(return_value=resp)),
+            ),
+            patch("backend.services.Config") as cfg,
+        ):
             cfg.FRED_API_KEY = ""
             snap = run(self.svc.get_macro_snapshot())
         assert snap["inverted"] is True
@@ -113,9 +127,13 @@ class TestFREDService:
     def test_returns_empty_on_http_error(self):
         resp = MagicMock()
         resp.raise_for_status = MagicMock(side_effect=Exception("500"))
-        with patch("backend.services.httpx.AsyncClient",
-                   return_value=_async_client(AsyncMock(return_value=resp))), \
-             patch("backend.services.Config") as cfg:
+        with (
+            patch(
+                "backend.services.httpx.AsyncClient",
+                return_value=_async_client(AsyncMock(return_value=resp)),
+            ),
+            patch("backend.services.Config") as cfg,
+        ):
             cfg.FRED_API_KEY = ""
             snap = run(self.svc.get_macro_snapshot())
         assert snap == {}
@@ -209,14 +227,17 @@ class TestInsiderService:
         # issuer CIK 320193 → the owner is the other entry
         owner = self.svc._owner_from_names(
             ["John Smith (CIK 0007654321)", "Apple Inc. (CIK 0000320193)"],
-            ["0007654321", "0000320193"], "320193",
+            ["0007654321", "0000320193"],
+            "320193",
         )
         assert owner == "John Smith"
 
     # ── Full path with enrichment ──────────────────────────────────────────
     def test_enriches_filing_from_xml(self):
-        with patch("backend.services.httpx.AsyncClient",
-                   return_value=_async_client(self._routed_get([self._hit()]))):
+        with patch(
+            "backend.services.httpx.AsyncClient",
+            return_value=_async_client(self._routed_get([self._hit()])),
+        ):
             result = run(self.svc.get_insider_transactions("AAPL"))
         assert len(result) == 1
         f = result[0]
@@ -231,12 +252,14 @@ class TestInsiderService:
 
     def test_metadata_only_when_xml_unavailable(self):
         # XML 404 → row keeps its metadata-only fallback, still renders.
-        with patch("backend.services.httpx.AsyncClient",
-                   return_value=_async_client(self._routed_get([self._hit()], xml_status=404))):
+        with patch(
+            "backend.services.httpx.AsyncClient",
+            return_value=_async_client(self._routed_get([self._hit()], xml_status=404)),
+        ):
             result = run(self.svc.get_insider_transactions("AAPL"))
         assert len(result) == 1
         f = result[0]
-        assert f["filer"] == "John Smith"   # from display_names (issuer skipped)
+        assert f["filer"] == "John Smith"  # from display_names (issuer skipped)
         assert f["type"] == "Filing"
         assert f["shares"] is None
         assert f["price"] is None
@@ -251,20 +274,24 @@ class TestInsiderService:
 
     def test_caps_to_10_filings(self):
         hits = [self._hit() for _ in range(15)]
-        with patch("backend.services.httpx.AsyncClient",
-                   return_value=_async_client(self._routed_get(hits))):
+        with patch(
+            "backend.services.httpx.AsyncClient", return_value=_async_client(self._routed_get(hits))
+        ):
             result = run(self.svc.get_insider_transactions("AAPL"))
         assert len(result) == 10
 
     def test_returns_empty_on_parse_failure(self):
-        with patch("backend.services.httpx.AsyncClient",
-                   return_value=_async_client(AsyncMock(side_effect=Exception("network")))):
+        with patch(
+            "backend.services.httpx.AsyncClient",
+            return_value=_async_client(AsyncMock(side_effect=Exception("network"))),
+        ):
             result = run(self.svc.get_insider_transactions("AAPL"))
         assert result == []
 
     def test_empty_hits_returns_empty(self):
-        with patch("backend.services.httpx.AsyncClient",
-                   return_value=_async_client(self._routed_get([]))):
+        with patch(
+            "backend.services.httpx.AsyncClient", return_value=_async_client(self._routed_get([]))
+        ):
             result = run(self.svc.get_insider_transactions("CRYPTO"))
         assert result == []
 
@@ -293,8 +320,10 @@ class TestShortInterestService:
 
     def test_days_to_cover_formula(self):
         parsed = self.svc._parse_finra(_FINRA_SAMPLE, "20260605")
-        with patch.object(self.svc, "_load_map", AsyncMock(return_value=parsed)), \
-             patch.object(self.svc, "_avg_daily_volume", MagicMock(return_value=200000.0)):
+        with (
+            patch.object(self.svc, "_load_map", AsyncMock(return_value=parsed)),
+            patch.object(self.svc, "_avg_daily_volume", MagicMock(return_value=200000.0)),
+        ):
             result = run(self.svc.get_short_interest("AAPL"))
         # days_to_cover = short_volume / avg_daily_volume = 1_000_000 / 200_000 = 5.0
         assert result["days_to_cover"] == 5.0
@@ -310,8 +339,10 @@ class TestShortInterestService:
 
     def test_days_to_cover_none_when_no_volume(self):
         parsed = self.svc._parse_finra(_FINRA_SAMPLE, "20260605")
-        with patch.object(self.svc, "_load_map", AsyncMock(return_value=parsed)), \
-             patch.object(self.svc, "_avg_daily_volume", MagicMock(return_value=None)):
+        with (
+            patch.object(self.svc, "_load_map", AsyncMock(return_value=parsed)),
+            patch.object(self.svc, "_avg_daily_volume", MagicMock(return_value=None)),
+        ):
             result = run(self.svc.get_short_interest("AAPL"))
         assert result["days_to_cover"] is None
 
@@ -320,7 +351,7 @@ class TestShortInterestService:
 # Endpoints — /macro/snapshot shape + /insider/{symbol} validation
 # ---------------------------------------------------------------------------
 
-from backend.routers import market  # noqa: E402
+from backend.routers import market
 
 _deps = _il.import_module("dependencies")
 limiter = _deps.limiter
@@ -347,8 +378,7 @@ class TestMacroEndpoint:
             "t10y2y_trend": [{"date": "2026-05-01", "value": -0.42}],
             "fetched_at": "2026-06-14T00:00:00+00:00",
         }
-        with patch.object(market.fred_svc, "get_macro_snapshot",
-                          AsyncMock(return_value=sample)):
+        with patch.object(market.fred_svc, "get_macro_snapshot", AsyncMock(return_value=sample)):
             resp = client.get("/macro/snapshot")
         assert resp.status_code == 200
         body = resp.json()
@@ -357,8 +387,7 @@ class TestMacroEndpoint:
         assert "t10y2y_trend" in body
 
     def test_empty_when_unavailable(self):
-        with patch.object(market.fred_svc, "get_macro_snapshot",
-                          AsyncMock(return_value={})):
+        with patch.object(market.fred_svc, "get_macro_snapshot", AsyncMock(return_value={})):
             resp = client.get("/macro/snapshot")
         assert resp.status_code == 200
         assert resp.json() == {}
@@ -366,8 +395,9 @@ class TestMacroEndpoint:
 
 class TestInsiderEndpoint:
     def test_valid_symbol(self):
-        with patch.object(market.insider_svc, "get_insider_transactions",
-                          AsyncMock(return_value=[])):
+        with patch.object(
+            market.insider_svc, "get_insider_transactions", AsyncMock(return_value=[])
+        ):
             resp = client.get("/insider/AAPL")
         assert resp.status_code == 200
         assert resp.json() == []

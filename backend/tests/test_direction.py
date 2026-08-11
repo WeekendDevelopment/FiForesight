@@ -2,13 +2,15 @@
 Direction-forecast classifier tests.
 All tests run offline — no network, no InfluxDB, no Groq.
 """
-import math
-from backend.direction import _build_direction_dataset, compute_direction_forecast
 
+import math
+
+from backend.direction import _build_direction_dataset, compute_direction_forecast
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_series(n: int, start: float = 100.0, step: float = 0.0) -> list[float]:
     """Flat or linearly trending close-price series."""
@@ -29,17 +31,18 @@ def _constant_indicators(
 ) -> tuple[list[float], list[float], list[float], list[float], list[float]]:
     """Return constant indicator lists of length n."""
     return (
-        [rsi]      * n,
+        [rsi] * n,
         [bb_upper] * n,
         [bb_lower] * n,
-        [macd]     * n,
-        [1_000.0]  * n,   # volumes
+        [macd] * n,
+        [1_000.0] * n,  # volumes
     )
 
 
 # ---------------------------------------------------------------------------
 # _build_direction_dataset
 # ---------------------------------------------------------------------------
+
 
 def test_dataset_shape_sensible() -> None:
     """Dataset has rows and exactly 10 features when all indicators present."""
@@ -58,8 +61,8 @@ def test_dataset_labels_both_classes() -> None:
     closes = _sine_series(n)
     rsi_s, bbu, bbl, mh, vols = _constant_indicators(n)
     _, y = _build_direction_dataset(closes, rsi_s, bbu, bbl, mh, vols)
-    assert y.sum() > 0          # at least one "up" day
-    assert (1 - y).sum() > 0    # at least one "down" day
+    assert y.sum() > 0  # at least one "up" day
+    assert (1 - y).sum() > 0  # at least one "down" day
 
 
 def test_dataset_skips_none_indicators() -> None:
@@ -67,17 +70,18 @@ def test_dataset_skips_none_indicators() -> None:
     n = 100
     closes = _sine_series(n)
     rsi_s = [None] * n
-    bbu   = [110.0] * n
-    bbl   = [90.0]  * n
-    mh    = [0.001] * n
-    vols  = [1000.0] * n
-    X, y = _build_direction_dataset(closes, rsi_s, bbu, bbl, mh, vols)
+    bbu = [110.0] * n
+    bbl = [90.0] * n
+    mh = [0.001] * n
+    vols = [1000.0] * n
+    X, _ = _build_direction_dataset(closes, rsi_s, bbu, bbl, mh, vols)
     assert len(X) == 0
 
 
 # ---------------------------------------------------------------------------
 # compute_direction_forecast
 # ---------------------------------------------------------------------------
+
 
 def test_returns_none_when_too_few_samples() -> None:
     """Returns None when history is shorter than MIN_SAMPLES."""
@@ -95,11 +99,11 @@ def test_returns_dict_with_sufficient_data() -> None:
     rsi_s, bbu, bbl, mh, vols = _constant_indicators(n)
     result = compute_direction_forecast(closes, rsi_s, bbu, bbl, mh, vols)
     assert result is not None
-    assert "direction"      in result
+    assert "direction" in result
     assert "confidence_pct" in result
-    assert "edge_pct"       in result
-    assert "top_features"   in result
-    assert "trained_on"     in result
+    assert "edge_pct" in result
+    assert "top_features" in result
+    assert "trained_on" in result
 
 
 def test_direction_valid_value() -> None:

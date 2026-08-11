@@ -7,13 +7,13 @@ No cron, no leverage, no costs (documented out-of-scope v1).
 Indicator math is reused from ``models.py`` (calculate_sma_series / calculate_rsi_series /
 calculate_macd / calculate_bollinger_bands) — not reimplemented here.
 """
+
 import asyncio
 import logging
 
 import numpy as np
 import pandas as pd
 import yfinance as yf
-
 from models import (
     calculate_bollinger_bands,
     calculate_macd,

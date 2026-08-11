@@ -1,7 +1,7 @@
 import json
 import logging
 
-from redis.asyncio import Redis, ConnectionPool
+from redis.asyncio import ConnectionPool, Redis
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -38,7 +38,9 @@ async def cache_get(key: str) -> list | dict | None:
             return None
         parsed = json.loads(raw)
         if not isinstance(parsed, (list, dict)):
-            logger.warning(f"[REDIS] cache_get({key}) — unexpected type {type(parsed).__name__}, discarding")
+            logger.warning(
+                f"[REDIS] cache_get({key}) — unexpected type {type(parsed).__name__}, discarding"
+            )
             return None
         return parsed
     except json.JSONDecodeError as e:

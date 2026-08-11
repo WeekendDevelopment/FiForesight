@@ -2,6 +2,7 @@
 Unit tests for _skill_to_weights — ensemble weighting helper.
 Pure logic, no I/O, no mocks needed.
 """
+
 from backend.models import _skill_to_weights
 
 
@@ -10,7 +11,7 @@ def test_proportional_to_skill() -> None:
     # naive=4.0 → skills: [1-2/4, 1-3/4, 1-1/4] = [0.5, 0.25, 0.75]
     w = _skill_to_weights([2.0, 3.0, 1.0], naive_mae=4.0)
     assert abs(sum(w) - 1.0) < 1e-9
-    assert w[2] > w[0] > w[1]   # rf > prophet > sarima
+    assert w[2] > w[0] > w[1]  # rf > prophet > sarima
 
 
 def test_below_naive_zeroed() -> None:

@@ -3,29 +3,30 @@
 Shared service singletons — imported by all router modules.
 Instantiated once at import time so there's a single instance across the app.
 """
+
 import logging
 
 import jwt
-from jwt import PyJWKClient
+from config import Config
 from fastapi import Header, HTTPException, Request
-from slowapi import Limiter
-from slowapi.util import get_remote_address
+from jwt import PyJWKClient
 from services import (
-    InfluxService,
-    ForecastStore,
-    SerpService,
-    YFinanceService,
     AnalystJuryService,
-    SentimentService,
     FinnhubService,
+    ForecastStore,
+    FREDService,
+    InfluxService,
+    InsiderService,
+    RegimeService,
+    SentimentService,
+    SerpService,
+    ShortInterestService,
     StockTwitsService,
     YahooRSSService,
-    FREDService,
-    InsiderService,
-    ShortInterestService,
-    RegimeService,
+    YFinanceService,
 )
-from config import Config
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 logger = logging.getLogger(__name__)
 
@@ -54,21 +55,21 @@ _jwks_client: "PyJWKClient | None" = (
 # not the HS256 shared secret.
 _ASYMMETRIC_ALGS = {"ES256", "RS256", "ES384", "RS384", "ES512", "RS512", "EdDSA"}
 
-influx_svc       = InfluxService()
-forecast_store   = ForecastStore(influx_svc)
-serp_svc         = SerpService()
-yf_svc           = YFinanceService()
+influx_svc = InfluxService()
+forecast_store = ForecastStore(influx_svc)
+serp_svc = SerpService()
+yf_svc = YFinanceService()
 analyst_jury_svc = AnalystJuryService()
-sentiment_svc    = SentimentService()
-finnhub_svc      = FinnhubService()
-stocktwits_svc   = StockTwitsService()
-yahoo_rss_svc    = YahooRSSService()
+sentiment_svc = SentimentService()
+finnhub_svc = FinnhubService()
+stocktwits_svc = StockTwitsService()
+yahoo_rss_svc = YahooRSSService()
 # Alternative data sources (Feature 15)
-fred_svc         = FREDService()
-insider_svc      = InsiderService()
+fred_svc = FREDService()
+insider_svc = InsiderService()
 short_interest_svc = ShortInterestService()
 # Market regime intelligence (Feature 16)
-regime_svc       = RegimeService()
+regime_svc = RegimeService()
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +121,7 @@ def _user_rate_key(request: Request) -> str:
 # Auth dependencies
 # ---------------------------------------------------------------------------
 
+
 def get_user_id(authorization: str = Header(default="")) -> str:
     """Extract and validate the Supabase user UUID from a Bearer JWT.
 
@@ -145,7 +147,9 @@ def get_user_id(authorization: str = Header(default="")) -> str:
             if _jwks_client is not None:
                 signing_key = _jwks_client.get_signing_key_from_jwt(token).key
                 payload = jwt.decode(
-                    token, signing_key, algorithms=list(_ASYMMETRIC_ALGS),
+                    token,
+                    signing_key,
+                    algorithms=list(_ASYMMETRIC_ALGS),
                     options={"verify_aud": False},
                 )
             elif Config.ALLOW_INSECURE_JWT:
@@ -156,8 +160,10 @@ def get_user_id(authorization: str = Header(default="")) -> str:
         elif Config.SUPABASE_JWT_SECRET:
             # Legacy HS256 shared-secret token.
             payload = jwt.decode(
-                token, Config.SUPABASE_JWT_SECRET,
-                algorithms=["HS256"], options={"verify_aud": False},
+                token,
+                Config.SUPABASE_JWT_SECRET,
+                algorithms=["HS256"],
+                options={"verify_aud": False},
             )
         elif Config.ALLOW_INSECURE_JWT:
             # Dev/test only — skip signature verification when explicitly opted in

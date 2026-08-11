@@ -10,37 +10,36 @@ Expensive (~30 train/predict cycles fitting 3 models each) so the result is
 cached in Redis for 24h and the heavy compute runs in a worker thread under a
 120s wall-clock budget.
 """
+
 import asyncio
 import logging
 import math
 import re
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
-
-from fastapi import APIRouter, HTTPException, Request
-from slowapi.util import get_remote_address
 
 from config import Config
+from dependencies import limiter, yf_svc
+from fastapi import APIRouter, HTTPException, Request
 from models import (
     MODELS_AVAILABLE,
     _prophet_forecast,
-    _sarima_forecast,
     _rf_forecast,
+    _sarima_forecast,
 )
-from services import DataCleaner
-from dependencies import yf_svc, limiter
 from redis_cache import cache_get, cache_set
+from services import DataCleaner
+from slowapi.util import get_remote_address
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 # Walk-forward parameters
-TRAIN_WINDOW = 252   # ~1 trading year of history per fit
-HORIZON      = 5     # forecast the next 5 trading days
-STEP         = 21    # roll forward ~1 trading month between windows
+TRAIN_WINDOW = 252  # ~1 trading year of history per fit
+HORIZON = 5  # forecast the next 5 trading days
+STEP = 21  # roll forward ~1 trading month between windows
 
-CACHE_TTL_SECONDS = 86_400   # 24h — backtest is stable intraday & costly
-COMPUTE_TIMEOUT   = 120.0    # wall-clock budget for the worker thread
+CACHE_TTL_SECONDS = 86_400  # 24h — backtest is stable intraday & costly
+COMPUTE_TIMEOUT = 120.0  # wall-clock budget for the worker thread
 
 _SYMBOL_RE = re.compile(r"[A-Za-z0-9.\-:]{1,15}")
 
@@ -50,14 +49,14 @@ def _sign(x: float) -> int:
     return (x > 0) - (x < 0)
 
 
-def _agg(errors: List[float], dirs: List[int]) -> Dict[str, Optional[float]]:
+def _agg(errors: list[float], dirs: list[int]) -> dict[str, float | None]:
     """Aggregate per-window errors + directional hits into MAE + accuracy."""
     mae = round(sum(errors) / len(errors), 4) if errors else None
     acc = round(sum(dirs) / len(dirs), 4) if dirs else None
     return {"mae": mae, "directional_accuracy": acc}
 
 
-def _run_backtest(symbol: str, closes: List[float], dates: List[str]) -> Optional[dict]:
+def _run_backtest(symbol: str, closes: list[float], dates: list[str]) -> dict | None:
     """
     Synchronous walk-forward loop — runs in a worker thread.
 
@@ -74,18 +73,18 @@ def _run_backtest(symbol: str, closes: List[float], dates: List[str]) -> Optiona
     if n < TRAIN_WINDOW + HORIZON:
         return None
 
-    model_errors: Dict[str, List[float]] = {"prophet": [], "sarimax": [], "random_forest": []}
-    model_dirs:   Dict[str, List[int]]   = {"prophet": [], "sarimax": [], "random_forest": []}
-    ens_errors:   List[float] = []
-    ens_dirs:     List[int]   = []
+    model_errors: dict[str, list[float]] = {"prophet": [], "sarimax": [], "random_forest": []}
+    model_dirs: dict[str, list[int]] = {"prophet": [], "sarimax": [], "random_forest": []}
+    ens_errors: list[float] = []
+    ens_dirs: list[int] = []
 
-    equity_curve: List[dict] = []
+    equity_curve: list[dict] = []
     cumulative_return_pct = 0.0
     windows_tested = 0
 
     fitters = {
-        "prophet":       lambda tr: _prophet_forecast(tr, HORIZON),
-        "sarimax":       lambda tr: _sarima_forecast(tr, HORIZON),
+        "prophet": lambda tr: _prophet_forecast(tr, HORIZON),
+        "sarimax": lambda tr: _sarima_forecast(tr, HORIZON),
         # _rf_forecast now returns (forecast_array, feature_importance); the
         # backtest only needs the forecast array.
         "random_forest": lambda tr: _rf_forecast(tr, HORIZON)[0],
@@ -93,21 +92,24 @@ def _run_backtest(symbol: str, closes: List[float], dates: List[str]) -> Optiona
 
     start = 0
     while start + TRAIN_WINDOW + HORIZON <= n:
-        train  = closes[start: start + TRAIN_WINDOW]
-        actual = closes[start + TRAIN_WINDOW: start + TRAIN_WINDOW + HORIZON]
+        train = closes[start : start + TRAIN_WINDOW]
+        actual = closes[start + TRAIN_WINDOW : start + TRAIN_WINDOW + HORIZON]
         train_last = train[-1]
         actual_dir = _sign(actual[-1] - train_last)
-        pred_date  = dates[start + TRAIN_WINDOW - 1]
+        pred_date = dates[start + TRAIN_WINDOW - 1]
 
-        window_model_paths: List[List[float]] = []
+        window_model_paths: list[list[float]] = []
         for name, fit in fitters.items():
             try:
-                result = fit(train)                       # shape (HORIZON, 3)
+                result = fit(train)  # shape (HORIZON, 3)
                 pred_path = [float(result[i][0]) for i in range(HORIZON)]
             except Exception as exc:
                 logger.warning(
                     "[BACKTEST] %s fit failed for %s window @%s: %s",
-                    name, symbol, pred_date, exc,
+                    name,
+                    symbol,
+                    pred_date,
+                    exc,
                 )
                 continue
             model_errors[name].extend(abs(p - a) for p, a in zip(pred_path, actual))
@@ -120,8 +122,7 @@ def _run_backtest(symbol: str, closes: List[float], dates: List[str]) -> Optiona
 
         # Ensemble = simple mean of the model paths that succeeded this window.
         ens_path = [
-            sum(p[i] for p in window_model_paths) / len(window_model_paths)
-            for i in range(HORIZON)
+            sum(p[i] for p in window_model_paths) / len(window_model_paths) for i in range(HORIZON)
         ]
         ens_errors.extend(abs(p - a) for p, a in zip(ens_path, actual))
         ens_dir = _sign(ens_path[-1] - train_last)
@@ -138,10 +139,12 @@ def _run_backtest(symbol: str, closes: List[float], dates: List[str]) -> Optiona
             position = 1 if ens_dir > 0 else -1
             window_return_pct = position * (actual[-1] - train_last) / train_last * 100.0
         cumulative_return_pct += window_return_pct
-        equity_curve.append({
-            "date": pred_date,
-            "cumulative_return_pct": round(cumulative_return_pct, 2),
-        })
+        equity_curve.append(
+            {
+                "date": pred_date,
+                "cumulative_return_pct": round(cumulative_return_pct, 2),
+            }
+        )
 
         windows_tested += 1
         start += STEP
@@ -150,16 +153,16 @@ def _run_backtest(symbol: str, closes: List[float], dates: List[str]) -> Optiona
         return None
 
     return {
-        "symbol":         symbol,
+        "symbol": symbol,
         "windows_tested": windows_tested,
-        "ensemble":       _agg(ens_errors, ens_dirs),
+        "ensemble": _agg(ens_errors, ens_dirs),
         "models": {
-            "prophet":       _agg(model_errors["prophet"],       model_dirs["prophet"]),
-            "sarimax":       _agg(model_errors["sarimax"],       model_dirs["sarimax"]),
+            "prophet": _agg(model_errors["prophet"], model_dirs["prophet"]),
+            "sarimax": _agg(model_errors["sarimax"], model_dirs["sarimax"]),
             "random_forest": _agg(model_errors["random_forest"], model_dirs["random_forest"]),
         },
         "equity_curve": equity_curve,
-        "computed_at":  datetime.now(timezone.utc).isoformat(),
+        "computed_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -209,8 +212,8 @@ async def backtest(request: Request, symbol: str) -> dict:
     hist.sort(key=lambda x: x["_time"])
     # Keep only finite, positive closes — a stray NaN/inf would silently poison
     # the Prophet/SARIMAX paths and surface as null MAE in the response.
-    closes: List[float] = []
-    dates:  List[str]   = []
+    closes: list[float] = []
+    dates: list[str] = []
     for p in hist:
         c = float(p["close"])
         if math.isfinite(c) and c > 0:
@@ -240,8 +243,10 @@ async def backtest(request: Request, symbol: str) -> dict:
 
     logger.info(
         "[BACKTEST] ✓ %s — %d windows | ensemble MAE=%s dir_acc=%s",
-        sym, result["windows_tested"],
-        result["ensemble"]["mae"], result["ensemble"]["directional_accuracy"],
+        sym,
+        result["windows_tested"],
+        result["ensemble"]["mae"],
+        result["ensemble"]["directional_accuracy"],
     )
     await cache_set(cache_key, result, ttl_seconds=CACHE_TTL_SECONDS)
     return result

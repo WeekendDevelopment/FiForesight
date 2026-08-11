@@ -6,6 +6,7 @@ Focus: malformed model output (e.g. GPT-OSS / reasoning models emitting an
 unbalanced object) must never leak JSON punctuation like "}}" into the
 user-facing note.
 """
+
 from backend.services import AnalystJuryService
 
 parse = AnalystJuryService._parse_analyst_response

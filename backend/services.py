@@ -1,22 +1,22 @@
 # backend/services.py
-import re
-import json
-import math
-import logging
 import asyncio
-import httpx
+import json
+import logging
+import math
+import re
 import xml.etree.ElementTree as ET
-import pandas as pd
-from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, ClassVar
+
+import httpx
 import newrelic.agent
+import pandas as pd
 
 try:
     import yfinance as yf
+
     YFINANCE_AVAILABLE = True
-    logging.getLogger(__name__).info(
-        "[YFINANCE] ✓ yfinance package loaded successfully"
-    )
+    logging.getLogger(__name__).info("[YFINANCE] ✓ yfinance package loaded successfully")
 except ImportError:
     yf = None  # type: ignore
     YFINANCE_AVAILABLE = False
@@ -24,9 +24,9 @@ except ImportError:
         "[YFINANCE] ✗ yfinance not installed — run: pip install yfinance"
     )
 
+from config import Config
 from influxdb_client import InfluxDBClient, Point, WritePrecision
 from influxdb_client.client.write_api import SYNCHRONOUS
-from config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +35,10 @@ logger = logging.getLogger(__name__)
 # Input validation — prevents Flux/InfluxQL injection via user-supplied tags
 # ---------------------------------------------------------------------------
 
-_SAFE_TAG_RE  = re.compile(r"^[A-Za-z0-9._:\-]+$")
-_VALID_SIM_ENV      = frozenset({"local", "preview", "live"})
+_SAFE_TAG_RE = re.compile(r"^[A-Za-z0-9._:\-]+$")
+_VALID_SIM_ENV = frozenset({"local", "preview", "live"})
 _VALID_SIM_ENV_READ = frozenset({"local", "preview", "live", "all"})
-_UUID_RE       = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
 def _validate_tag(value: str, field: str = "tag") -> str:
@@ -54,11 +54,19 @@ def _validate_tag(value: str, field: str = "tag") -> str:
     return value
 
 
-_ALLOWED_MODELS = frozenset({
-    "prophet", "sarima", "rf",
-    # per-horizon ensemble accuracy trackers (d1 reuses same slot as per-model)
-    "ensemble_d1", "ensemble_d2", "ensemble_d3", "ensemble_d4", "ensemble_d5",
-})
+_ALLOWED_MODELS = frozenset(
+    {
+        "prophet",
+        "sarima",
+        "rf",
+        # per-horizon ensemble accuracy trackers (d1 reuses same slot as per-model)
+        "ensemble_d1",
+        "ensemble_d2",
+        "ensemble_d3",
+        "ensemble_d4",
+        "ensemble_d5",
+    }
+)
 
 
 def _validate_model(model: str) -> str:
@@ -70,6 +78,7 @@ def _validate_model(model: str) -> str:
 # ---------------------------------------------------------------------------
 # InfluxDB Service  —  stores and retrieves full OHLCV data
 # ---------------------------------------------------------------------------
+
 
 class InfluxService:
     def __init__(self):
@@ -102,9 +111,7 @@ class InfluxService:
                 .field("close", float(price))
                 .time(datetime.now(timezone.utc), WritePrecision.NS)
             )
-            self.write_api.write(
-                bucket=Config.INFLUXDB_BUCKET, org=Config.INFLUXDB_ORG, record=p
-            )
+            self.write_api.write(bucket=Config.INFLUXDB_BUCKET, org=Config.INFLUXDB_ORG, record=p)
             logger.info(
                 f"[INFLUXDB] ✓ write_price — {symbol} @ ${price:.2f} stored "
                 f"(measurement=market_data, field=close)"
@@ -135,9 +142,7 @@ class InfluxService:
                 .field("label", str(label))
                 .time(datetime.now(timezone.utc), WritePrecision.NS)
             )
-            self.write_api.write(
-                bucket=Config.INFLUXDB_BUCKET, org=Config.INFLUXDB_ORG, record=p
-            )
+            self.write_api.write(bucket=Config.INFLUXDB_BUCKET, org=Config.INFLUXDB_ORG, record=p)
             logger.info(
                 f"[INFLUXDB] ✓ write_sentiment_score — {symbol} compound={compound:+.4f} ({label})"
             )
@@ -169,11 +174,13 @@ class InfluxService:
                     tv = r.values.get("_time")
                     if tv is None:
                         continue
-                    out.append({
-                        "date":     tv.date().isoformat(),
-                        "compound": round(float(r.values.get("compound", 0.0) or 0.0), 4),
-                        "label":    str(r.values.get("label", "Neutral")),
-                    })
+                    out.append(
+                        {
+                            "date": tv.date().isoformat(),
+                            "compound": round(float(r.values.get("compound", 0.0) or 0.0), 4),
+                            "label": str(r.values.get("label", "Neutral")),
+                        }
+                    )
             logger.info(
                 f"[INFLUXDB] query_sentiment_history — {symbol}: {len(out)} points in last {days}d"
             )
@@ -206,9 +213,7 @@ class InfluxService:
                 .field("confidence", float(confidence))
                 .time(datetime.now(timezone.utc), WritePrecision.NS)
             )
-            self.write_api.write(
-                bucket=Config.INFLUXDB_BUCKET, org=Config.INFLUXDB_ORG, record=p
-            )
+            self.write_api.write(bucket=Config.INFLUXDB_BUCKET, org=Config.INFLUXDB_ORG, record=p)
             logger.info(
                 f"[INFLUXDB] ✓ write_market_regime — {symbol} {regime} (conf={confidence:.2f})"
             )
@@ -233,21 +238,21 @@ class InfluxService:
             f"retention_cutoff={cutoff.date()} (last 29 days)"
         )
 
-        points  = []
+        points = []
         skipped = 0
         for ts, row in df.iterrows():
             if ts.tzinfo is None:
                 ts = ts.tz_localize("UTC")
             if ts < cutoff:
                 skipped += 1
-                continue   # outside retention window
+                continue  # outside retention window
             p = (
                 Point("market_data")
                 .tag("symbol", symbol)
-                .field("open",   float(row.get("Open",   row.get("open",   0))))
-                .field("high",   float(row.get("High",   row.get("high",   0))))
-                .field("low",    float(row.get("Low",    row.get("low",    0))))
-                .field("close",  float(row.get("Close",  row.get("close",  0))))
+                .field("open", float(row.get("Open", row.get("open", 0))))
+                .field("high", float(row.get("High", row.get("high", 0))))
+                .field("low", float(row.get("Low", row.get("low", 0))))
+                .field("close", float(row.get("Close", row.get("close", 0))))
                 .field("volume", float(row.get("Volume", row.get("volume", 0))))
                 .time(ts, WritePrecision.NS)
             )
@@ -302,21 +307,23 @@ class InfluxService:
         """
         try:
             tables = self.query_api.query(query)
-            rows   = [r.values for t in tables for r in t.records]
+            rows = [r.values for t in tables for r in t.records]
 
             out = []
             for row in rows:
-                out.append({
-                    "_time":  row.get("_time"),
-                    "open":   float(row.get("open",   row.get("close", 0)) or 0),
-                    "high":   float(row.get("high",   row.get("close", 0)) or 0),
-                    "low":    float(row.get("low",    row.get("close", 0)) or 0),
-                    "close":  float(row.get("close",  0) or 0),
-                    "volume": float(row.get("volume", 0) or 0),
-                })
+                out.append(
+                    {
+                        "_time": row.get("_time"),
+                        "open": float(row.get("open", row.get("close", 0)) or 0),
+                        "high": float(row.get("high", row.get("close", 0)) or 0),
+                        "low": float(row.get("low", row.get("close", 0)) or 0),
+                        "close": float(row.get("close", 0) or 0),
+                        "volume": float(row.get("volume", 0) or 0),
+                    }
+                )
 
             if out:
-                times    = [r["_time"] for r in out if r["_time"] is not None]
+                times = [r["_time"] for r in out if r["_time"] is not None]
                 date_min = min(times).date() if times else "?"
                 date_max = max(times).date() if times else "?"
                 logger.info(
@@ -344,8 +351,7 @@ class InfluxService:
             return False
         within_hours = max(1, int(within_hours))
         logger.debug(
-            f"[INFLUXDB] has_recent_data — symbol={symbol}, "
-            f"checking last {within_hours}h ..."
+            f"[INFLUXDB] has_recent_data — symbol={symbol}, checking last {within_hours}h ..."
         )
         query = f"""
         from(bucket: "{Config.INFLUXDB_BUCKET}")
@@ -415,12 +421,12 @@ class InfluxService:
 
     def write_simulation_state(self, sim_id: str, env: str, state: dict, user_id: str = "") -> bool:
         try:
-            env     = self._validate_sim_env(env)
-            sim_id  = self._validate_sim_id(sim_id)
+            env = self._validate_sim_env(env)
+            sim_id = self._validate_sim_id(sim_id)
             user_id = self._validate_user_id(user_id)
-            point   = (
+            point = (
                 Point("simulation_state")
-                .tag("env",    env)
+                .tag("env", env)
                 .tag("sim_id", sim_id)
                 .field("state_json", json.dumps(state))
             )
@@ -431,25 +437,30 @@ class InfluxService:
                 org=Config.INFLUXDB_ORG,
                 record=point,
             )
-            logger.info("[INFLUXDB] simulation_state saved: sim_id=%s env=%s user=%s", sim_id, env, "authenticated" if user_id else "anon")
+            logger.info(
+                "[INFLUXDB] simulation_state saved: sim_id=%s env=%s user=%s",
+                sim_id,
+                env,
+                "authenticated" if user_id else "anon",
+            )
             return True
         except Exception as exc:
             logger.error("[INFLUXDB] write_simulation_state failed: %s", exc)
             return False
 
-    def query_simulation_states(self, env: str, user_id: str = "") -> List[dict]:
+    def query_simulation_states(self, env: str, user_id: str = "") -> list[dict]:
         """Return live (non-deleted) simulations for the given env, optionally filtered by user."""
         try:
             if env not in _VALID_SIM_ENV_READ:
                 raise ValueError(f"Invalid simulation env: {env!r}")
             user_id = self._validate_user_id(user_id)
-            env_filter  = "" if env == "all" else f'  |> filter(fn: (r) => r.env == "{env}")\n'
+            env_filter = "" if env == "all" else f'  |> filter(fn: (r) => r.env == "{env}")\n'
             # Authenticated: exact-match on user_id tag.
             # Anonymous: restrict to legacy rows that have no user_id tag at all.
             if user_id:
                 user_filter = f'  |> filter(fn: (r) => r.user_id == "{user_id}")\n'
             else:
-                user_filter = '  |> filter(fn: (r) => not exists r.user_id)\n'
+                user_filter = "  |> filter(fn: (r) => not exists r.user_id)\n"
             query = f"""
 from(bucket: "{Config.INFLUXDB_BUCKET}")
   |> range(start: -365d)
@@ -460,7 +471,7 @@ from(bucket: "{Config.INFLUXDB_BUCKET}")
   |> sort(columns: ["_time"], desc: true)
 """
             tables = self.query_api.query(query, org=Config.INFLUXDB_ORG)
-            results: List[dict] = []
+            results: list[dict] = []
             for table in tables:
                 for record in table.records:
                     try:
@@ -481,12 +492,12 @@ from(bucket: "{Config.INFLUXDB_BUCKET}")
     def delete_simulation_state(self, sim_id: str, env: str, user_id: str = "") -> bool:
         """Soft-delete: write an empty-string tombstone so `last()` filters it out."""
         try:
-            env     = self._validate_sim_env(env)
-            sim_id  = self._validate_sim_id(sim_id)
+            env = self._validate_sim_env(env)
+            sim_id = self._validate_sim_id(sim_id)
             user_id = self._validate_user_id(user_id)
-            point   = (
+            point = (
                 Point("simulation_state")
-                .tag("env",    env)
+                .tag("env", env)
                 .tag("sim_id", sim_id)
                 .field("state_json", "")
             )
@@ -497,7 +508,12 @@ from(bucket: "{Config.INFLUXDB_BUCKET}")
                 org=Config.INFLUXDB_ORG,
                 record=point,
             )
-            logger.info("[INFLUXDB] simulation_state deleted: sim_id=%s env=%s user=%s", sim_id, env, "authenticated" if user_id else "anon")
+            logger.info(
+                "[INFLUXDB] simulation_state deleted: sim_id=%s env=%s user=%s",
+                sim_id,
+                env,
+                "authenticated" if user_id else "anon",
+            )
             return True
         except Exception as exc:
             logger.error("[INFLUXDB] delete_simulation_state failed: %s", exc)
@@ -508,6 +524,7 @@ from(bucket: "{Config.INFLUXDB_BUCKET}")
 # ForecastStore  —  RL feedback loop: record forecasts, resolve outcomes,
 #                   maintain per-model accuracy for calibrated weight blending
 # ---------------------------------------------------------------------------
+
 
 class ForecastStore:
     """
@@ -532,15 +549,15 @@ class ForecastStore:
         self,
         symbol: str,
         last_price: float,
-        prophet_d1: Optional[float],
-        sarima_d1: Optional[float],
-        rf_d1: Optional[float],
+        prophet_d1: float | None,
+        sarima_d1: float | None,
+        rf_d1: float | None,
         w_prophet: float,
         w_sarima: float,
         w_rf: float,
-        ensemble_preds: List[float],  # 5-element list (one per forecast day)
-        d1_high: Optional[float] = None,
-        d1_low: Optional[float] = None,
+        ensemble_preds: list[float],  # 5-element list (one per forecast day)
+        d1_high: float | None = None,
+        d1_low: float | None = None,
     ) -> None:
         try:
             _validate_tag(symbol, "symbol")
@@ -548,8 +565,8 @@ class ForecastStore:
             logger.error(f"[RL] write_forecast_record rejected — {e}")
             return
         p_str = f"{prophet_d1:.2f}" if prophet_d1 is not None else "N/A"
-        s_str = f"{sarima_d1:.2f}"  if sarima_d1  is not None else "N/A"
-        r_str = f"{rf_d1:.2f}"      if rf_d1       is not None else "N/A"
+        s_str = f"{sarima_d1:.2f}" if sarima_d1 is not None else "N/A"
+        r_str = f"{rf_d1:.2f}" if rf_d1 is not None else "N/A"
         try:
             logger.debug(
                 f"[RL] write_forecast_record — {symbol} @ last_price=${last_price:.2f} | "
@@ -561,11 +578,11 @@ class ForecastStore:
                 .tag("symbol", symbol)
                 .field("last_price", float(last_price))
                 .field("p_d1", float(prophet_d1) if prophet_d1 is not None else -1.0)
-                .field("s_d1", float(sarima_d1)  if sarima_d1  is not None else -1.0)
-                .field("r_d1", float(rf_d1)       if rf_d1       is not None else -1.0)
-                .field("w_p",  float(w_prophet))
-                .field("w_s",  float(w_sarima))
-                .field("w_r",  float(w_rf))
+                .field("s_d1", float(sarima_d1) if sarima_d1 is not None else -1.0)
+                .field("r_d1", float(rf_d1) if rf_d1 is not None else -1.0)
+                .field("w_p", float(w_prophet))
+                .field("w_s", float(w_sarima))
+                .field("w_r", float(w_rf))
             )
             for i, pred in enumerate(ensemble_preds[:5], 1):
                 p = p.field(f"e_d{i}", float(pred))
@@ -581,9 +598,7 @@ class ForecastStore:
         except Exception as e:
             logger.error(f"[RL] ✗ write_forecast_record error for {symbol}: {e}")
 
-    def write_price_outcome(
-        self, symbol: str, outcome_dt: datetime, actual_close: float
-    ) -> None:
+    def write_price_outcome(self, symbol: str, outcome_dt: datetime, actual_close: float) -> None:
         try:
             _validate_tag(symbol, "symbol")
         except ValueError as e:
@@ -605,9 +620,7 @@ class ForecastStore:
         except Exception as e:
             logger.error(f"[RL] ✗ write_price_outcome error for {symbol}: {e}")
 
-    def mark_forecast_resolved(
-        self, symbol: str, record_time: datetime, horizon: int = 1
-    ) -> None:
+    def mark_forecast_resolved(self, symbol: str, record_time: datetime, horizon: int = 1) -> None:
         """
         Write a resolution marker for a given forecast_record.
         `horizon` is the highest ensemble day resolved so far (1–5).
@@ -632,9 +645,7 @@ class ForecastStore:
         except Exception as e:
             logger.error(f"[RL] ✗ mark_forecast_resolved error for {symbol}: {e}")
 
-    def query_resolved_timestamps(
-        self, symbol: str, days: int = 30
-    ) -> Dict[object, int]:
+    def query_resolved_timestamps(self, symbol: str, days: int = 30) -> dict[object, int]:
         """
         Return {forecast_record_time: max_horizon_resolved} for all resolved records.
         horizon=1 means d1 done, horizon=5 means fully resolved.
@@ -654,10 +665,10 @@ class ForecastStore:
         """
         try:
             tables = self._svc.query_api.query(query)
-            out: Dict[object, int] = {}
+            out: dict[object, int] = {}
             for t in tables:
                 for r in t.records:
-                    tv  = r.values.get("_time")
+                    tv = r.values.get("_time")
                     val = r.values.get("_value", 0) or 0
                     if tv is not None:
                         out[tv] = max(out.get(tv, 0), int(val))
@@ -666,9 +677,7 @@ class ForecastStore:
             logger.error(f"[RL] ✗ query_resolved_timestamps error for {symbol}: {e}")
             return {}
 
-    def write_model_accuracy(
-        self, symbol: str, model: str, mae: float, sample_count: int
-    ) -> bool:
+    def write_model_accuracy(self, symbol: str, model: str, mae: float, sample_count: int) -> bool:
         """Write updated EMA-MAE stats for one model/horizon key.
 
         Returns True on success, False on any validation or InfluxDB failure
@@ -703,7 +712,7 @@ class ForecastStore:
 
     # ── Queries ───────────────────────────────────────────────────────────────
 
-    def query_forecast_records(self, symbol: str, days: int = 10) -> List[dict]:
+    def query_forecast_records(self, symbol: str, days: int = 10) -> list[dict]:
         """Returns forecast record rows from the last N days."""
         try:
             _validate_tag(symbol, "symbol")
@@ -729,7 +738,7 @@ class ForecastStore:
             logger.error(f"[RL] ✗ query_forecast_records error for {symbol}: {e}")
             return []
 
-    def query_forecast_symbols(self, days: int = 90) -> List[str]:
+    def query_forecast_symbols(self, days: int = 90) -> list[str]:
         """Distinct symbols that have forecast_record history in the last N days.
 
         Used by the calibration audit's "ALL" aggregate. Read-only; fails closed
@@ -760,7 +769,7 @@ class ForecastStore:
             logger.error(f"[RL] ✗ query_forecast_symbols error: {e}")
             return []
 
-    def query_price_outcomes(self, symbol: str, days: int = 15) -> Dict[object, float]:
+    def query_price_outcomes(self, symbol: str, days: int = 15) -> dict[object, float]:
         """Returns {date: actual_close} from price_outcome measurement."""
         try:
             _validate_tag(symbol, "symbol")
@@ -776,7 +785,7 @@ class ForecastStore:
         """
         try:
             tables = self._svc.query_api.query(query)
-            result: Dict[object, float] = {}
+            result: dict[object, float] = {}
             for t in tables:
                 for r in t.records:
                     t_val = r.values.get("_time")
@@ -791,24 +800,24 @@ class ForecastStore:
             logger.error(f"[RL] ✗ query_price_outcomes error for {symbol}: {e}")
             return {}
 
-    def query_naive_mae(self, symbol: str, days: int = 90) -> Optional[float]:
+    def query_naive_mae(self, symbol: str, days: int = 90) -> float | None:
         """
         Naive-persistence MAE: mean(|actual_close - last_price|) over matched d1
         forecast records.  Returns None when there are no matched records.
         Fails closed — any exception logs a warning and returns None.
         """
         try:
-            records  = self.query_forecast_records(symbol, days=days)
+            records = self.query_forecast_records(symbol, days=days)
             outcomes = self.query_price_outcomes(symbol, days=days + 10)
             outcomes_sorted = sorted(outcomes.items())
-            errors: List[float] = []
+            errors: list[float] = []
             for rec in records:
-                pred_time      = rec.get("_time")
+                pred_time = rec.get("_time")
                 last_price_raw = rec.get("last_price")
                 if pred_time is None or last_price_raw is None:
                     continue
                 try:
-                    pred_date  = pred_time.date()
+                    pred_date = pred_time.date()
                     last_price = float(last_price_raw)
                 except (AttributeError, TypeError, ValueError):
                     continue
@@ -823,7 +832,7 @@ class ForecastStore:
             logger.warning("[RL] query_naive_mae failed for %s: %s", symbol, exc)
             return None
 
-    def query_model_accuracy(self, symbol: str, lookback_days: int = 90) -> Dict[str, dict]:
+    def query_model_accuracy(self, symbol: str, lookback_days: int = 90) -> dict[str, dict]:
         """
         Returns most-recent per-model accuracy record.
         { "prophet": {"mae": float, "samples": int}, "sarima": {...}, "rf": {...} }
@@ -834,7 +843,7 @@ class ForecastStore:
             logger.error(f"[RL] query_model_accuracy rejected — {e}")
             return {}
         lookback_days = max(1, int(lookback_days))
-        result: Dict[str, dict] = {}
+        result: dict[str, dict] = {}
         for model in ("prophet", "sarima", "rf"):
             _validate_model(model)
             query = f"""
@@ -854,17 +863,15 @@ class ForecastStore:
                     for r in t.records:
                         vals = r.values
                         result[model] = {
-                            "mae":     float(vals.get("mae_d1",      999.0)),
+                            "mae": float(vals.get("mae_d1", 999.0)),
                             "samples": int(vals.get("sample_count", 0)),
                         }
             except Exception as e:
-                logger.warning(
-                    f"[RL] query_model_accuracy error for {symbol}/{model}: {e}"
-                )
+                logger.warning(f"[RL] query_model_accuracy error for {symbol}/{model}: {e}")
         logger.debug(f"[RL] query_model_accuracy — {symbol}: {result}")
         return result
 
-    def query_ensemble_mae(self, symbol: str, lookback_days: int = 90) -> Dict[str, dict]:
+    def query_ensemble_mae(self, symbol: str, lookback_days: int = 90) -> dict[str, dict]:
         """
         Returns most-recent per-horizon ensemble accuracy.
         { "ensemble_d1": {"mae": float, "samples": int}, ..., "ensemble_d5": {...} }
@@ -876,7 +883,7 @@ class ForecastStore:
             logger.error(f"[RL] query_ensemble_mae rejected — {e}")
             return {}
         lookback_days = max(1, int(lookback_days))
-        result: Dict[str, dict] = {}
+        result: dict[str, dict] = {}
         for model in ("ensemble_d1", "ensemble_d2", "ensemble_d3", "ensemble_d4", "ensemble_d5"):
             query = f"""
             from(bucket: "{Config.INFLUXDB_BUCKET}")
@@ -895,7 +902,7 @@ class ForecastStore:
                     for r in t.records:
                         vals = r.values
                         result[model] = {
-                            "mae":     float(vals.get("mae_d1", 999.0)),
+                            "mae": float(vals.get("mae_d1", 999.0)),
                             "samples": int(vals.get("sample_count", 0)),
                         }
             except Exception as e:
@@ -912,8 +919,12 @@ class ForecastStore:
 # google_finance engine only returns results for the "TICKER:EXCHANGE" format;
 # a bare ticker errors with "hasn't returned any results".
 _GOOGLE_EXCHANGE = {
-    "NMS": "NASDAQ", "NGM": "NASDAQ", "NCM": "NASDAQ", "NAS": "NASDAQ",
-    "NYQ": "NYSE",   "NYS": "NYSE",
+    "NMS": "NASDAQ",
+    "NGM": "NASDAQ",
+    "NCM": "NASDAQ",
+    "NAS": "NASDAQ",
+    "NYQ": "NYSE",
+    "NYS": "NYSE",
     "PCX": "NYSEARCA",
     "ASE": "NYSEAMERICAN",
     "BTS": "BATS",
@@ -975,7 +986,7 @@ class YFinanceService:
             # Flatten MultiIndex columns if present (yfinance ≥0.2 quirk)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
-                df = df.loc[:, ~df.columns.duplicated(keep='first')]
+                df = df.loc[:, ~df.columns.duplicated(keep="first")]
 
             df.index = pd.to_datetime(df.index)
             if df.index.tz is None:
@@ -984,9 +995,9 @@ class YFinanceService:
                 df.index = df.index.tz_convert("UTC")
 
             keep = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in df.columns]
-            df   = df[keep].dropna(subset=["Close"])
+            df = df[keep].dropna(subset=["Close"])
 
-            close_col = df['Close']
+            close_col = df["Close"]
             logger.info(
                 f"[YFINANCE] ✓ fetch_history — {len(df)} rows for {ticker} | "
                 f"date range: {df.index.min().date()} → {df.index.max().date()} | "
@@ -1016,12 +1027,12 @@ class YFinanceService:
         logger.debug(f"[YFINANCE] fetch_info — ticker={ticker}")
 
         try:
-            info       = yf.Ticker(ticker).info
+            info = yf.Ticker(ticker).info
             prev_close = info.get("previousClose") or info.get("regularMarketPreviousClose")
-            high52     = info.get("fiftyTwoWeekHigh")
-            low52      = info.get("fiftyTwoWeekLow")
-            range_52w  = f"{low52:.2f} - {high52:.2f}" if high52 and low52 else "N/A"
-            current    = (
+            high52 = info.get("fiftyTwoWeekHigh")
+            low52 = info.get("fiftyTwoWeekLow")
+            range_52w = f"{low52:.2f} - {high52:.2f}" if high52 and low52 else "N/A"
+            current = (
                 info.get("currentPrice")
                 or info.get("regularMarketPrice")
                 or info.get("previousClose")
@@ -1030,11 +1041,7 @@ class YFinanceService:
             # Compute dividend yield from annualized rate ÷ price (accurate for
             # any stock post-split). yfinance's dividendYield field is unreliable
             # — it can be 100× too large on low-yield tickers like NVDA.
-            _div_rate = (
-                info.get("trailingAnnualDividendRate")
-                or info.get("dividendRate")
-                or 0.0
-            )
+            _div_rate = info.get("trailingAnnualDividendRate") or info.get("dividendRate") or 0.0
             _price_for_yield = float(current) if float(current) > 0 else 0.0
             if _div_rate and float(_div_rate) > 0 and _price_for_yield > 0:
                 dividend_yield = float(_div_rate) / _price_for_yield  # decimal fraction
@@ -1042,29 +1049,29 @@ class YFinanceService:
                 dividend_yield = "N/A"
 
             result = {
-                "current_price":   float(current),
-                "market_cap":      info.get("marketCap",           "N/A"),
-                "pe_ratio":        info.get("trailingPE",          "N/A"),
-                "dividend_yield":  dividend_yield,
-                "prev_close":      prev_close or "N/A",
-                "range_52w":       range_52w,
-                "short_name":      info.get("shortName",       ticker),
-                "sector":          info.get("sector",          "N/A"),
-                "industry":        info.get("industry",        "N/A"),
-                "currency":        info.get("currency",        "USD"),
+                "current_price": float(current),
+                "market_cap": info.get("marketCap", "N/A"),
+                "pe_ratio": info.get("trailingPE", "N/A"),
+                "dividend_yield": dividend_yield,
+                "prev_close": prev_close or "N/A",
+                "range_52w": range_52w,
+                "short_name": info.get("shortName", ticker),
+                "sector": info.get("sector", "N/A"),
+                "industry": info.get("industry", "N/A"),
+                "currency": info.get("currency", "USD"),
                 # Google-Finance exchange suffix (e.g. NASDAQ/NYSE) derived from
                 # yfinance's exchange code — needed for the SerpAPI google_finance
                 # query, which requires the TICKER:EXCHANGE format. "" when unknown.
-                "exchange":        _GOOGLE_EXCHANGE.get(info.get("exchange") or "", ""),
+                "exchange": _GOOGLE_EXCHANGE.get(info.get("exchange") or "", ""),
                 # Extended quant fundamentals
-                "beta":            info.get("beta",                 "N/A"),
-                "forward_pe":      info.get("forwardPE",            "N/A"),
-                "peg_ratio":       info.get("pegRatio",             "N/A"),
-                "price_to_book":   info.get("priceToBook",          "N/A"),
-                "ev_to_ebitda":    info.get("enterpriseToEbitda",   "N/A"),
-                "free_cash_flow":  info.get("freeCashflow",         "N/A"),
-                "revenue_growth":  info.get("revenueGrowth",        "N/A"),
-                "total_debt":      info.get("totalDebt",            "N/A"),
+                "beta": info.get("beta", "N/A"),
+                "forward_pe": info.get("forwardPE", "N/A"),
+                "peg_ratio": info.get("pegRatio", "N/A"),
+                "price_to_book": info.get("priceToBook", "N/A"),
+                "ev_to_ebitda": info.get("enterpriseToEbitda", "N/A"),
+                "free_cash_flow": info.get("freeCashflow", "N/A"),
+                "revenue_growth": info.get("revenueGrowth", "N/A"),
+                "total_debt": info.get("totalDebt", "N/A"),
             }
             logger.info(
                 f"[YFINANCE] ✓ fetch_info — {ticker}: "
@@ -1081,7 +1088,7 @@ class YFinanceService:
             return {}
 
     @newrelic.agent.function_trace()
-    def fetch_earnings_dates(self, symbol: str) -> List[str]:
+    def fetch_earnings_dates(self, symbol: str) -> list[str]:
         """
         Returns upcoming (and recent) earnings dates as 'MM/DD' strings,
         matching the chart date format used by PriceChartCard.
@@ -1104,8 +1111,9 @@ class YFinanceService:
                     if hasattr(d, "strftime"):
                         result.append(d.strftime("%m/%d"))
                     else:
-                        from datetime import datetime
-                        result.append(datetime.strptime(str(d)[:10], "%Y-%m-%d").strftime("%m/%d"))
+                        from datetime import date
+
+                        result.append(date.fromisoformat(str(d)[:10]).strftime("%m/%d"))
                 except Exception as _exc:
                     logger.debug("[YFINANCE] earnings date parse error for %r: %s", d, _exc)
                     continue
@@ -1117,7 +1125,7 @@ class YFinanceService:
             return []
 
     @newrelic.agent.function_trace()
-    def fetch_earnings_surprise(self, symbol: str) -> List[dict]:
+    def fetch_earnings_surprise(self, symbol: str) -> list[dict]:
         """
         Last 4 quarters of earnings surprise from yfinance (free, no API key).
 
@@ -1138,12 +1146,11 @@ class YFinanceService:
             est_col = cols.get("epsestimate")
             act_col = cols.get("epsactual")
             sur_col = cols.get("surprisepercent")
-            result: List[dict] = []
+            result: list[dict] = []
             for idx, row in hist.tail(4).iloc[::-1].iterrows():
                 try:
                     quarter = (
-                        idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime")
-                        else str(idx)[:10]
+                        idx.strftime("%Y-%m-%d") if hasattr(idx, "strftime") else str(idx)[:10]
                     )
                     est = float(row[est_col]) if est_col and pd.notna(row[est_col]) else None
                     act = float(row[act_col]) if act_col and pd.notna(row[act_col]) else None
@@ -1153,12 +1160,14 @@ class YFinanceService:
                         surprise = (act - est) / abs(est) * 100
                     else:
                         surprise = None
-                    result.append({
-                        "quarter":      quarter,
-                        "estimate":     round(est, 4) if est is not None else None,
-                        "actual":       round(act, 4) if act is not None else None,
-                        "surprise_pct": round(surprise, 2) if surprise is not None else None,
-                    })
+                    result.append(
+                        {
+                            "quarter": quarter,
+                            "estimate": round(est, 4) if est is not None else None,
+                            "actual": round(act, 4) if act is not None else None,
+                            "surprise_pct": round(surprise, 2) if surprise is not None else None,
+                        }
+                    )
                 except Exception as _exc:
                     logger.debug("[YFINANCE] earnings surprise row parse error: %s", _exc)
                     continue
@@ -1169,7 +1178,7 @@ class YFinanceService:
             return []
 
     @newrelic.agent.function_trace()
-    def fetch_news(self, symbol: str) -> List[dict]:
+    def fetch_news(self, symbol: str) -> list[dict]:
         """
         Fetch recent news headlines from yfinance (free, no API key).
         Returns list of dicts with title, source, source_label.
@@ -1187,9 +1196,7 @@ class YFinanceService:
             for item in raw[:12]:
                 # yfinance 1.x uses a nested 'content' dict; older versions use a flat dict.
                 content = item.get("content") if isinstance(item.get("content"), dict) else item
-                title = (
-                    content.get("title") or item.get("title") or ""
-                ).strip()
+                title = (content.get("title") or item.get("title") or "").strip()
                 if not title:
                     continue
                 source = (
@@ -1197,19 +1204,17 @@ class YFinanceService:
                     or item.get("publisher")
                     or "yfinance"
                 )
-                link = (
-                    (content.get("clickThroughUrl") or {}).get("url")
-                    or item.get("link")
-                    or ""
+                link = (content.get("clickThroughUrl") or {}).get("url") or item.get("link") or ""
+                result.append(
+                    {
+                        "title": title,
+                        "link": link,
+                        "source": source,
+                        "thumbnail": "",
+                        "date": "",
+                        "source_label": "yfinance",
+                    }
                 )
-                result.append({
-                    "title":        title,
-                    "link":         link,
-                    "source":       source,
-                    "thumbnail":    "",
-                    "date":         "",
-                    "source_label": "yfinance",
-                })
             logger.info(f"[YFINANCE] ✓ fetch_news — {ticker}: {len(result)} articles")
             return result
         except Exception as e:
@@ -1227,7 +1232,7 @@ class YFinanceService:
         logger.debug(f"[YFINANCE] get_live_price — ticker={ticker}")
 
         try:
-            t     = yf.Ticker(ticker)
+            t = yf.Ticker(ticker)
             price = (
                 t.info.get("currentPrice")
                 or t.info.get("regularMarketPrice")
@@ -1253,6 +1258,7 @@ class YFinanceService:
 # Data Cleaner  —  gap-fill, outlier removal, normalise
 # ---------------------------------------------------------------------------
 
+
 class DataCleaner:
     """
     Cleans a raw OHLCV DataFrame before it goes to InfluxDB or the models.
@@ -1276,7 +1282,7 @@ class DataCleaner:
         # 1. Drop rows where Close is zero or NaN
         df = df[df["Close"].notna() & (df["Close"] > 0)]
         after_nan_drop = len(df)
-        nan_removed    = input_rows - after_nan_drop
+        nan_removed = input_rows - after_nan_drop
         if nan_removed:
             logger.debug(f"[CLEANER] NaN/zero Close rows removed: {nan_removed}")
         else:
@@ -1296,16 +1302,12 @@ class DataCleaner:
         upper = rolling_med + 4 * rolling_std
         lower = rolling_med - 4 * rolling_std
         band_unknown = upper.isna() | lower.isna()
-        mask  = band_unknown | ((df["Close"] >= lower) & (df["Close"] <= upper))
+        mask = band_unknown | ((df["Close"] >= lower) & (df["Close"] <= upper))
         removed = int((~mask).sum())
         if removed:
-            logger.debug(
-                f"[CLEANER] Outlier rows removed (>4σ from 30d rolling median): {removed}"
-            )
+            logger.debug(f"[CLEANER] Outlier rows removed (>4σ from 30d rolling median): {removed}")
         else:
-            logger.debug(
-                "[CLEANER] Outlier check — 0 rows removed (all within 4σ rolling bands)"
-            )
+            logger.debug("[CLEANER] Outlier check — 0 rows removed (all within 4σ rolling bands)")
         df = df[mask]
         after_outlier = len(df)
 
@@ -1322,9 +1324,7 @@ class DataCleaner:
         #    Downstream (main.py) replaces zero-volume rows with a rolling
         #    mean so the synthetic markers don't contaminate normalisation.
         try:
-            full_idx = pd.bdate_range(
-                start=df.index.min(), end=df.index.max(), freq="B"
-            )
+            full_idx = pd.bdate_range(start=df.index.min(), end=df.index.max(), freq="B")
             full_idx = full_idx.tz_localize("UTC") if full_idx.tz is None else full_idx
 
             price_cols = [c for c in ("Open", "High", "Low", "Close") if c in df.columns]
@@ -1338,7 +1338,7 @@ class DataCleaner:
                 df["Volume"] = df["Volume"].fillna(0.0)
 
             after_ffill = len(df)
-            synthetic   = after_ffill - after_outlier
+            synthetic = after_ffill - after_outlier
             logger.debug(
                 f"[CLEANER] Gap-fill (bdate_range ffill) — "
                 f"rows before={after_outlier}, after={after_ffill} "
@@ -1357,7 +1357,7 @@ class DataCleaner:
         # 4. Ensure High >= Close >= Low (yfinance adjusted data can drift)
         if "High" in df.columns and "Low" in df.columns:
             df["High"] = df[["High", "Close"]].max(axis=1)
-            df["Low"]  = df[["Low",  "Close"]].min(axis=1)
+            df["Low"] = df[["Low", "Close"]].min(axis=1)
             logger.debug("[CLEANER] OHLC integrity enforced — High≥Close≥Low corrected")
 
         logger.info(
@@ -1376,14 +1376,16 @@ class DataCleaner:
         logger.debug(f"[CLEANER] to_history_list() — converting {len(df)} rows to dicts")
         out = []
         for ts, row in df.iterrows():
-            out.append({
-                "_time":  ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts,
-                "open":   float(row.get("Open",   row.get("Close", 0))),
-                "high":   float(row.get("High",   row.get("Close", 0))),
-                "low":    float(row.get("Low",    row.get("Close", 0))),
-                "close":  float(row.get("Close",  0)),
-                "volume": float(row.get("Volume", 0)),
-            })
+            out.append(
+                {
+                    "_time": ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts,
+                    "open": float(row.get("Open", row.get("Close", 0))),
+                    "high": float(row.get("High", row.get("Close", 0))),
+                    "low": float(row.get("Low", row.get("Close", 0))),
+                    "close": float(row.get("Close", 0)),
+                    "volume": float(row.get("Volume", 0)),
+                }
+            )
 
         if out:
             logger.info(
@@ -1399,6 +1401,7 @@ class DataCleaner:
 # SerpAPI Service  —  live news & trending tickers
 # ---------------------------------------------------------------------------
 
+
 class SerpService:
     @staticmethod
     def clean_price(price_str):
@@ -1413,15 +1416,15 @@ class SerpService:
             return 0.0
 
     @staticmethod
-    def _parse_trending(data: dict) -> List[dict]:
+    def _parse_trending(data: dict) -> list[dict]:
         """Build a trending-ticker list from the google_finance `discover_more`
         block (related/most-active tickers). Each item carries symbol, price and
         a signed change string the frontend sparklines understand."""
-        trending: List[dict] = []
+        trending: list[dict] = []
         seen: set = set()
         for block in data.get("discover_more", []) or []:
-            for it in (block.get("items", []) if isinstance(block, dict) else []):
-                stock = str(it.get("stock", ""))          # e.g. "TSLA:NASDAQ"
+            for it in block.get("items", []) if isinstance(block, dict) else []:
+                stock = str(it.get("stock", ""))  # e.g. "TSLA:NASDAQ"
                 sym = stock.split(":")[0].strip().upper()
                 if not sym or sym in seen:
                     continue
@@ -1429,11 +1432,13 @@ class SerpService:
                 pct = mv.get("percentage")
                 up = str(mv.get("movement", "")).lower() == "up"
                 change = (f"{'+' if up else '-'}{pct}%") if pct is not None else ""
-                trending.append({
-                    "symbol": sym,
-                    "price":  it.get("price", ""),
-                    "change": change,
-                })
+                trending.append(
+                    {
+                        "symbol": sym,
+                        "price": it.get("price", ""),
+                        "change": change,
+                    }
+                )
                 seen.add(sym)
         return trending
 
@@ -1460,12 +1465,10 @@ class SerpService:
         # otherwise append the resolved exchange (default NASDAQ).
         gq = query if ":" in query else f"{query.upper()}:{(exchange or 'NASDAQ').upper()}"
 
-        logger.debug(
-            f"[SERP] fetch_data — query='{gq}', engine=google_finance, timeout=25s"
-        )
+        logger.debug(f"[SERP] fetch_data — query='{gq}', engine=google_finance, timeout=25s")
         params = {
-            "engine":  "google_finance",
-            "q":       gq,
+            "engine": "google_finance",
+            "q": gq,
             "api_key": Config.SERP_API_KEY,
         }
         try:
@@ -1475,11 +1478,13 @@ class SerpService:
                 data = resp.json()
 
             if data.get("error"):
-                logger.warning(f"[SERP] google_finance returned no results for '{gq}': {data['error']}")
+                logger.warning(
+                    f"[SERP] google_finance returned no results for '{gq}': {data['error']}"
+                )
                 return {"news_results": [], "markets": {}, "trending": []}
 
-            trending      = self._parse_trending(data)
-            news_count    = len(data.get("news_results", []))
+            trending = self._parse_trending(data)
+            news_count = len(data.get("news_results", []))
             logger.info(
                 f"[SERP] ✓ fetch_data — query='{gq}' | "
                 f"news_articles={news_count} | "
@@ -1487,12 +1492,14 @@ class SerpService:
             )
             return {
                 "news_results": data.get("news_results", []),
-                "markets":      data.get("markets",      {}),
-                "trending":     trending,
+                "markets": data.get("markets", {}),
+                "trending": trending,
             }
 
         except Exception as e:
-            logger.warning(f"[SERP] fetch_data failed ('{gq}'): {e} → fallback: 0 articles, empty trending")
+            logger.warning(
+                f"[SERP] fetch_data failed ('{gq}'): {e} → fallback: 0 articles, empty trending"
+            )
             return {"news_results": [], "markets": {}, "trending": []}
 
 
@@ -1500,25 +1507,27 @@ class SerpService:
 # Finnhub Service  —  company news via Finnhub REST API
 # ---------------------------------------------------------------------------
 
+
 class FinnhubService:
     """
     Fetches company news from Finnhub (last 7 days).
     Requires FINNHUB_API_KEY; gracefully skips if not set.
     """
+
     _BASE_URL = "https://finnhub.io/api/v1/company-news"
 
-    async def fetch_company_news(self, symbol: str) -> List[dict]:
+    async def fetch_company_news(self, symbol: str) -> list[dict]:
         if not Config.FINNHUB_API_KEY:
             logger.info("[FINNHUB] API key not set — company news fetch SKIPPED")
             return []
         sym = symbol.split(":")[0].upper()
-        to_date   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        to_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         from_date = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
         params = {
             "symbol": sym,
-            "from":   from_date,
-            "to":     to_date,
-            "token":  Config.FINNHUB_API_KEY,
+            "from": from_date,
+            "to": to_date,
+            "token": Config.FINNHUB_API_KEY,
         }
         logger.debug(f"[FINNHUB] fetch_company_news — symbol={sym}, from={from_date}, to={to_date}")
         try:
@@ -1531,14 +1540,16 @@ class FinnhubService:
                 headline = a.get("headline", "").strip()
                 if not headline:
                     continue
-                result.append({
-                    "title":        headline,
-                    "link":         a.get("url", ""),
-                    "source":       a.get("source", "Finnhub"),
-                    "thumbnail":    a.get("image", ""),
-                    "date":         "",
-                    "source_label": "Finnhub",
-                })
+                result.append(
+                    {
+                        "title": headline,
+                        "link": a.get("url", ""),
+                        "source": a.get("source", "Finnhub"),
+                        "thumbnail": a.get("image", ""),
+                        "date": "",
+                        "source_label": "Finnhub",
+                    }
+                )
             logger.info(f"[FINNHUB] ✓ fetch_company_news — {sym}: {len(result)} articles")
             return result
         except Exception as e:
@@ -1549,6 +1560,7 @@ class FinnhubService:
 # ---------------------------------------------------------------------------
 # StockTwits Service  —  social sentiment from StockTwits feed
 # ---------------------------------------------------------------------------
+
 
 class StockTwitsService:
     """
@@ -1561,6 +1573,7 @@ class StockTwitsService:
     `Config.STOCKTWITS_ENABLED` (off by default). The parsing logic below is
     kept intact for when an authed/working source is wired up.
     """
+
     _BASE_URL = "https://api.stocktwits.com/api/2/streams/symbol/{symbol}.json"
 
     async def fetch_sentiment(self, symbol: str) -> dict:
@@ -1575,11 +1588,13 @@ class StockTwitsService:
                 data = resp.json()
             messages = data.get("messages", [])
             bullish = sum(
-                1 for m in messages
+                1
+                for m in messages
                 if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bullish"
             )
             bearish = sum(
-                1 for m in messages
+                1
+                for m in messages
                 if m.get("entities", {}).get("sentiment", {}).get("basic") == "Bearish"
             )
             total = bullish + bearish
@@ -1598,15 +1613,17 @@ class StockTwitsService:
 # Yahoo Finance RSS Service  —  free headline feed, no API key required
 # ---------------------------------------------------------------------------
 
+
 class YahooRSSService:
     """
     Fetches stock news from Yahoo Finance's public RSS feed.
     No API key needed — works anywhere Yahoo Finance is reachable.
     Falls back gracefully (logs + returns []) on any network error.
     """
+
     _BASE_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline"
 
-    async def fetch_news(self, symbol: str) -> List[dict]:
+    async def fetch_news(self, symbol: str) -> list[dict]:
         sym = symbol.split(":")[0].upper()
         params = {"s": sym, "region": "US", "lang": "en-US"}
         logger.debug(f"[YAHOORSE] fetch_news — symbol={sym}")
@@ -1628,14 +1645,16 @@ class YahooRSSService:
                 title = (item.findtext("title") or "").strip()
                 if not title:
                     continue
-                result.append({
-                    "title":        title,
-                    "link":         item.findtext("link") or "",
-                    "source":       "Yahoo Finance",
-                    "thumbnail":    "",
-                    "date":         item.findtext("pubDate") or "",
-                    "source_label": "Yahoo RSS",
-                })
+                result.append(
+                    {
+                        "title": title,
+                        "link": item.findtext("link") or "",
+                        "source": "Yahoo Finance",
+                        "thumbnail": "",
+                        "date": item.findtext("pubDate") or "",
+                        "source_label": "Yahoo RSS",
+                    }
+                )
             logger.info(f"[YAHOORSE] ✓ fetch_news — {sym}: {len(result)} articles")
             return result
         except Exception as e:
@@ -1653,7 +1672,7 @@ class YahooRSSService:
 # ---------------------------------------------------------------------------
 
 
-def _parse_fred_csv(text: str, last_n: int = 31) -> List[tuple]:
+def _parse_fred_csv(text: str, last_n: int = 31) -> list[tuple]:
     """Parse a FRED ``fredgraph.csv`` body into the last ``last_n`` (date, value)
     pairs, skipping the header and the ``.`` missing-value markers.
 
@@ -1661,7 +1680,7 @@ def _parse_fred_csv(text: str, last_n: int = 31) -> List[tuple]:
     (newer); either way the first column is the date and the second the value.
     Returns oldest→newest. Empty list on any malformed input.
     """
-    rows: List[tuple] = []
+    rows: list[tuple] = []
     for line in text.strip().splitlines()[1:]:  # skip header
         parts = line.split(",")
         if len(parts) < 2:
@@ -1690,17 +1709,17 @@ class FREDService:
 
     _CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
     # series id → snapshot key (lower-cased, stable for the frontend)
-    _SERIES = {
-        "DGS10":    "dgs10",     # 10-Year Treasury constant-maturity yield
+    _SERIES: ClassVar[dict[str, str]] = {
+        "DGS10": "dgs10",  # 10-Year Treasury constant-maturity yield
         "CPIAUCSL": "cpiaucsl",  # CPI, all urban consumers
-        "UNRATE":   "unrate",    # Unemployment rate
+        "UNRATE": "unrate",  # Unemployment rate
         "FEDFUNDS": "fedfunds",  # Effective federal funds rate
-        "T10Y2Y":   "t10y2y",    # 10Y minus 2Y spread (negative = inverted)
+        "T10Y2Y": "t10y2y",  # 10Y minus 2Y spread (negative = inverted)
     }
     _CACHE_KEY = "fred:snapshot"
     _CACHE_TTL = 3600  # 1h
 
-    async def _fetch_series(self, client: "httpx.AsyncClient", series_id: str) -> List[tuple]:
+    async def _fetch_series(self, client: "httpx.AsyncClient", series_id: str) -> list[tuple]:
         """Fetch one series' last 31 (date, value) points. [] on any failure.
 
         A ``cosd`` start-date window is sent so daily series (DGS10/T10Y2Y, whose
@@ -1714,7 +1733,7 @@ class FREDService:
         # Under the 5-way concurrent burst FRED occasionally drops one keep-alive
         # connection (a bare RemoteProtocolError), usually on a daily series.
         # One retry — by then the other requests have drained — recovers it.
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for attempt in (1, 2):
             try:
                 resp = await asyncio.wait_for(
@@ -1726,9 +1745,7 @@ class FREDService:
                 last_exc = exc
                 if attempt == 1:
                     await asyncio.sleep(0.25)
-        logger.warning(
-            "[FRED] series %s fetch failed after retry: %r", series_id, last_exc
-        )
+        logger.warning("[FRED] series %s fetch failed after retry: %r", series_id, last_exc)
         return []
 
     async def get_macro_snapshot(self) -> dict:
@@ -1759,7 +1776,7 @@ class FREDService:
             return {}
 
         snapshot: dict = {}
-        t10y2y_trend: List[dict] = []
+        t10y2y_trend: list[dict] = []
         for sid, points in zip(series_ids, results):
             key = self._SERIES[sid]
             if not points:
@@ -1783,7 +1800,8 @@ class FREDService:
         await cache_set(self._CACHE_KEY, snapshot, ttl_seconds=self._CACHE_TTL)
         logger.info(
             "[FRED] ✓ macro snapshot — %d series, inverted=%s",
-            len(snapshot) - 3, snapshot["inverted"],
+            len(snapshot) - 3,
+            snapshot["inverted"],
         )
         return snapshot
 
@@ -1820,7 +1838,7 @@ class InsiderService:
     """
 
     _SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
-    _HEADERS = {"User-Agent": "FiForesight research@fiforesight.dev"}
+    _HEADERS: ClassVar[dict[str, str]] = {"User-Agent": "FiForesight research@fiforesight.dev"}
     _CACHE_TTL = 21600  # 6h
 
     @staticmethod
@@ -1850,13 +1868,15 @@ class InsiderService:
         """Canonical human-readable filing-index page on sec.gov."""
         acc_nodash = (accession or "").replace("-", "")
         if cik and acc_nodash and accession:
-            return f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_nodash}/{accession}-index.htm"
+            return (
+                f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_nodash}/{accession}-index.htm"
+            )
         if cik:
             return f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={cik}&type=4"
         return "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&type=4"
 
     @staticmethod
-    def _to_float(v: Any) -> Optional[float]:
+    def _to_float(v: Any) -> float | None:
         try:
             f = float(v)
             return None if math.isnan(f) else f  # filter NaN
@@ -1905,7 +1925,9 @@ class InsiderService:
             for t in root.findall(tag):
                 code = t.findtext(".//transactionCoding/transactionCode")
                 shares = cls._to_float(t.findtext(".//transactionAmounts/transactionShares/value"))
-                price = cls._to_float(t.findtext(".//transactionAmounts/transactionPricePerShare/value"))
+                price = cls._to_float(
+                    t.findtext(".//transactionAmounts/transactionPricePerShare/value")
+                )
                 if shares is None:
                     continue
                 if best is None or abs(shares) > best[0]:
@@ -1917,7 +1939,7 @@ class InsiderService:
             out["price"] = round(price, 2) if price is not None else None
         return out
 
-    def _base_row(self, hit: dict) -> Optional[dict]:
+    def _base_row(self, hit: dict) -> dict | None:
         """Metadata-only row from an FTS hit (the guaranteed fallback).
 
         Carries private ``_accession``/``_filename``/``_cik`` keys consumed by the
@@ -1929,15 +1951,15 @@ class InsiderService:
         cik = self._issuer_cik(accession)
         filer = self._owner_from_names(src.get("display_names"), src.get("ciks"), cik)
         return {
-            "filer":    filer or "Unknown",
-            "type":     "Filing",
-            "shares":   None,
-            "price":    None,
-            "date":     str(src.get("file_date") or src.get("date") or "")[:10],
+            "filer": filer or "Unknown",
+            "type": "Filing",
+            "shares": None,
+            "price": None,
+            "date": str(src.get("file_date") or src.get("date") or "")[:10],
             "sec_link": self._sec_link(accession, cik),
             "_accession": accession,
-            "_filename":  filename,
-            "_cik":       cik,
+            "_filename": filename,
+            "_cik": cik,
         }
 
     _ARCHIVE_BASE = "https://www.sec.gov/Archives/edgar/data"
@@ -1946,7 +1968,7 @@ class InsiderService:
     # metadata-only rows rather than dropping the whole card.
     _ENRICH_BUDGET = 7.0
 
-    async def _enrich_rows(self, client: "httpx.AsyncClient", rows: List[dict]) -> None:
+    async def _enrich_rows(self, client: "httpx.AsyncClient", rows: list[dict]) -> None:
         """Fetch + parse each row's Form 4 XML to fill in type/shares/price/filer.
 
         Concurrent (semaphore-bounded) with a per-fetch timeout and an overall
@@ -1983,10 +2005,11 @@ class InsiderService:
                 asyncio.gather(*(_one(r) for r in rows)), timeout=self._ENRICH_BUDGET
             )
         except asyncio.TimeoutError:
-            logger.warning("[INSIDER] XML enrichment exceeded %.0fs — returning partial",
-                           self._ENRICH_BUDGET)
+            logger.warning(
+                "[INSIDER] XML enrichment exceeded %.0fs — returning partial", self._ENRICH_BUDGET
+            )
 
-    async def get_insider_transactions(self, symbol: str) -> List[dict]:
+    async def get_insider_transactions(self, symbol: str) -> list[dict]:
         from redis_cache import cache_get, cache_set
 
         sym = symbol.split(":")[0].upper()
@@ -2012,7 +2035,7 @@ class InsiderService:
                 resp.raise_for_status()
                 raw = resp.json()
                 hits = ((raw or {}).get("hits", {}) or {}).get("hits", []) or []
-                rows: List[dict] = []
+                rows: list[dict] = []
                 for hit in hits[:10]:
                     try:
                         base = self._base_row(hit)
@@ -2032,8 +2055,9 @@ class InsiderService:
                     row.pop(k, None)
 
             enriched = sum(1 for r in rows if r["shares"] is not None)
-            logger.info("[INSIDER] ✓ %s — %d Form 4 filings (%d with txn detail)",
-                        sym, len(rows), enriched)
+            logger.info(
+                "[INSIDER] ✓ %s — %d Form 4 filings (%d with txn detail)", sym, len(rows), enriched
+            )
             # Cache real results 6h; an empty list briefly (1h) so a transient
             # failure self-heals rather than sticking for the full window.
             await cache_set(cache_key, rows, ttl_seconds=self._CACHE_TTL if rows else 3600)
@@ -2072,7 +2096,7 @@ class ShortInterestService:
         async with httpx.AsyncClient(
             timeout=15.0, headers={"User-Agent": "FiForesight/1.0"}
         ) as client:
-            for back in range(0, 8):
+            for back in range(8):
                 d = today - timedelta(days=back)
                 date_str = d.strftime("%Y%m%d")
                 cache_key = f"finra:short:{date_str}"
@@ -2089,7 +2113,8 @@ class ShortInterestService:
                         await cache_set(cache_key, parsed, ttl_seconds=self._CACHE_TTL)
                         logger.info(
                             "[SHORT] ✓ FINRA file %s — %d symbols",
-                            date_str, len(parsed["symbols"]),
+                            date_str,
+                            len(parsed["symbols"]),
                         )
                         return parsed
                 except Exception as exc:
@@ -2124,7 +2149,7 @@ class ShortInterestService:
         )
         return {"report_date": report_date, "symbols": symbols}
 
-    def _avg_daily_volume(self, symbol: str) -> Optional[float]:
+    def _avg_daily_volume(self, symbol: str) -> float | None:
         """Average daily volume from yfinance (for days-to-cover). None on failure."""
         if not YFINANCE_AVAILABLE:
             return None
@@ -2136,7 +2161,7 @@ class ShortInterestService:
             logger.debug("[SHORT] avg volume fetch failed for %s: %s", symbol, exc)
             return None
 
-    async def get_short_interest(self, symbol: str) -> Optional[dict]:
+    async def get_short_interest(self, symbol: str) -> dict | None:
         """Return short-interest metrics for ``symbol`` or ``None`` if absent.
 
         The computed result (incl. the yfinance-backed days-to-cover) is cached
@@ -2165,15 +2190,13 @@ class ShortInterestService:
         avg_vol = await asyncio.wait_for(
             asyncio.to_thread(self._avg_daily_volume, sym), timeout=12.0
         )
-        days_to_cover = (
-            round(short_vol / avg_vol, 2) if avg_vol and avg_vol > 0 else None
-        )
+        days_to_cover = round(short_vol / avg_vol, 2) if avg_vol and avg_vol > 0 else None
         result = {
-            "short_volume":  int(short_vol),
-            "total_volume":  int(total_vol),
-            "short_ratio":   short_ratio,
+            "short_volume": int(short_vol),
+            "total_volume": int(total_vol),
+            "short_ratio": short_ratio,
             "days_to_cover": days_to_cover,
-            "report_date":   data.get("report_date", ""),
+            "report_date": data.get("report_date", ""),
         }
         await cache_set(cache_key, result, ttl_seconds=self._CACHE_TTL)
         return result
@@ -2185,11 +2208,11 @@ class ShortInterestService:
 
 # Stable regime labels, lowest → highest mean log-return.
 REGIME_TRENDING_DOWN = "trending_down"
-REGIME_RANGING       = "ranging"
-REGIME_TRENDING_UP   = "trending_up"
-REGIME_UNKNOWN       = "unknown"
+REGIME_RANGING = "ranging"
+REGIME_TRENDING_UP = "trending_up"
+REGIME_UNKNOWN = "unknown"
 
-_REGIME_UNKNOWN_RESULT: Dict[str, Any] = {"regime": REGIME_UNKNOWN, "confidence": 0.0}
+_REGIME_UNKNOWN_RESULT: dict[str, Any] = {"regime": REGIME_UNKNOWN, "confidence": 0.0}
 
 
 class RegimeService:
@@ -2217,12 +2240,12 @@ class RegimeService:
     under ``regime:{symbol}:{date}``.
     """
 
-    _MIN_BARS  = 30
-    _WINDOW    = 60
-    _VOL_SPAN  = 5
+    _MIN_BARS = 30
+    _WINDOW = 60
+    _VOL_SPAN = 5
     _CACHE_TTL = 4 * 3600  # 4h
 
-    async def get_regime(self, symbol: str, closes: List[float]) -> dict:
+    async def get_regime(self, symbol: str, closes: list[float]) -> dict:
         """Detect the current regime for ``symbol`` from its close series.
 
         Redis-cached 4h per symbol per UTC date. Never raises — returns the
@@ -2257,12 +2280,13 @@ class RegimeService:
                 logger.warning("[REGIME] cache_set failed for %s: %s", symbol, exc)
         return result
 
-    def _detect(self, closes: List[float]) -> dict:
+    def _detect(self, closes: list[float]) -> dict:
         """Synchronous HMM fit + state assignment. Pure CPU; runs in a thread."""
         if len(closes) < self._MIN_BARS:
             logger.info(
                 "[REGIME] only %d bars (<%d) — regime unknown",
-                len(closes), self._MIN_BARS,
+                len(closes),
+                self._MIN_BARS,
             )
             return dict(_REGIME_UNKNOWN_RESULT)
 
@@ -2271,7 +2295,7 @@ class RegimeService:
             from hmmlearn.hmm import GaussianHMM
             from sklearn.preprocessing import StandardScaler
 
-            arr = np.asarray(closes[-self._WINDOW:], dtype=float)
+            arr = np.asarray(closes[-self._WINDOW :], dtype=float)
             if np.any(arr <= 0):
                 logger.warning("[REGIME] non-positive prices in window — regime unknown")
                 return dict(_REGIME_UNKNOWN_RESULT)
@@ -2298,8 +2322,10 @@ class RegimeService:
             scaled = StandardScaler().fit_transform(features)
 
             model = GaussianHMM(
-                n_components=3, covariance_type="full",
-                n_iter=100, random_state=42,
+                n_components=3,
+                covariance_type="full",
+                n_iter=100,
+                random_state=42,
             )
             model.fit(scaled)
             states = model.predict(scaled)
@@ -2320,7 +2346,7 @@ class RegimeService:
             confidence = round(float(proba[-1].max()), 4)
 
             # Raw mean log return per labelled state (for the API / debugging).
-            state_means: Dict[str, float] = {}
+            state_means: dict[str, float] = {}
             for st, label in label_by_state.items():
                 mask = states == st
                 state_means[label] = (
@@ -2337,7 +2363,10 @@ class RegimeService:
 
             logger.info(
                 "[REGIME] ✓ %s (conf=%.2f, %d bars in state) — state_means=%s",
-                regime, confidence, bars_in_current_regime, state_means,
+                regime,
+                confidence,
+                bars_in_current_regime,
+                state_means,
             )
             return {
                 "regime": regime,
@@ -2356,6 +2385,7 @@ class RegimeService:
 
 try:
     from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer as _VADER
+
     _VADER_AVAILABLE = True
 except ImportError:
     _VADER = None  # type: ignore
@@ -2385,7 +2415,7 @@ class SentimentService:
         else:
             logger.warning("[SENTIMENT] VADER unavailable — sentiment scoring disabled")
 
-    def score_headlines(self, headlines: List[str]) -> dict:
+    def score_headlines(self, headlines: list[str]) -> dict:
         empty = {"compound": 0.0, "label": "Neutral", "scores": [], "headline_count": 0}
         if not self._analyzer or not headlines:
             return empty
@@ -2399,14 +2429,11 @@ class SentimentService:
         avg = sum(compounds) / len(compounds)
         label = "Bullish" if avg >= 0.05 else "Bearish" if avg <= -0.05 else "Neutral"
 
-        logger.info(
-            f"[SENTIMENT] ✓ scored {len(scores)} headlines — "
-            f"compound={avg:.4f} ({label})"
-        )
+        logger.info(f"[SENTIMENT] ✓ scored {len(scores)} headlines — compound={avg:.4f} ({label})")
         return {
-            "compound":       round(avg, 4),
-            "label":          label,
-            "scores":         scores,
+            "compound": round(avg, 4),
+            "label": label,
+            "scores": scores,
             "headline_count": len(scores),
         }
 
@@ -2429,13 +2456,13 @@ class SentimentService:
 
 ANALYST_PERSONAS = [
     {
-        "id":           "LLAMA-4-SCOUT",
-        "avatar":       "L4",
-        "title":        "Macro & Risk Lens",
-        "model_label":  "Groq · Llama 4 Scout",
-        "provider":     "groq",
-        "api_model":    "meta-llama/llama-4-scout-17b-16e-instruct",
-        "color":        "#94a3b8",
+        "id": "LLAMA-4-SCOUT",
+        "avatar": "L4",
+        "title": "Macro & Risk Lens",
+        "model_label": "Groq · Llama 4 Scout",
+        "provider": "groq",
+        "api_model": "meta-llama/llama-4-scout-17b-16e-instruct",
+        "color": "#94a3b8",
         # Persona-specific fallback so users can tell WHICH analyst failed
         # and what type of analysis is missing (not all three looking identical).
         "fallback_note": (
@@ -2465,13 +2492,13 @@ ANALYST_PERSONAS = [
         ),
     },
     {
-        "id":           "LLAMA-70B",
-        "avatar":       "70B",
-        "title":        "Growth Lens",
-        "model_label":  "Groq · llama-3.3-70b",
-        "provider":     "groq",
-        "api_model":    "llama-3.3-70b-versatile",
-        "color":        "#00f2ff",
+        "id": "LLAMA-70B",
+        "avatar": "70B",
+        "title": "Growth Lens",
+        "model_label": "Groq · llama-3.3-70b",
+        "provider": "groq",
+        "api_model": "llama-3.3-70b-versatile",
+        "color": "#00f2ff",
         "fallback_note": (
             "Growth analysis unavailable this run — "
             "momentum catalysts, earnings trajectory, and upside price targets "
@@ -2497,15 +2524,15 @@ ANALYST_PERSONAS = [
         ),
     },
     {
-        "id":           "LLAMA-8B",
-        "avatar":       "8B",
-        "title":        "Quant Lens",
-        "model_label":  "Groq · Llama 3.1 8B",
-        "provider":     "groq",
-        "api_model":    "llama-3.1-8b-instant",
+        "id": "LLAMA-8B",
+        "avatar": "8B",
+        "title": "Quant Lens",
+        "model_label": "Groq · Llama 3.1 8B",
+        "provider": "groq",
+        "api_model": "llama-3.1-8b-instant",
         # Standard 320 max_tokens — llama-3.1-8b-instant is not a reasoning model so
         # no extra token budget is needed; output is direct JSON, no hidden reasoning.
-        "color":        "#10b981",
+        "color": "#10b981",
         "fallback_note": (
             "Quantitative signal analysis unavailable this run — "
             "RSI regime, MACD crossover, Bollinger Band position, and statistical signals "
@@ -2593,15 +2620,15 @@ class AnalystJuryService:
 
         headers = {
             "Authorization": f"Bearer {api_key}",
-            "Content-Type":  "application/json",
+            "Content-Type": "application/json",
         }
         body = {
-            "model":       model,
+            "model": model,
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user",   "content": user},
+                {"role": "user", "content": user},
             ],
-            "max_tokens":  max_tokens,
+            "max_tokens": max_tokens,
             "temperature": 0.65,
         }
         async with httpx.AsyncClient(timeout=35.0) as client:
@@ -2620,18 +2647,12 @@ class AnalystJuryService:
     # Internal: provider-specific wrapper
     # ------------------------------------------------------------------
 
-    async def call_groq(
-        self, model: str, system: str, user: str, max_tokens: int = 320
-    ) -> str:
+    async def call_groq(self, model: str, system: str, user: str, max_tokens: int = 320) -> str:
         """Public entry point for a single Groq chat completion."""
         return await self._call_groq(model, system, user, max_tokens)
 
-    async def _call_groq(
-        self, model: str, system: str, user: str, max_tokens: int = 320
-    ) -> str:
-        logger.debug(
-            f"[GROQ] _call_groq — model={model}, max_tokens={max_tokens}"
-        )
+    async def _call_groq(self, model: str, system: str, user: str, max_tokens: int = 320) -> str:
+        logger.debug(f"[GROQ] _call_groq — model={model}, max_tokens={max_tokens}")
         result = await self._call_openai_compatible(
             base_url=self.GROQ_BASE_URL,
             api_key=Config.GROQ_API_KEY,
@@ -2641,10 +2662,7 @@ class AnalystJuryService:
             provider_label="GROQ",
             max_tokens=max_tokens,
         )
-        logger.debug(
-            f"[GROQ] ✓ _call_groq complete — model={model}, "
-            f"response_chars={len(result)}"
-        )
+        logger.debug(f"[GROQ] ✓ _call_groq complete — model={model}, response_chars={len(result)}")
         return result
 
     # ------------------------------------------------------------------
@@ -2662,7 +2680,7 @@ class AnalystJuryService:
             raise ValueError("GROQ API key not configured")
         headers = {
             "Authorization": f"Bearer {Config.GROQ_API_KEY}",
-            "Content-Type":  "application/json",
+            "Content-Type": "application/json",
         }
         async with httpx.AsyncClient(timeout=35.0) as client:
             resp = await client.post(self.GROQ_BASE_URL, json=body, headers=headers)
@@ -2678,7 +2696,7 @@ class AnalystJuryService:
         model: str,
         system: str,
         user: str,
-        tools: List[dict],
+        tools: list[dict],
         tool_dispatcher,
         max_tokens: int = 320,
         max_rounds: int = 2,
@@ -2698,11 +2716,11 @@ class AnalystJuryService:
         Returns a tuple `(final_content, tools_used)` where `tools_used` is the
         ordered, de-duplicated list of tool names the model actually invoked.
         """
-        messages: List[dict] = [
+        messages: list[dict] = [
             {"role": "system", "content": system},
-            {"role": "user",   "content": user},
+            {"role": "user", "content": user},
         ]
-        tools_used: List[str] = []
+        tools_used: list[str] = []
 
         # max_rounds tool rounds + 1 forced final (no-tools) round
         for round_idx in range(max_rounds + 1):
@@ -2713,7 +2731,7 @@ class AnalystJuryService:
             if not include_tools and len(messages) > 2:
                 final_messages = messages + [
                     {
-                        "role":    "user",
+                        "role": "user",
                         "content": (
                             "Tool data gathered. "
                             "Now produce ONLY the final JSON verdict: "
@@ -2722,13 +2740,13 @@ class AnalystJuryService:
                     }
                 ]
             body = {
-                "model":       model,
-                "messages":    final_messages,
-                "max_tokens":  max_tokens,
+                "model": model,
+                "messages": final_messages,
+                "max_tokens": max_tokens,
                 "temperature": 0.65,
             }
             if include_tools:
-                body["tools"]       = tools
+                body["tools"] = tools
                 # Force at least one tool call on the opening round when asked
                 # (used by the "re-analyze with tools" path); auto otherwise.
                 body["tool_choice"] = "required" if (force_first and round_idx == 0) else "auto"
@@ -2737,7 +2755,7 @@ class AnalystJuryService:
                 # so the model knows the signatures but is explicitly prevented from
                 # calling them. Without this, reasoning models (e.g. GPT-OSS-20B) may
                 # keep issuing tool_calls and the loop exhausts with empty content.
-                body["tools"]       = tools
+                body["tools"] = tools
                 body["tool_choice"] = "none"
 
             logger.debug(
@@ -2807,13 +2825,13 @@ class AnalystJuryService:
                         body.pop("tools", None)
                         body.pop("tool_choice", None)
                         data = await self._post_groq_raw(body)
-            msg  = data["choices"][0]["message"]
+            msg = data["choices"][0]["message"]
             tool_calls = msg.get("tool_calls")
 
             if not tool_calls:
                 content = (msg.get("content") or "").strip()
                 # de-dupe preserving first-seen order
-                seen: List[str] = []
+                seen: list[str] = []
                 for t in tools_used:
                     if t not in seen:
                         seen.append(t)
@@ -2824,11 +2842,13 @@ class AnalystJuryService:
                 return content, seen
 
             # Model requested tools — record the assistant turn, then dispatch each.
-            messages.append({
-                "role":       "assistant",
-                "content":    msg.get("content") or "",
-                "tool_calls": tool_calls,
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": msg.get("content") or "",
+                    "tool_calls": tool_calls,
+                }
+            )
             for tc in tool_calls:
                 fn_name = tc.get("function", {}).get("name", "")
                 try:
@@ -2840,22 +2860,23 @@ class AnalystJuryService:
                 logger.info(f"[GROQ-TOOLS] dispatch — {fn_name}({fn_args})")
                 try:
                     result = await tool_dispatcher(fn_name, fn_args)
-                except Exception as exc:   # tool failures are non-fatal
+                except Exception as exc:  # tool failures are non-fatal
                     logger.warning(f"[GROQ-TOOLS] tool {fn_name} failed: {exc}")
                     result = json.dumps({"error": "tool unavailable"})
                 tools_used.append(fn_name)
-                messages.append({
-                    "role":         "tool",
-                    "tool_call_id": tc.get("id", ""),
-                    "name":         fn_name,
-                    "content":      result if isinstance(result, str) else json.dumps(result),
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", ""),
+                        "name": fn_name,
+                        "content": result if isinstance(result, str) else json.dumps(result),
+                    }
+                )
 
         # Fallback: loop exhausted without a final text answer (should not happen).
         seen = list(dict.fromkeys(tools_used))
         logger.warning(
-            f"[GROQ-TOOLS] loop exhausted with no final content — model={model}, "
-            f"tools_used={seen}"
+            f"[GROQ-TOOLS] loop exhausted with no final content — model={model}, tools_used={seen}"
         )
         return "", seen
 
@@ -2878,8 +2899,7 @@ class AnalystJuryService:
             if "</think>" in raw:
                 cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
                 logger.debug(
-                    f"[JURY/{persona_id}] <think> block stripped — "
-                    f"remaining_chars={len(cleaned)}"
+                    f"[JURY/{persona_id}] <think> block stripped — remaining_chars={len(cleaned)}"
                 )
             else:
                 # Truncated mid-think — no JSON output yet; fall through to regex fallback
@@ -2908,7 +2928,7 @@ class AnalystJuryService:
                         end = i
                         break
             if end != -1:
-                parsed = json.loads(cleaned[start: end + 1])
+                parsed = json.loads(cleaned[start : end + 1])
                 if "rating" in parsed:
                     logger.debug(
                         f"[JURY/{persona_id}] ✓ Parse path: PRIMARY (brace-depth JSON) — "
@@ -2947,21 +2967,30 @@ class AnalystJuryService:
             f"had_think_block={'<think>' in raw})"
         )
         try:
-            newrelic.agent.record_custom_event("JuryMalformedOutput", {
-                "persona_id":      persona_id,
-                "model":           model,
-                "raw_chars":       len(raw),
-                "had_think_block": "<think>" in raw,
-            })
-        except Exception:  # observability must never break parsing
-            pass
+            newrelic.agent.record_custom_event(
+                "JuryMalformedOutput",
+                {
+                    "persona_id": persona_id,
+                    "model": model,
+                    "raw_chars": len(raw),
+                    "had_think_block": "<think>" in raw,
+                },
+            )
+        except Exception as nr_exc:
+            logger.debug("[JURY] New Relic event recording failed (non-fatal): %s", nr_exc)
 
         rating = "Hold"
         for candidate in [
-            "Strong Buy", "Strong Sell",
-            "Accumulate", "Distribute",
-            "Low Risk", "Medium Risk", "High Risk",
-            "Buy", "Sell", "Hold",
+            "Strong Buy",
+            "Strong Sell",
+            "Accumulate",
+            "Distribute",
+            "Low Risk",
+            "Medium Risk",
+            "High Risk",
+            "Buy",
+            "Sell",
+            "Hold",
         ]:
             if candidate.lower() in cleaned.lower():
                 rating = candidate
@@ -2977,14 +3006,14 @@ class AnalystJuryService:
         if note_match:
             note = note_match.group(1).strip()
         else:
-            note = re.sub(r"\{.*\}", " ", cleaned, flags=re.DOTALL)   # greedy: whole JSON blob
-            note = re.sub(r"[{}\[\]\"]", " ", note)                   # any stray JSON punctuation
+            note = re.sub(r"\{.*\}", " ", cleaned, flags=re.DOTALL)  # greedy: whole JSON blob
+            note = re.sub(r"[{}\[\]\"]", " ", note)  # any stray JSON punctuation
             note = re.sub(r"\s{2,}", " ", note).strip()
         note = note[:420] or "Quantitative analysis unavailable this run."
 
         result = {
-            "rating":     rating,
-            "note":       note,
+            "rating": rating,
+            "note": note,
             "confidence": min(max(confidence, 10), 95),
         }
         logger.debug(
@@ -3002,7 +3031,7 @@ class AnalystJuryService:
         persona: dict,
         market_ctx: str,
         *,
-        tools: Optional[List[dict]] = None,
+        tools: list[dict] | None = None,
         tool_dispatcher=None,
         force_tools: bool = False,
     ) -> dict:
@@ -3015,13 +3044,13 @@ class AnalystJuryService:
         agentic tool-using loop (Groq function calling) and the returned verdict
         carries a `tools_used` list naming the tools the model invoked.
         """
-        use_tools   = bool(tools and tool_dispatcher)
-        hint        = TOOL_PROMPT_HINT if use_tools else ""
+        use_tools = bool(tools and tool_dispatcher)
+        hint = TOOL_PROMPT_HINT if use_tools else ""
         user_prompt = market_ctx + hint + NOTE_PROMPT_SUFFIX
-        model_used  = persona["api_model"]
-        max_tok     = persona.get("max_tokens", 320)
-        raw         = ""
-        tools_used: List[str] = []
+        model_used = persona["api_model"]
+        max_tok = persona.get("max_tokens", 320)
+        raw = ""
+        tools_used: list[str] = []
 
         logger.info(
             f"[JURY/{persona['id']}] ── Dispatching — "
@@ -3039,8 +3068,12 @@ class AnalystJuryService:
                 if use_tools:
                     max_rounds_model = persona.get("max_rounds", 2)
                     raw, tools_used = await self.call_groq_with_tools(
-                        model_used, persona["system"], user_prompt,
-                        tools, tool_dispatcher, max_tok,
+                        model_used,
+                        persona["system"],
+                        user_prompt,
+                        tools,
+                        tool_dispatcher,
+                        max_tok,
                         force_first=force_tools,
                         max_rounds=max_rounds_model,
                     )
@@ -3061,7 +3094,9 @@ class AnalystJuryService:
                 try:
                     _body = f" | response_body={e.response.text[:300]}"
                 except Exception as body_err:
-                    logger.debug(f"[JURY] Could not read response body for error logging: {body_err!r}")
+                    logger.debug(
+                        f"[JURY] Could not read response body for error logging: {body_err!r}"
+                    )
                     _body = " | response_body=<unavailable>"
             logger.error(
                 f"[JURY/{persona['id']}] ✗ FAILED — model={model_used}, error={e}{_body} | "
@@ -3085,16 +3120,16 @@ class AnalystJuryService:
         parsed = self._parse_analyst_response(raw, persona_id=persona["id"], model=model_used)
 
         verdict = {
-            "id":          persona["id"],
-            "avatar":      persona["avatar"],
-            "title":       persona["title"],
+            "id": persona["id"],
+            "avatar": persona["avatar"],
+            "title": persona["title"],
             "model_label": persona["model_label"],
-            "color":       persona["color"],
-            "rating":      parsed.get("rating",     "Hold"),
-            "note":        parsed.get("note",        "No available analysis at this time."),
-            "confidence":  parsed.get("confidence",  50),
-            "model":       model_used,
-            "tools_used":  tools_used,
+            "color": persona["color"],
+            "rating": parsed.get("rating", "Hold"),
+            "note": parsed.get("note", "No available analysis at this time."),
+            "confidence": parsed.get("confidence", 50),
+            "model": model_used,
+            "tools_used": tools_used,
         }
         logger.info(
             f"[JURY/{persona['id']}] Final verdict — "

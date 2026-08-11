@@ -12,25 +12,25 @@ GET is public — anonymous callers receive an empty list without a 401.
 
   GET    /watchlist/metrics — live fundamentals/technicals for a CSV of symbols (public)
 """
+
 import logging
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import BaseModel, field_validator
-from slowapi.util import get_remote_address
-
 import supabase_rest
 from config import Config
-from dependencies import limiter, require_user, get_user_id, _user_rate_key
+from dependencies import _user_rate_key, get_user_id, limiter, require_user
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from pydantic import BaseModel, field_validator
 from redis_cache import cache_get, cache_set, get_redis
+from slowapi.util import get_remote_address
 from watchlist_metrics_service import fetch_watchlist_metrics
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-:]{1,15}$")
-_GET_TTL = 60   # 1 min cache per user
+_GET_TTL = 60  # 1 min cache per user
 
 
 def _cache_key(user_id: str) -> str:
@@ -65,6 +65,7 @@ async def _invalidate(user_id: str) -> None:
 # Schemas
 # ---------------------------------------------------------------------------
 
+
 class WatchlistAdd(BaseModel):
     symbol: str
 
@@ -80,6 +81,7 @@ class WatchlistAdd(BaseModel):
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
 
 @router.get("/watchlist")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=_user_rate_key)

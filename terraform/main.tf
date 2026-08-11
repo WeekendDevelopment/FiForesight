@@ -105,6 +105,8 @@ resource "oci_core_instance" "vm" {
   shape               = "VM.Standard.E2.1.Micro" # Always Free
   display_name        = "fiforesight-vm"
 
+  preserve_boot_volume = false
+
   create_vnic_details {
     subnet_id        = oci_core_subnet.subnet.id
     assign_public_ip = true
@@ -115,6 +117,10 @@ resource "oci_core_instance" "vm" {
     source_type = "image"
     source_id   = data.oci_core_images.ubuntu.images[0].id
     boot_volume_size_in_gbs = 75
+  }
+
+  lifecycle {
+    ignore_changes = [source_details[0].source_id]
   }
 
   metadata = {

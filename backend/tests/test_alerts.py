@@ -11,20 +11,20 @@ Covers:
 
 Supabase, yfinance, and web-push are fully mocked; no network is required.
 """
+
 import asyncio
+import importlib as _il
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-import importlib as _il
-
+import alerts_evaluator
+from config import Config
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
 
-import alerts_evaluator
-from config import Config
 from backend.routers import alerts
 
 _deps = _il.import_module("dependencies")
@@ -35,7 +35,9 @@ _app.state.limiter = limiter
 
 
 async def _rl_handler(req: Request, exc: RateLimitExceeded) -> JSONResponse:
-    return JSONResponse(status_code=429, content={"detail": "Too many requests — please slow down."})
+    return JSONResponse(
+        status_code=429, content={"detail": "Too many requests — please slow down."}
+    )
 
 
 _app.add_exception_handler(RateLimitExceeded, _rl_handler)
@@ -47,6 +49,7 @@ client = TestClient(_app, raise_server_exceptions=False)
 # Auth enforcement — no Bearer token → 401 on every user-facing endpoint
 # ---------------------------------------------------------------------------
 
+
 def test_list_rules_requires_auth() -> None:
     assert client.get("/alerts/rules").status_code == 401
 
@@ -56,9 +59,15 @@ def test_fires_requires_auth() -> None:
 
 
 def test_create_rule_requires_auth() -> None:
-    resp = client.post("/alerts/rules", json={
-        "symbol": "AAPL", "type": "price_cross", "operator": "above", "threshold": 200,
-    })
+    resp = client.post(
+        "/alerts/rules",
+        json={
+            "symbol": "AAPL",
+            "type": "price_cross",
+            "operator": "above",
+            "threshold": 200,
+        },
+    )
     assert resp.status_code == 401
 
 
@@ -75,9 +84,13 @@ def test_delete_rule_requires_auth() -> None:
 
 
 def test_subscribe_requires_auth() -> None:
-    resp = client.post("/alerts/subscribe", json={
-        "endpoint": "https://push.example/x", "keys": {"p256dh": "a", "auth": "b"},
-    })
+    resp = client.post(
+        "/alerts/subscribe",
+        json={
+            "endpoint": "https://push.example/x",
+            "keys": {"p256dh": "a", "auth": "b"},
+        },
+    )
     assert resp.status_code == 401
 
 
@@ -88,6 +101,7 @@ def test_vapid_public_key_requires_auth() -> None:
 # ---------------------------------------------------------------------------
 # Cron-secret gate on /alerts/evaluate
 # ---------------------------------------------------------------------------
+
 
 def test_evaluate_503_when_cron_secret_unset() -> None:
     with patch.object(Config, "CRON_SECRET", ""):
@@ -107,17 +121,23 @@ def test_evaluate_403_with_wrong_header() -> None:
 
 def test_evaluate_200_with_correct_header() -> None:
     summary = {"rules_checked": 0, "fired": 0, "symbols": 0, "errors": 0, "skipped_cooldown": 0}
-    with patch.object(Config, "CRON_SECRET", "topsecret"), \
-         patch.object(Config, "SUPABASE_SERVICE_ROLE_KEY", "svc-role"), \
-         patch.object(alerts.alerts_evaluator, "evaluate_alerts", new=AsyncMock(return_value=summary)):
+    with (
+        patch.object(Config, "CRON_SECRET", "topsecret"),
+        patch.object(Config, "SUPABASE_SERVICE_ROLE_KEY", "svc-role"),
+        patch.object(
+            alerts.alerts_evaluator, "evaluate_alerts", new=AsyncMock(return_value=summary)
+        ),
+    ):
         resp = client.post("/alerts/evaluate", headers={"X-Cron-Secret": "topsecret"})
     assert resp.status_code == 200
     assert resp.json()["summary"] == summary
 
 
 def test_evaluate_503_when_service_role_missing() -> None:
-    with patch.object(Config, "CRON_SECRET", "topsecret"), \
-         patch.object(Config, "SUPABASE_SERVICE_ROLE_KEY", ""):
+    with (
+        patch.object(Config, "CRON_SECRET", "topsecret"),
+        patch.object(Config, "SUPABASE_SERVICE_ROLE_KEY", ""),
+    ):
         resp = client.post("/alerts/evaluate", headers={"X-Cron-Secret": "topsecret"})
         assert resp.status_code == 503
 
@@ -125,6 +145,7 @@ def test_evaluate_503_when_service_role_missing() -> None:
 # ---------------------------------------------------------------------------
 # Cron-secret gate on /alerts/digest (mirrors evaluate tests)
 # ---------------------------------------------------------------------------
+
 
 def test_digest_503_when_cron_secret_unset() -> None:
     with patch.object(Config, "CRON_SECRET", ""):
@@ -144,17 +165,23 @@ def test_digest_403_with_wrong_header() -> None:
 
 def test_digest_200_with_correct_header() -> None:
     summary = {"users": 0, "delivered": 0, "errors": 0}
-    with patch.object(Config, "CRON_SECRET", "topsecret"), \
-         patch.object(Config, "SUPABASE_SERVICE_ROLE_KEY", "svc-role"), \
-         patch.object(alerts.alerts_evaluator, "build_and_send_digest", new=AsyncMock(return_value=summary)):
+    with (
+        patch.object(Config, "CRON_SECRET", "topsecret"),
+        patch.object(Config, "SUPABASE_SERVICE_ROLE_KEY", "svc-role"),
+        patch.object(
+            alerts.alerts_evaluator, "build_and_send_digest", new=AsyncMock(return_value=summary)
+        ),
+    ):
         resp = client.post("/alerts/digest", headers={"X-Cron-Secret": "topsecret"})
     assert resp.status_code == 200
     assert resp.json()["summary"] == summary
 
 
 def test_digest_503_when_service_role_missing() -> None:
-    with patch.object(Config, "CRON_SECRET", "topsecret"), \
-         patch.object(Config, "SUPABASE_SERVICE_ROLE_KEY", ""):
+    with (
+        patch.object(Config, "CRON_SECRET", "topsecret"),
+        patch.object(Config, "SUPABASE_SERVICE_ROLE_KEY", ""),
+    ):
         resp = client.post("/alerts/digest", headers={"X-Cron-Secret": "topsecret"})
         assert resp.status_code == 503
 
@@ -163,9 +190,17 @@ def test_digest_503_when_service_role_missing() -> None:
 # Pure rule evaluation — per type
 # ---------------------------------------------------------------------------
 
+
 def _rule(**kw: Any) -> dict[str, Any]:
-    base: dict[str, Any] = {"id": "r1", "user_id": "u1", "symbol": "AAPL", "type": "price_cross",
-            "operator": None, "threshold": None, "last_fired": None}
+    base: dict[str, Any] = {
+        "id": "r1",
+        "user_id": "u1",
+        "symbol": "AAPL",
+        "type": "price_cross",
+        "operator": None,
+        "threshold": None,
+        "last_fired": None,
+    }
     base.update(kw)
     return base
 
@@ -286,6 +321,7 @@ def test_missing_signal_degrades_to_no_fire() -> None:
 # Cooldown
 # ---------------------------------------------------------------------------
 
+
 def test_cooldown_active_within_window() -> None:
     now = datetime(2026, 6, 12, 12, 0, tzinfo=timezone.utc)
     last = (now - timedelta(hours=2)).isoformat()
@@ -307,19 +343,27 @@ def test_cooldown_none_last_fired() -> None:
 # Evaluator orchestration — firing, cooldown suppression, bad-symbol resilience
 # ---------------------------------------------------------------------------
 
+
 def test_evaluate_alerts_fires_and_records() -> None:
     now = datetime(2026, 6, 12, 12, 0, tzinfo=timezone.utc)
     rules = [_rule(id="r1", symbol="AAPL", type="price_cross", operator="above", threshold=150)]
     record = AsyncMock()
-    with patch.object(alerts_evaluator.alerts_store, "admin_list_active_rules",
-                      new=AsyncMock(return_value=rules)), \
-         patch.object(alerts_evaluator, "_fetch_symbol_signals",
-                      return_value={"price": 160.0}), \
-         patch.object(alerts_evaluator.alerts_store, "admin_record_fire", new=record), \
-         patch.object(alerts_evaluator.alerts_store, "admin_update_last_fired", new=AsyncMock()), \
-         patch.object(alerts_evaluator.alerts_store, "admin_list_push_subscriptions",
-                      new=AsyncMock(return_value=[])), \
-         patch.object(alerts_evaluator.notifications, "email_configured", return_value=False):
+    with (
+        patch.object(
+            alerts_evaluator.alerts_store,
+            "admin_list_active_rules",
+            new=AsyncMock(return_value=rules),
+        ),
+        patch.object(alerts_evaluator, "_fetch_symbol_signals", return_value={"price": 160.0}),
+        patch.object(alerts_evaluator.alerts_store, "admin_record_fire", new=record),
+        patch.object(alerts_evaluator.alerts_store, "admin_update_last_fired", new=AsyncMock()),
+        patch.object(
+            alerts_evaluator.alerts_store,
+            "admin_list_push_subscriptions",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch.object(alerts_evaluator.notifications, "email_configured", return_value=False),
+    ):
         summary = asyncio.run(alerts_evaluator.evaluate_alerts(object(), object(), now=now))
     assert summary["fired"] == 1
     assert summary["rules_checked"] == 1
@@ -329,14 +373,26 @@ def test_evaluate_alerts_fires_and_records() -> None:
 def test_evaluate_alerts_cooldown_suppresses() -> None:
     now = datetime(2026, 6, 12, 12, 0, tzinfo=timezone.utc)
     recent = (now - timedelta(hours=1)).isoformat()
-    rules = [_rule(id="r1", symbol="AAPL", type="price_cross", operator="above",
-                   threshold=150, last_fired=recent)]
+    rules = [
+        _rule(
+            id="r1",
+            symbol="AAPL",
+            type="price_cross",
+            operator="above",
+            threshold=150,
+            last_fired=recent,
+        )
+    ]
     record = AsyncMock()
-    with patch.object(alerts_evaluator.alerts_store, "admin_list_active_rules",
-                      new=AsyncMock(return_value=rules)), \
-         patch.object(alerts_evaluator, "_fetch_symbol_signals",
-                      return_value={"price": 160.0}), \
-         patch.object(alerts_evaluator.alerts_store, "admin_record_fire", new=record):
+    with (
+        patch.object(
+            alerts_evaluator.alerts_store,
+            "admin_list_active_rules",
+            new=AsyncMock(return_value=rules),
+        ),
+        patch.object(alerts_evaluator, "_fetch_symbol_signals", return_value={"price": 160.0}),
+        patch.object(alerts_evaluator.alerts_store, "admin_record_fire", new=record),
+    ):
         summary = asyncio.run(alerts_evaluator.evaluate_alerts(object(), object(), now=now))
     assert summary["fired"] == 0
     assert summary["skipped_cooldown"] == 1
@@ -356,14 +412,22 @@ def test_evaluate_alerts_survives_bad_symbol() -> None:
         return {"price": 160.0}
 
     record = AsyncMock()
-    with patch.object(alerts_evaluator.alerts_store, "admin_list_active_rules",
-                      new=AsyncMock(return_value=rules)), \
-         patch.object(alerts_evaluator, "_fetch_symbol_signals", side_effect=_fetch), \
-         patch.object(alerts_evaluator.alerts_store, "admin_record_fire", new=record), \
-         patch.object(alerts_evaluator.alerts_store, "admin_update_last_fired", new=AsyncMock()), \
-         patch.object(alerts_evaluator.alerts_store, "admin_list_push_subscriptions",
-                      new=AsyncMock(return_value=[])), \
-         patch.object(alerts_evaluator.notifications, "email_configured", return_value=False):
+    with (
+        patch.object(
+            alerts_evaluator.alerts_store,
+            "admin_list_active_rules",
+            new=AsyncMock(return_value=rules),
+        ),
+        patch.object(alerts_evaluator, "_fetch_symbol_signals", side_effect=_fetch),
+        patch.object(alerts_evaluator.alerts_store, "admin_record_fire", new=record),
+        patch.object(alerts_evaluator.alerts_store, "admin_update_last_fired", new=AsyncMock()),
+        patch.object(
+            alerts_evaluator.alerts_store,
+            "admin_list_push_subscriptions",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch.object(alerts_evaluator.notifications, "email_configured", return_value=False),
+    ):
         summary = asyncio.run(alerts_evaluator.evaluate_alerts(object(), object(), now=now))
     # BADX raised → counted as an error, AAPL still fired.
     assert summary["errors"] == 1
@@ -376,15 +440,22 @@ def test_evaluate_alerts_delivers_web_push() -> None:
     rules = [_rule(id="r1", symbol="AAPL", type="price_cross", operator="above", threshold=150)]
     send = AsyncMock(return_value="sent")
     subs = [{"endpoint": "https://push.example/x", "p256dh": "a", "auth": "b"}]
-    with patch.object(alerts_evaluator.alerts_store, "admin_list_active_rules",
-                      new=AsyncMock(return_value=rules)), \
-         patch.object(alerts_evaluator, "_fetch_symbol_signals",
-                      return_value={"price": 160.0}), \
-         patch.object(alerts_evaluator.alerts_store, "admin_record_fire", new=AsyncMock()), \
-         patch.object(alerts_evaluator.alerts_store, "admin_update_last_fired", new=AsyncMock()), \
-         patch.object(alerts_evaluator.alerts_store, "admin_list_push_subscriptions",
-                      new=AsyncMock(return_value=subs)), \
-         patch.object(alerts_evaluator.notifications, "send_web_push", new=send), \
-         patch.object(alerts_evaluator.notifications, "email_configured", return_value=False):
+    with (
+        patch.object(
+            alerts_evaluator.alerts_store,
+            "admin_list_active_rules",
+            new=AsyncMock(return_value=rules),
+        ),
+        patch.object(alerts_evaluator, "_fetch_symbol_signals", return_value={"price": 160.0}),
+        patch.object(alerts_evaluator.alerts_store, "admin_record_fire", new=AsyncMock()),
+        patch.object(alerts_evaluator.alerts_store, "admin_update_last_fired", new=AsyncMock()),
+        patch.object(
+            alerts_evaluator.alerts_store,
+            "admin_list_push_subscriptions",
+            new=AsyncMock(return_value=subs),
+        ),
+        patch.object(alerts_evaluator.notifications, "send_web_push", new=send),
+        patch.object(alerts_evaluator.notifications, "email_configured", return_value=False),
+    ):
         asyncio.run(alerts_evaluator.evaluate_alerts(object(), object(), now=now))
     send.assert_awaited_once()

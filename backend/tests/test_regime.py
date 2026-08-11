@@ -8,16 +8,18 @@ The real HMM-detection test requires hmmlearn (built wheel) and is skipped
 where it isn't installed (e.g. a Python build with no prebuilt wheel). The
 fallback / pure-function tests run everywhere — no network, no native deps.
 """
+
 import asyncio
 import math
-from typing import Any, Coroutine
+from collections.abc import Coroutine
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 
-from backend.services import RegimeService
-from backend.models import adjust_weights_for_regime, BASE_ENSEMBLE_WEIGHTS
 from backend.jury_graph import detect_dissent
+from backend.models import BASE_ENSEMBLE_WEIGHTS, adjust_weights_for_regime
+from backend.services import RegimeService
 
 
 def run(coro: "Coroutine[Any, Any, Any]") -> Any:
@@ -30,7 +32,7 @@ def _trending_series(n: int = 60, drift: float = 0.012) -> list:
     out = []
     price = 100.0
     for i in range(n):
-        price *= (1.0 + drift + 0.004 * math.sin(i))
+        price *= 1.0 + drift + 0.004 * math.sin(i)
         out.append(round(price, 4))
     return out
 
@@ -38,6 +40,7 @@ def _trending_series(n: int = 60, drift: float = 0.012) -> list:
 # ---------------------------------------------------------------------------
 # RegimeService — HMM detection (needs hmmlearn)
 # ---------------------------------------------------------------------------
+
 
 class TestRegimeDetection:
     def test_trending_series_detects_trend(self):
@@ -54,6 +57,7 @@ class TestRegimeDetection:
 # ---------------------------------------------------------------------------
 # RegimeService — graceful fallbacks (run everywhere, no hmmlearn needed)
 # ---------------------------------------------------------------------------
+
 
 class TestRegimeFallbacks:
     def test_few_bars_returns_unknown(self):
@@ -81,18 +85,19 @@ class TestRegimeFallbacks:
 # Regime-adaptive ensemble weights
 # ---------------------------------------------------------------------------
 
+
 class TestRegimeWeights:
     def test_trending_boosts_sarima_at_full_confidence(self):
         w = adjust_weights_for_regime(BASE_ENSEMBLE_WEIGHTS, "trending_up", 1.0)
         assert abs(sum(w.values()) - 1.0) < 1e-9
         assert w["sarima"] > w["prophet"] and w["sarima"] > w["rf"]
-        assert abs(w["sarima"] - 0.523) < 0.01   # 0.56 / 1.07 normalised
+        assert abs(w["sarima"] - 0.523) < 0.01  # 0.56 / 1.07 normalised
 
     def test_ranging_boosts_rf_at_full_confidence(self):
         w = adjust_weights_for_regime(BASE_ENSEMBLE_WEIGHTS, "ranging", 1.0)
         assert abs(sum(w.values()) - 1.0) < 1e-9
         assert w["rf"] > w["sarima"] and w["rf"] > w["prophet"]
-        assert w["rf"] > 0.40   # boosted well above the 0.30 base
+        assert w["rf"] > 0.40  # boosted well above the 0.30 base
 
     def test_unknown_leaves_base_unchanged(self):
         w = adjust_weights_for_regime(BASE_ENSEMBLE_WEIGHTS, "unknown", 0.9)
@@ -119,10 +124,15 @@ class TestRegimeWeights:
 # Jury dissent detection
 # ---------------------------------------------------------------------------
 
+
 def _verdict(pid: str, rating: str, *, model: str = "groq", note: str = "rationale") -> dict:
     return {
-        "id": pid, "title": f"{pid} Lens", "rating": rating,
-        "note": note, "confidence": 60, "model": model,
+        "id": pid,
+        "title": f"{pid} Lens",
+        "rating": rating,
+        "note": note,
+        "confidence": 60,
+        "model": model,
     }
 
 
@@ -130,7 +140,7 @@ class TestDissent:
     def test_two_one_split_surfaces_minority(self):
         verdicts = [
             _verdict("A", "Buy"),
-            _verdict("B", "Accumulate"),                 # same bullish bucket as Buy
+            _verdict("B", "Accumulate"),  # same bullish bucket as Buy
             _verdict("C", "Sell", note="yield inversion suggests downside"),
         ]
         d = detect_dissent(verdicts)
@@ -151,7 +161,7 @@ class TestDissent:
         verdicts = [
             _verdict("A", "Buy"),
             _verdict("B", "Buy"),
-            _verdict("C", "Hold", model="error"),        # fallback, not real dissent
+            _verdict("C", "Hold", model="error"),  # fallback, not real dissent
         ]
         assert detect_dissent(verdicts) is None
 

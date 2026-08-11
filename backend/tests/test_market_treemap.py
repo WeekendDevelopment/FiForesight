@@ -2,14 +2,15 @@
 Market treemap endpoint tests (F32) — GET /market/treemap.
 build_universe_snapshot + yf.download are mocked; no network.
 """
+
 from collections.abc import Generator
 from unittest.mock import AsyncMock, patch
 
 import pandas as pd
 import pytest
 from fastapi import FastAPI, Request
-from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
 
 from backend.routers import market
@@ -19,12 +20,30 @@ _FIELDS = ["Open", "High", "Low", "Close", "Volume"]
 # 6 fake universe rows: one ETF proxy (SPY) and one row with no market cap —
 # both must be excluded from the map.
 _FAKE_UNIVERSE = [
-    {"symbol": "CCC", "name": "Charlie", "sector": "Financial",  "marketCap": 500e9,   "price": 50.0},
-    {"symbol": "AAA", "name": "Alpha",   "sector": "Technology", "marketCap": 3_000e9, "price": 100.0},
-    {"symbol": "SPY", "name": "SPDR S&P 500 ETF", "sector": "—", "marketCap": 600e9,   "price": 500.0},
-    {"symbol": "BBB", "name": "Bravo",   "sector": "Technology", "marketCap": 2_000e9, "price": 200.0},
-    {"symbol": "EEE", "name": "Echo",    "sector": "Healthcare", "marketCap": None,    "price": 80.0},
-    {"symbol": "DDD", "name": "Delta",   "sector": "Energy",     "marketCap": 250e9,   "price": 60.0},
+    {"symbol": "CCC", "name": "Charlie", "sector": "Financial", "marketCap": 500e9, "price": 50.0},
+    {
+        "symbol": "AAA",
+        "name": "Alpha",
+        "sector": "Technology",
+        "marketCap": 3_000e9,
+        "price": 100.0,
+    },
+    {
+        "symbol": "SPY",
+        "name": "SPDR S&P 500 ETF",
+        "sector": "—",
+        "marketCap": 600e9,
+        "price": 500.0,
+    },
+    {
+        "symbol": "BBB",
+        "name": "Bravo",
+        "sector": "Technology",
+        "marketCap": 2_000e9,
+        "price": 200.0,
+    },
+    {"symbol": "EEE", "name": "Echo", "sector": "Healthcare", "marketCap": None, "price": 80.0},
+    {"symbol": "DDD", "name": "Delta", "sector": "Energy", "marketCap": 250e9, "price": 60.0},
 ]
 
 _STOCKS = ["AAA", "BBB", "CCC", "DDD"]  # what survives the ETF/capless filter
@@ -69,9 +88,12 @@ def _get(download_result: dict):
 
     ``download_result`` is the kwargs for the yf.download patch, e.g.
     ``{"return_value": frame}`` or ``{"side_effect": RuntimeError(...)}``."""
-    with patch.object(market, "build_universe_snapshot",
-                      AsyncMock(return_value=list(_FAKE_UNIVERSE))), \
-         patch("backend.routers.market.yf.download", **download_result):
+    with (
+        patch.object(
+            market, "build_universe_snapshot", AsyncMock(return_value=list(_FAKE_UNIVERSE))
+        ),
+        patch("backend.routers.market.yf.download", **download_result),
+    ):
         return client.get("/market/treemap")
 
 
@@ -90,8 +112,8 @@ def test_etf_and_capless_excluded() -> None:
     resp = _get({"return_value": _grouped_frame(_STOCKS)})
     assert resp.status_code == 200
     symbols = {r["symbol"] for r in resp.json()}
-    assert "SPY" not in symbols   # ETF proxy
-    assert "EEE" not in symbols   # marketCap=None
+    assert "SPY" not in symbols  # ETF proxy
+    assert "EEE" not in symbols  # marketCap=None
 
 
 def test_missing_price_symbol_kept_with_null_change() -> None:

@@ -3,17 +3,15 @@ import asyncio
 import json
 import logging
 import re
-from typing import List, Optional
 
 import httpx
+from config import Config
+from day_trade_service import build_day_trade_setup
+from dependencies import _user_rate_key, analyst_jury_svc, limiter, require_user
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 from slowapi.util import get_remote_address
-
-from config import Config
-from dependencies import analyst_jury_svc, limiter, require_user, _user_rate_key
-from day_trade_service import build_day_trade_setup
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -25,7 +23,11 @@ _SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-:]{1,15}$")
 # name arrives client→server, so we only echo it back into the trigger text when
 # it's one of these known values (never trust arbitrary strings).
 _KNOWN_PATTERNS = {
-    "Bullish Engulfing", "Bearish Engulfing", "Hammer", "Shooting Star", "Inside Bar",
+    "Bullish Engulfing",
+    "Bearish Engulfing",
+    "Hammer",
+    "Shooting Star",
+    "Inside Bar",
 }
 
 # Strip newlines + ASCII control characters from context interpolation values
@@ -43,33 +45,34 @@ def _safe_ctx_value(value: object, max_len: int = 300) -> str:
 # Trade Setup endpoint
 # ---------------------------------------------------------------------------
 
+
 class TradeSetupRequest(BaseModel):
     symbol: str
     current_price: float
     high_range: float
     low_range: float
     rsi: float
-    support: List[float] = []
-    resistance: List[float] = []
+    support: list[float] = []
+    resistance: list[float] = []
     trend: str = "Bullish"
     sentiment_label: str = "Neutral"
-    var_95: Optional[float] = None
+    var_95: float | None = None
     # ATR-14 in price units (Feature 14). When supplied, the stop is placed an
     # ATR multiple away from entry instead of a flat %. Optional for backward
     # compatibility — falls back to the support/resistance % stop when absent.
-    atr_14: Optional[float] = None
+    atr_14: float | None = None
     conservative: bool = False
     # 5-day ensemble forecast central path endpoint (forecastDays[-1].predicted).
     # When supplied, the setup is checked for coherence with the model: a short
     # whose targets sit below a price the forecast projects HIGHER (or a long
     # below a falling forecast) is flagged non-actionable instead of being shown
     # as a tradeable edge. Optional for backward compatibility.
-    forecast_close: Optional[float] = None
+    forecast_close: float | None = None
     # Latest daily candlestick pattern (from /predict indicators.candle_pattern).
     # Turns the entry into a real trigger — "wait for X at $level" — and marks the
     # setup confirmed when a matching reversal candle has already printed.
-    candle_pattern: Optional[str] = None
-    candle_pattern_dir: Optional[str] = None   # "bullish" | "bearish" | "neutral"
+    candle_pattern: str | None = None
+    candle_pattern_dir: str | None = None  # "bullish" | "bearish" | "neutral"
 
     @field_validator("symbol")
     @classmethod
@@ -83,21 +86,21 @@ class TradeSetupRequest(BaseModel):
 
     @field_validator("atr_14")
     @classmethod
-    def validate_atr(cls, v: Optional[float]) -> Optional[float]:
+    def validate_atr(cls, v: float | None) -> float | None:
         if v is not None and v < 0:
             raise ValueError("atr_14 must be non-negative")
         return v
 
     @field_validator("forecast_close")
     @classmethod
-    def validate_forecast_close(cls, v: Optional[float]) -> Optional[float]:
+    def validate_forecast_close(cls, v: float | None) -> float | None:
         if v is not None and v <= 0:
             raise ValueError("forecast_close must be > 0")
         return v
 
     @field_validator("candle_pattern_dir")
     @classmethod
-    def validate_candle_dir(cls, v: Optional[str]) -> Optional[str]:
+    def validate_candle_dir(cls, v: str | None) -> str | None:
         if v is not None and v not in ("bullish", "bearish", "neutral"):
             raise ValueError("candle_pattern_dir must be bullish, bearish, or neutral")
         return v
@@ -124,7 +127,7 @@ class TradeSetupRequest(BaseModel):
 
     @field_validator("support", "resistance")
     @classmethod
-    def validate_non_negative(cls, v: List[float]) -> List[float]:
+    def validate_non_negative(cls, v: list[float]) -> list[float]:
         if any(x < 0 for x in v):
             raise ValueError("support/resistance values must be non-negative")
         return v
@@ -139,28 +142,28 @@ class TradeSetupResponse(BaseModel):
     target_3: float
     risk_reward: str
     setup_type: str
-    direction: str          # "Long" | "Short" | "Neutral" — trade side ("Neutral" = no clean setup)
+    direction: str  # "Long" | "Short" | "Neutral" — trade side ("Neutral" = no clean setup)
     rationale: str
     risk_per_share: float
     risk_pct: float
     suggested_position_pct: float
-    atr_14: Optional[float] = None
-    atr_multiplier: Optional[float] = None
+    atr_14: float | None = None
+    atr_multiplier: float | None = None
     # Coherence gate: False when the setup contradicts the 5-day forecast, the
     # trend is mixed, or reward < risk. The frontend mutes/hides the levels and
     # surfaces `conflict_note` instead of presenting a misleading "edge".
     actionable: bool = True
-    conflict_note: Optional[str] = None
+    conflict_note: str | None = None
     # Swing entry trigger derived from the latest daily candle (Option A):
     # entry_trigger = what to wait for; confirmation = "confirmed" | "pending".
-    entry_trigger: Optional[str] = None
-    confirmation: Optional[str] = None
+    entry_trigger: str | None = None
+    confirmation: str | None = None
     # CFD-ready framing — the same setup expressed for a CFD broker (e.g. T212):
     # which side to open, the margin a typical retail leverage implies, and the
     # financing/spread caveats that erode a leveraged multi-day hold.
-    cfd_side: Optional[str] = None        # "Buy" | "Sell"
-    cfd_margin_pct: Optional[float] = None
-    cfd_note: Optional[str] = None
+    cfd_side: str | None = None  # "Buy" | "Sell"
+    cfd_margin_pct: float | None = None
+    cfd_note: str | None = None
 
 
 @router.post("/trade-setup", response_model=TradeSetupResponse)
@@ -174,7 +177,7 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
     # name gets a wider stop than a quiet one. Hard-capped at 8% from entry so a
     # huge ATR can't suggest a reckless stop. Falls back to the S/R % stop when
     # ATR is absent (anonymous/legacy callers).
-    use_atr        = req.atr_14 is not None and req.atr_14 > 0
+    use_atr = req.atr_14 is not None and req.atr_14 > 0
     atr_multiplier = (2.5 if req.conservative else 2.0) if use_atr else None
 
     if req.trend == "Bearish":
@@ -184,10 +187,10 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
         )
         if resistance_nearby:
             entry_high = round(resistance_nearby[0], 2)
-            entry_low  = round(entry_high * 0.99, 2)
+            entry_low = round(entry_high * 0.99, 2)
         else:
             entry_high = round(p * 1.005, 2)
-            entry_low  = round(p * 0.995, 2)
+            entry_low = round(p * 0.995, 2)
 
         entry_mid = (entry_low + entry_high) / 2
 
@@ -199,11 +202,11 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
             raw_stop = round(entry_high * 1.03, 2)
         if use_atr:
             # Short stop sits above entry; never more than 8% above.
-            atr_stop  = entry_mid + atr_multiplier * req.atr_14
+            atr_stop = entry_mid + atr_multiplier * req.atr_14
             ceil_stop = entry_mid * 1.08
             stop_loss = round(min(atr_stop, ceil_stop), 2)
         else:
-            max_stop  = round(entry_mid * 1.05, 2)
+            max_stop = round(entry_mid * 1.05, 2)
             stop_loss = round(min(raw_stop, max_stop), 2)
 
         # Targets: descending below entry_mid toward low_range
@@ -212,8 +215,8 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
         target_3 = round(req.low_range - (entry_mid - req.low_range), 2)
 
         # R:R — risk is distance to stop above, reward is distance to T2 below
-        risk        = max(stop_loss - entry_mid, 0.01)
-        reward      = max(entry_mid - target_2, 0.01)
+        risk = max(stop_loss - entry_mid, 0.01)
+        reward = max(entry_mid - target_2, 0.01)
         risk_reward = f"1:{reward / risk:.1f}"
     else:
         # Bullish: entry zone near nearest support within 3% below price
@@ -222,10 +225,10 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
             reverse=True,
         )
         if support_nearby:
-            entry_low  = round(support_nearby[0], 2)
+            entry_low = round(support_nearby[0], 2)
             entry_high = round(entry_low * 1.01, 2)
         else:
-            entry_low  = round(p * 0.995, 2)
+            entry_low = round(p * 0.995, 2)
             entry_high = round(p * 1.005, 2)
 
         # Stop: nearest support below entry_low, capped at 5% below entry_mid
@@ -248,15 +251,15 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
         # Stop: ATR-based when available, else cap the S/R stop at 5% below entry.
         if use_atr:
             # Long stop sits below entry; never more than 8% below.
-            atr_stop   = entry_mid - atr_multiplier * req.atr_14
+            atr_stop = entry_mid - atr_multiplier * req.atr_14
             floor_stop = entry_mid * 0.92
-            stop_loss  = round(max(atr_stop, floor_stop), 2)
+            stop_loss = round(max(atr_stop, floor_stop), 2)
         else:
-            raw_stop  = stop_loss
-            min_stop  = round(entry_mid * 0.95, 2)
+            raw_stop = stop_loss
+            min_stop = round(entry_mid * 0.95, 2)
             stop_loss = round(max(raw_stop, min_stop), 2)
-        risk        = max(entry_mid - stop_loss, 0.01)
-        reward      = max(target_2 - entry_mid, 0.01)
+        risk = max(entry_mid - stop_loss, 0.01)
+        reward = max(target_2 - entry_mid, 0.01)
         risk_reward = f"1:{reward / risk:.1f}"
 
     # Trade side: a Bearish trend builds a short (stop above entry, targets
@@ -288,39 +291,38 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
 
     forecast_dir = "flat"
     if req.forecast_close is not None and req.forecast_close > 0:
-        if req.forecast_close > p * 1.01:        # >1% above spot over 5 days
+        if req.forecast_close > p * 1.01:  # >1% above spot over 5 days
             forecast_dir = "up"
         elif req.forecast_close < p * 0.99:
             forecast_dir = "down"
 
-    rr_ratio = reward / risk          # both floored at 0.01 in the branches above
-    conflict = (
-        (trend_dir == "up"   and forecast_dir == "down") or
-        (trend_dir == "down" and forecast_dir == "up")
+    rr_ratio = reward / risk  # both floored at 0.01 in the branches above
+    conflict = (trend_dir == "up" and forecast_dir == "down") or (
+        trend_dir == "down" and forecast_dir == "up"
     )
 
-    actionable    = True
-    conflict_note: Optional[str] = None
+    actionable = True
+    conflict_note: str | None = None
     if trend_dir == "flat":
-        actionable    = False
-        direction     = "Neutral"
-        setup_type    = "No Clean Setup"
+        actionable = False
+        direction = "Neutral"
+        setup_type = "No Clean Setup"
         conflict_note = (
             "Trend is mixed — no directional edge right now. Treat the entry zone as a "
             "watch range, not a trade."
         )
     elif conflict:
-        actionable    = False
-        direction     = "Neutral"
-        setup_type    = "Conflicting Signals"
+        actionable = False
+        direction = "Neutral"
+        setup_type = "Conflicting Signals"
         fdir = "higher" if forecast_dir == "up" else "lower"
         conflict_note = (
             f"Signals disagree: the {req.trend.lower()} trend favours a {trend_dir} move, "
             f"but the 5-day forecast projects {fdir}. No clean trade — wait for them to align."
         )
     elif rr_ratio < 1.0:
-        actionable    = False
-        setup_type    = "Unfavorable R:R"
+        actionable = False
+        setup_type = "Unfavorable R:R"
         conflict_note = (
             f"Risk outweighs reward at current levels (R:R {risk_reward}) — not a "
             f"high-quality {direction.lower()} setup."
@@ -331,22 +333,19 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
     # confirming reversal candle, then enter. We surface that trigger explicitly
     # instead of implying "enter now". `confirmation` is "confirmed" when a daily
     # candle matching the side has already printed, else "pending".
-    entry_trigger: Optional[str] = None
-    confirmation: Optional[str]  = None
+    entry_trigger: str | None = None
+    confirmation: str | None = None
     if actionable:
         want_dir = "bullish" if direction == "Long" else "bearish"
-        pattern_ok = (
-            req.candle_pattern in _KNOWN_PATTERNS
-            and req.candle_pattern_dir == want_dir
-        )
+        pattern_ok = req.candle_pattern in _KNOWN_PATTERNS and req.candle_pattern_dir == want_dir
         if pattern_ok:
-            confirmation  = "confirmed"
+            confirmation = "confirmed"
             entry_trigger = (
                 f"{req.candle_pattern} printed at the entry zone "
                 f"(${entry_low:.2f}–${entry_high:.2f}) — trigger active."
             )
         else:
-            confirmation  = "pending"
+            confirmation = "pending"
             candles = "engulfing / hammer" if want_dir == "bullish" else "engulfing / shooting star"
             entry_trigger = (
                 f"Wait for a {want_dir} reversal candle ({candles}) in the entry zone "
@@ -359,12 +358,12 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
     # stop distance, so the 1%-rule size above is unchanged. We surface the side,
     # the implied margin at a typical retail leverage, and the carrying costs that
     # quietly erode a leveraged multi-day hold (financing per night + spread).
-    cfd_side: Optional[str]        = None
-    cfd_margin_pct: Optional[float] = None
-    cfd_note: Optional[str]        = None
+    cfd_side: str | None = None
+    cfd_margin_pct: float | None = None
+    cfd_note: str | None = None
     if actionable:
-        cfd_leverage   = 5.0   # typical EU retail major-stock CFD cap (broker-dependent)
-        cfd_side       = "Buy" if direction == "Long" else "Sell"
+        cfd_leverage = 5.0  # typical EU retail major-stock CFD cap (broker-dependent)
+        cfd_side = "Buy" if direction == "Long" else "Sell"
         cfd_margin_pct = round(100.0 / cfd_leverage, 1)
         cfd_note = (
             f"Place as a {cfd_side} CFD — same stop & targets. At {cfd_leverage:.0f}:1, "
@@ -410,11 +409,9 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
     # Cap at 50% so a very tight stop doesn't suggest an outsized allocation. A
     # non-actionable setup suggests 0% — we don't size a trade we're not endorsing.
     entry_mid_final = (entry_low + entry_high) / 2
-    risk_ps  = round(max(abs(entry_mid_final - stop_loss), 0.01), 4)
+    risk_ps = round(max(abs(entry_mid_final - stop_loss), 0.01), 4)
     risk_pct_val = round(risk_ps / entry_mid_final * 100, 2)
-    suggested_pct = (
-        round(min(1.0 / (risk_pct_val / 100), 50.0), 1) if actionable else 0.0
-    )
+    suggested_pct = round(min(1.0 / (risk_pct_val / 100), 50.0), 1) if actionable else 0.0
 
     return TradeSetupResponse(
         entry_low=entry_low,
@@ -445,6 +442,7 @@ async def trade_setup(request: Request, req: TradeSetupRequest, _user: str = Dep
 # ---------------------------------------------------------------------------
 # Day-trade setup endpoint (intraday ORB + VWAP)
 # ---------------------------------------------------------------------------
+
 
 class DayTradeSetupRequest(BaseModel):
     symbol: str
@@ -487,10 +485,11 @@ async def day_trade_setup(
 # Chat SSE endpoint
 # ---------------------------------------------------------------------------
 
+
 class ChatRequest(BaseModel):
     message: str = Field(..., max_length=500)
     context: dict = {}
-    history: List[dict] = []
+    history: list[dict] = []
 
 
 def build_chat_system_prompt(ctx: dict) -> str:
@@ -503,25 +502,25 @@ def build_chat_system_prompt(ctx: dict) -> str:
     / data-fabrication requests. ``symbol`` falls back to the ``N/A`` sentinel when
     it fails the safe-tag regex.
     """
-    symbol        = _safe_ctx_value(ctx.get("symbol",         "N/A"), 15)
-    current_price = _safe_ctx_value(ctx.get("currentPrice",  "N/A"), 30)
-    rsi_val       = _safe_ctx_value(ctx.get("rsi",            "N/A"), 20)
-    trend_val     = _safe_ctx_value(ctx.get("trend",          "N/A"), 20)
-    jury_summary  = _safe_ctx_value(ctx.get("jury_summary",   "N/A"), 200)
-    sentiment     = _safe_ctx_value(ctx.get("sentiment_label","N/A"), 20)
-    headlines     = _safe_ctx_value(ctx.get("headlines",      "N/A"), 400)
+    symbol = _safe_ctx_value(ctx.get("symbol", "N/A"), 15)
+    current_price = _safe_ctx_value(ctx.get("currentPrice", "N/A"), 30)
+    rsi_val = _safe_ctx_value(ctx.get("rsi", "N/A"), 20)
+    trend_val = _safe_ctx_value(ctx.get("trend", "N/A"), 20)
+    jury_summary = _safe_ctx_value(ctx.get("jury_summary", "N/A"), 200)
+    sentiment = _safe_ctx_value(ctx.get("sentiment_label", "N/A"), 20)
+    headlines = _safe_ctx_value(ctx.get("headlines", "N/A"), 400)
     # Chart / technical context (Feature 14/16/25) — lets the assistant explain
     # the overlays the user is actually looking at (Fibonacci, S/R, MAs, MACD,
     # Bollinger, ATR, the 48h forecast band, regime) instead of refusing.
-    forecast      = _safe_ctx_value(ctx.get("forecast",       "N/A"), 120)
-    support       = _safe_ctx_value(ctx.get("support",        "N/A"), 120)
-    resistance    = _safe_ctx_value(ctx.get("resistance",     "N/A"), 120)
-    fibonacci     = _safe_ctx_value(ctx.get("fibonacci",      "N/A"), 220)
-    moving_avgs   = _safe_ctx_value(ctx.get("moving_averages","N/A"), 160)
-    macd_val      = _safe_ctx_value(ctx.get("macd",           "N/A"), 80)
-    bollinger     = _safe_ctx_value(ctx.get("bollinger",      "N/A"), 100)
-    atr_val       = _safe_ctx_value(ctx.get("atr_14",         "N/A"), 30)
-    regime_val    = _safe_ctx_value(ctx.get("regime",         "N/A"), 40)
+    forecast = _safe_ctx_value(ctx.get("forecast", "N/A"), 120)
+    support = _safe_ctx_value(ctx.get("support", "N/A"), 120)
+    resistance = _safe_ctx_value(ctx.get("resistance", "N/A"), 120)
+    fibonacci = _safe_ctx_value(ctx.get("fibonacci", "N/A"), 220)
+    moving_avgs = _safe_ctx_value(ctx.get("moving_averages", "N/A"), 160)
+    macd_val = _safe_ctx_value(ctx.get("macd", "N/A"), 80)
+    bollinger = _safe_ctx_value(ctx.get("bollinger", "N/A"), 100)
+    atr_val = _safe_ctx_value(ctx.get("atr_14", "N/A"), 30)
+    regime_val = _safe_ctx_value(ctx.get("regime", "N/A"), 40)
 
     # Validate symbol — allow the explicit "N/A" sentinel; reject anything else
     # that doesn't match the safe-tag regex. The old `replace("N/A","AAPL")` trick
@@ -578,7 +577,7 @@ async def chat_endpoint(request: Request, req: ChatRequest):
     async def generate():
         system = build_chat_system_prompt(req.context)
 
-        messages: List[dict] = [{"role": "system", "content": system}]
+        messages: list[dict] = [{"role": "system", "content": system}]
         for msg in req.history[-10:]:
             if msg.get("role") in ("user", "assistant") and msg.get("content"):
                 messages.append({"role": msg["role"], "content": msg["content"]})
@@ -599,7 +598,7 @@ async def chat_endpoint(request: Request, req: ChatRequest):
         }
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:  # noqa: SIM117 - inner stream needs `client`
                 async with client.stream(
                     "POST",
                     "https://api.groq.com/openai/v1/chat/completions",
@@ -611,7 +610,9 @@ async def chat_endpoint(request: Request, req: ChatRequest):
                 ) as response:
                     if response.status_code != 200:
                         body = await response.aread()
-                        logger.warning("[CHAT] Groq returned %s: %s", response.status_code, body[:200])
+                        logger.warning(
+                            "[CHAT] Groq returned %s: %s", response.status_code, body[:200]
+                        )
                         yield "data: [ERROR] Service temporarily unavailable\n\n"
                         return
                     async for line in response.aiter_lines():

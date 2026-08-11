@@ -2,10 +2,10 @@
 Security hardening tests — auth enforcement, input validation, rate limiting.
 Uses a fresh FastAPI app (no dependency overrides) to verify actual security behaviour.
 """
-from typing import Any, Dict
-from unittest.mock import AsyncMock, patch
 
 import importlib as _il
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -14,7 +14,8 @@ from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from backend.routers import predict, trade, market
+from backend.routers import market, predict, trade
+
 # Use bare module path to match the identity used by router imports.
 _deps = _il.import_module("dependencies")
 limiter = _deps.limiter
@@ -24,10 +25,13 @@ limiter = _deps.limiter
 # App WITHOUT dependency overrides — auth is enforced for real
 # ---------------------------------------------------------------------------
 
+
 def _make_rate_handler(app):
     async def _handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
-        return JSONResponse({"detail": "rate limited"}, status_code=429,
-                            headers={"Retry-After": "60"})
+        return JSONResponse(
+            {"detail": "rate limited"}, status_code=429, headers={"Retry-After": "60"}
+        )
+
     return _handler
 
 
@@ -41,16 +45,16 @@ _sec_app.include_router(market.router)
 _sec_client = TestClient(_sec_app, raise_server_exceptions=False)
 
 
-def _trade_payload(**overrides: Any) -> Dict[str, Any]:
-    base: Dict[str, Any] = {
-        "symbol":          "AAPL",
-        "current_price":   150.0,
-        "high_range":      165.0,
-        "low_range":       135.0,
-        "rsi":             35.0,
-        "support":         [148.0, 144.0],
-        "resistance":      [155.0, 162.0],
-        "trend":           "Bullish",
+def _trade_payload(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "symbol": "AAPL",
+        "current_price": 150.0,
+        "high_range": 165.0,
+        "low_range": 135.0,
+        "rsi": 35.0,
+        "support": [148.0, 144.0],
+        "resistance": [155.0, 162.0],
+        "trend": "Bullish",
         "sentiment_label": "Bullish",
     }
     base.update(overrides)
@@ -60,6 +64,7 @@ def _trade_payload(**overrides: Any) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Auth enforcement
 # ---------------------------------------------------------------------------
+
 
 def test_trade_setup_requires_auth() -> None:
     """POST /trade-setup without a Bearer token must return 401."""
@@ -81,13 +86,18 @@ def test_jury_reanalyze_no_tools_allows_anon() -> None:
     feature before it moved on-demand). Without cached context it returns 409 —
     crucially NOT 401, proving the auth gate doesn't block the anonymous path."""
     resp = _sec_client.post("/jury/reanalyze", json={"symbol": "AAPL", "use_tools": False})
-    assert resp.status_code != 401, f"Anon no-tools run must not 401, got {resp.status_code}: {resp.text}"
-    assert resp.status_code == 409, f"Expected 409 (no cached context), got {resp.status_code}: {resp.text}"
+    assert resp.status_code != 401, (
+        f"Anon no-tools run must not 401, got {resp.status_code}: {resp.text}"
+    )
+    assert resp.status_code == 409, (
+        f"Expected 409 (no cached context), got {resp.status_code}: {resp.text}"
+    )
 
 
 # ---------------------------------------------------------------------------
 # Symbol validation
 # ---------------------------------------------------------------------------
+
 
 def test_predict_rejects_invalid_symbol() -> None:
     """POST /predict with a shell-injection-style symbol must return 422."""
@@ -106,7 +116,9 @@ def test_predict_accepts_valid_symbols() -> None:
     # We don't expect 422 — any other error (500, 404) means validation passed.
     valid_symbols = ["AAPL", "BRK.B", "BTC-USD", "AAPL:NASDAQ"]
     for sym in valid_symbols:
-        with patch("backend.routers.predict._predict_inner", new=AsyncMock(side_effect=Exception("mocked"))):
+        with patch(
+            "backend.routers.predict._predict_inner", new=AsyncMock(side_effect=Exception("mocked"))
+        ):
             resp = _sec_client.post("/predict", json={"data": sym})
         assert resp.status_code != 422, f"Symbol {sym!r} was incorrectly rejected with 422"
 
@@ -126,13 +138,17 @@ def test_options_rejects_invalid_symbol() -> None:
 # Chat input validation
 # ---------------------------------------------------------------------------
 
+
 def test_chat_rejects_oversized_message() -> None:
     """POST /chat with message > 500 chars must return 422."""
-    resp = _sec_client.post("/chat", json={
-        "message": "x" * 501,
-        "context": {},
-        "history": [],
-    })
+    resp = _sec_client.post(
+        "/chat",
+        json={
+            "message": "x" * 501,
+            "context": {},
+            "history": [],
+        },
+    )
     assert resp.status_code == 422, f"Expected 422, got {resp.status_code}: {resp.text}"
 
 
@@ -149,11 +165,14 @@ def test_chat_accepts_500_char_message() -> None:
         mock_cm.__aexit__ = AsyncMock(return_value=False)
         mock_stream.return_value = mock_cm
 
-        resp = _sec_client.post("/chat", json={
-            "message": "x" * 500,
-            "context": {"symbol": "AAPL"},
-            "history": [],
-        })
+        resp = _sec_client.post(
+            "/chat",
+            json={
+                "message": "x" * 500,
+                "context": {"symbol": "AAPL"},
+                "history": [],
+            },
+        )
     # Not 422 means validation passed
     assert resp.status_code != 422, "500-char message was incorrectly rejected"
 
@@ -161,6 +180,7 @@ def test_chat_accepts_500_char_message() -> None:
 # ---------------------------------------------------------------------------
 # Rate limiting infrastructure
 # ---------------------------------------------------------------------------
+
 
 def test_rate_limit_returns_429_and_retry_after() -> None:
     """The rate limit infrastructure must return 429 + Retry-After."""
@@ -172,8 +192,9 @@ def test_rate_limit_returns_429_and_retry_after() -> None:
     async def _rl_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
         retry = getattr(exc, "retry_after", None)
         headers = {"Retry-After": str(int(retry))} if retry else {"Retry-After": "60"}
-        return JSONResponse({"detail": "Too many requests — please slow down."},
-                            status_code=429, headers=headers)
+        return JSONResponse(
+            {"detail": "Too many requests — please slow down."}, status_code=429, headers=headers
+        )
 
     _rl_app.add_exception_handler(RateLimitExceeded, _rl_handler)
 

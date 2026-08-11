@@ -16,32 +16,54 @@ Endpoints:
   GET    /portfolio/summary        — live P&L, sector allocation, diversification,
                                      portfolio forecast (Redis-cached 15 min)
 """
+
 import logging
 import re
-
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import BaseModel, field_validator
 
 import portfolio_service
 import supabase_rest
 from config import Config
-from dependencies import limiter, require_user, yf_svc, _user_rate_key
+from dependencies import _user_rate_key, limiter, require_user, yf_svc
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from pydantic import BaseModel, field_validator
 from redis_cache import cache_get, cache_set
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-:]{1,15}$")
-_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 _SUMMARY_TTL = 900  # 15 minutes
 
 # Mirrors the CHECK constraint in supabase/migrations/0002_holdings_currency.sql.
 # GBp = London Stock Exchange pence (yfinance native unit for LSE tickers).
-_ALLOWED_CURRENCIES = frozenset({
-    "USD", "GBP", "GBp", "CAD", "AUD", "INR", "EUR", "JPY",
-    "HKD", "SGD", "CHF", "SEK", "NOK", "DKK", "NZD", "ZAR",
-    "BRL", "MXN", "KRW", "TWD", "CNY",
-})
+_ALLOWED_CURRENCIES = frozenset(
+    {
+        "USD",
+        "GBP",
+        "GBp",
+        "CAD",
+        "AUD",
+        "INR",
+        "EUR",
+        "JPY",
+        "HKD",
+        "SGD",
+        "CHF",
+        "SEK",
+        "NOK",
+        "DKK",
+        "NZD",
+        "ZAR",
+        "BRL",
+        "MXN",
+        "KRW",
+        "TWD",
+        "CNY",
+    }
+)
 
 
 def _bearer(authorization: str) -> str:
@@ -56,7 +78,9 @@ def _summary_cache_key(user_id: str) -> str:
 def _handle_store_error(exc: Exception) -> HTTPException:
     """Map Supabase helper errors to clean HTTP errors (no traceback leakage)."""
     if isinstance(exc, supabase_rest.SupabaseConfigError):
-        logger.error("[PORTFOLIO] Supabase not configured — SUPABASE_URL / SUPABASE_ANON_KEY missing.")
+        logger.error(
+            "[PORTFOLIO] Supabase not configured — SUPABASE_URL / SUPABASE_ANON_KEY missing."
+        )
         return HTTPException(status_code=503, detail="Portfolio storage is not configured.")
     if isinstance(exc, supabase_rest.SupabaseRestError):
         # Status 0 = network / connection error (httpx.HTTPError wrapped by supabase_rest).
@@ -66,7 +90,8 @@ def _handle_store_error(exc: Exception) -> HTTPException:
             "[PORTFOLIO] Supabase REST error (HTTP %s): %s — "
             "if HTTP 404/42P01, the holdings migration may not have been applied; "
             "if HTTP 0, the backend cannot reach SUPABASE_URL.",
-            exc.status_code, exc,
+            exc.status_code,
+            exc,
         )
         return HTTPException(status_code=502, detail="Could not reach the holdings store.")
     logger.error("[PORTFOLIO] unexpected store error: %s", exc)
@@ -76,6 +101,7 @@ def _handle_store_error(exc: Exception) -> HTTPException:
 # ---------------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------------
+
 
 class HoldingCreate(BaseModel):
     symbol: str
@@ -111,8 +137,7 @@ class HoldingCreate(BaseModel):
         v = (v or "USD").strip()
         if v not in _ALLOWED_CURRENCIES:
             raise ValueError(
-                f"Unsupported currency '{v}'. "
-                f"Allowed: {', '.join(sorted(_ALLOWED_CURRENCIES))}"
+                f"Unsupported currency '{v}'. Allowed: {', '.join(sorted(_ALLOWED_CURRENCIES))}"
             )
         return v
 
@@ -120,6 +145,7 @@ class HoldingCreate(BaseModel):
 # ---------------------------------------------------------------------------
 # Holdings CRUD
 # ---------------------------------------------------------------------------
+
 
 @router.get("/portfolio/holdings")
 @limiter.limit(lambda: Config.RATE_LIMIT_PORTFOLIO, key_func=_user_rate_key)
@@ -178,6 +204,7 @@ async def delete_holding(
 # Summary
 # ---------------------------------------------------------------------------
 
+
 @router.get("/portfolio/summary")
 @limiter.limit(lambda: Config.RATE_LIMIT_PORTFOLIO_SUMMARY, key_func=_user_rate_key)
 async def portfolio_summary(
@@ -210,6 +237,7 @@ async def _invalidate_summary(user_id: str) -> None:
     """Drop the cached summary so the next read reflects the mutation."""
     try:
         from redis_cache import get_redis
+
         r = get_redis()
         if r is not None:
             await r.delete(_summary_cache_key(user_id))

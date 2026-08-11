@@ -20,11 +20,11 @@ All functions raise SupabaseConfigError when the required URL/key is unset, and
 SupabaseRestError on a non-2xx PostgREST response (reused from supabase_rest so
 routers translate both into clean HTTP errors — tracebacks never reach clients).
 """
+
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
-
 from config import Config
 from supabase_rest import SupabaseConfigError, SupabaseRestError
 
@@ -37,16 +37,16 @@ _TIMEOUT = 8.0
 # Low-level request helper (shared by user + service-role modes)
 # ---------------------------------------------------------------------------
 
+
 def _rest_url(table: str) -> str:
     if not Config.SUPABASE_URL:
         raise SupabaseConfigError(
-            "Supabase is not configured (SUPABASE_URL missing). "
-            "Alerts require a Supabase project."
+            "Supabase is not configured (SUPABASE_URL missing). Alerts require a Supabase project."
         )
     return f"{Config.SUPABASE_URL.rstrip('/')}/rest/v1/{table}"
 
 
-def _user_headers(user_jwt: str, *, prefer: Optional[str] = None) -> Dict[str, str]:
+def _user_headers(user_jwt: str, *, prefer: str | None = None) -> dict[str, str]:
     if not Config.SUPABASE_ANON_KEY:
         raise SupabaseConfigError(
             "Supabase is not configured (SUPABASE_ANON_KEY missing). "
@@ -63,7 +63,7 @@ def _user_headers(user_jwt: str, *, prefer: Optional[str] = None) -> Dict[str, s
     return headers
 
 
-def _admin_headers(*, prefer: Optional[str] = None) -> Dict[str, str]:
+def _admin_headers(*, prefer: str | None = None) -> dict[str, str]:
     key = Config.SUPABASE_SERVICE_ROLE_KEY
     if not key or not Config.SUPABASE_URL:
         raise SupabaseConfigError(
@@ -93,8 +93,8 @@ async def _request(
     method: str,
     table: str,
     *,
-    headers: Dict[str, str],
-    params: Optional[Dict[str, str]] = None,
+    headers: dict[str, str],
+    params: dict[str, str] | None = None,
     json_body: Any = None,
     ok_codes: tuple = (200, 201, 204),
 ) -> Any:
@@ -109,7 +109,10 @@ async def _request(
         logger.error(
             "[ALERTS] %s %s: PostgREST returned HTTP %s — body: %s "
             "(check the 0003_alerts / 0004_push_subscriptions migrations are applied).",
-            method, table, resp.status_code, _safe_body(resp),
+            method,
+            table,
+            resp.status_code,
+            _safe_body(resp),
         )
         raise SupabaseRestError(resp.status_code, _safe_body(resp))
     if resp.status_code == 204 or not resp.content:
@@ -127,10 +130,11 @@ async def _request(
 _RULE_COLS = "id,symbol,type,operator,threshold,active,last_fired,created_at"
 
 
-async def list_rules(user_jwt: str) -> List[Dict[str, Any]]:
+async def list_rules(user_jwt: str) -> list[dict[str, Any]]:
     """The authenticated user's alert rules, newest first (RLS-scoped)."""
     rows = await _request(
-        "GET", "alert_rules",
+        "GET",
+        "alert_rules",
         headers=_user_headers(user_jwt),
         params={"select": _RULE_COLS, "order": "created_at.desc"},
         ok_codes=(200,),
@@ -142,10 +146,10 @@ async def create_rule(
     user_jwt: str,
     symbol: str,
     rule_type: str,
-    operator: Optional[str],
-    threshold: Optional[float],
+    operator: str | None,
+    threshold: float | None,
     active: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Insert a new rule. user_id is filled by the column default auth.uid()."""
     payload = {
         "symbol": symbol,
@@ -155,7 +159,8 @@ async def create_rule(
         "active": active,
     }
     rows = await _request(
-        "POST", "alert_rules",
+        "POST",
+        "alert_rules",
         headers=_user_headers(user_jwt, prefer="return=representation"),
         json_body=payload,
         ok_codes=(200, 201),
@@ -165,13 +170,14 @@ async def create_rule(
     return rows if isinstance(rows, dict) else {}
 
 
-async def update_rule(user_jwt: str, rule_id: str, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def update_rule(user_jwt: str, rule_id: str, fields: dict[str, Any]) -> dict[str, Any] | None:
     """Patch a rule (e.g. toggle `active`). RLS guarantees ownership.
 
     Returns the updated row, or None when nothing matched (wrong id / RLS-hidden).
     """
     rows = await _request(
-        "PATCH", "alert_rules",
+        "PATCH",
+        "alert_rules",
         headers=_user_headers(user_jwt, prefer="return=representation"),
         params={"id": f"eq.{rule_id}"},
         json_body=fields,
@@ -188,7 +194,8 @@ async def delete_rule(user_jwt: str, rule_id: str) -> bool:
     Returns True when a row was removed, False when nothing matched.
     """
     rows = await _request(
-        "DELETE", "alert_rules",
+        "DELETE",
+        "alert_rules",
         headers=_user_headers(user_jwt, prefer="return=representation"),
         params={"id": f"eq.{rule_id}"},
         ok_codes=(200, 204),
@@ -196,11 +203,12 @@ async def delete_rule(user_jwt: str, rule_id: str) -> bool:
     return bool(rows)
 
 
-async def list_fires(user_jwt: str, limit: int = 50) -> List[Dict[str, Any]]:
+async def list_fires(user_jwt: str, limit: int = 50) -> list[dict[str, Any]]:
     """The authenticated user's recent fire history (RLS-scoped)."""
     limit = max(1, min(int(limit), 200))
     rows = await _request(
-        "GET", "alert_fires",
+        "GET",
+        "alert_fires",
         headers=_user_headers(user_jwt),
         params={
             "select": "id,rule_id,symbol,type,message,value,fired_at",
@@ -216,16 +224,16 @@ async def list_fires(user_jwt: str, limit: int = 50) -> List[Dict[str, Any]]:
 # User mode (RLS) — push_subscriptions
 # ---------------------------------------------------------------------------
 
+
 async def upsert_push_subscription(
     user_jwt: str, endpoint: str, p256dh: str, auth_key: str
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Store (or refresh) a browser Web-Push subscription, upserting on endpoint."""
     payload = {"endpoint": endpoint, "p256dh": p256dh, "auth": auth_key}
     rows = await _request(
-        "POST", "push_subscriptions",
-        headers=_user_headers(
-            user_jwt, prefer="resolution=merge-duplicates,return=representation"
-        ),
+        "POST",
+        "push_subscriptions",
+        headers=_user_headers(user_jwt, prefer="resolution=merge-duplicates,return=representation"),
         params={"on_conflict": "endpoint"},
         json_body=payload,
         ok_codes=(200, 201),
@@ -238,7 +246,8 @@ async def upsert_push_subscription(
 async def delete_push_subscription(user_jwt: str, endpoint: str) -> bool:
     """Remove a subscription by endpoint (RLS-scoped to the owner)."""
     rows = await _request(
-        "DELETE", "push_subscriptions",
+        "DELETE",
+        "push_subscriptions",
         headers=_user_headers(user_jwt, prefer="return=representation"),
         params={"endpoint": f"eq.{endpoint}"},
         ok_codes=(200, 204),
@@ -250,10 +259,12 @@ async def delete_push_subscription(user_jwt: str, endpoint: str) -> bool:
 # Service-role (admin) mode — evaluator only. Bypasses RLS.
 # ---------------------------------------------------------------------------
 
-async def admin_list_active_rules() -> List[Dict[str, Any]]:
+
+async def admin_list_active_rules() -> list[dict[str, Any]]:
     """All active rules across ALL users — the evaluator's input set."""
     rows = await _request(
-        "GET", "alert_rules",
+        "GET",
+        "alert_rules",
         headers=_admin_headers(),
         params={
             "select": "id,user_id,symbol,type,operator,threshold,last_fired",
@@ -270,7 +281,7 @@ async def admin_record_fire(
     symbol: str,
     rule_type: str,
     message: str,
-    value: Optional[float],
+    value: float | None,
 ) -> None:
     """Insert a fire row attributed to the rule's owner (service-role)."""
     payload = {
@@ -282,7 +293,8 @@ async def admin_record_fire(
         "value": value,
     }
     await _request(
-        "POST", "alert_fires",
+        "POST",
+        "alert_fires",
         headers=_admin_headers(prefer="return=minimal"),
         json_body=payload,
         ok_codes=(200, 201, 204),
@@ -292,7 +304,8 @@ async def admin_record_fire(
 async def admin_update_last_fired(rule_id: str, fired_at_iso: str) -> None:
     """Stamp last_fired so the cooldown window starts (service-role)."""
     await _request(
-        "PATCH", "alert_rules",
+        "PATCH",
+        "alert_rules",
         headers=_admin_headers(prefer="return=minimal"),
         params={"id": f"eq.{rule_id}"},
         json_body={"last_fired": fired_at_iso},
@@ -300,10 +313,11 @@ async def admin_update_last_fired(rule_id: str, fired_at_iso: str) -> None:
     )
 
 
-async def admin_list_push_subscriptions(user_id: str) -> List[Dict[str, Any]]:
+async def admin_list_push_subscriptions(user_id: str) -> list[dict[str, Any]]:
     """A user's push subscriptions (service-role, for delivery)."""
     rows = await _request(
-        "GET", "push_subscriptions",
+        "GET",
+        "push_subscriptions",
         headers=_admin_headers(),
         params={"select": "id,endpoint,p256dh,auth", "user_id": f"eq.{user_id}"},
         ok_codes=(200,),
@@ -311,10 +325,11 @@ async def admin_list_push_subscriptions(user_id: str) -> List[Dict[str, Any]]:
     return rows if isinstance(rows, list) else []
 
 
-async def admin_list_all_push_subscriptions() -> List[Dict[str, Any]]:
+async def admin_list_all_push_subscriptions() -> list[dict[str, Any]]:
     """Every push subscription across users (service-role, for the daily digest)."""
     rows = await _request(
-        "GET", "push_subscriptions",
+        "GET",
+        "push_subscriptions",
         headers=_admin_headers(),
         params={"select": "id,user_id,endpoint,p256dh,auth"},
         ok_codes=(200,),
@@ -325,17 +340,19 @@ async def admin_list_all_push_subscriptions() -> List[Dict[str, Any]]:
 async def admin_delete_push_subscription(endpoint: str) -> None:
     """Remove a dead subscription (Push Service returned 404/410 Gone)."""
     await _request(
-        "DELETE", "push_subscriptions",
+        "DELETE",
+        "push_subscriptions",
         headers=_admin_headers(prefer="return=minimal"),
         params={"endpoint": f"eq.{endpoint}"},
         ok_codes=(200, 204),
     )
 
 
-async def admin_list_holdings(user_id: str) -> List[Dict[str, Any]]:
+async def admin_list_holdings(user_id: str) -> list[dict[str, Any]]:
     """A user's holdings (service-role) — used to compute digest movers."""
     rows = await _request(
-        "GET", "holdings",
+        "GET",
+        "holdings",
         headers=_admin_headers(),
         params={"select": "symbol,shares,cost_basis,currency", "user_id": f"eq.{user_id}"},
         ok_codes=(200,),
@@ -343,7 +360,7 @@ async def admin_list_holdings(user_id: str) -> List[Dict[str, Any]]:
     return rows if isinstance(rows, list) else []
 
 
-async def admin_get_user_email(user_id: str) -> Optional[str]:
+async def admin_get_user_email(user_id: str) -> str | None:
     """Look up a user's email via the Supabase Auth admin API (service-role).
 
     Only used by the optional email channel. Returns None on any failure so

@@ -21,14 +21,26 @@ import httpx
 #   5 large-cap tech, 2 finance, 2 healthcare, 2 energy,
 #   3 consumer, 2 industrial, 2 ETFs, 2 high-volatility
 TICKERS = [
-    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN",   # tech
-    "JPM", "GS",                                  # finance
-    "JNJ", "PFE",                                  # healthcare
-    "XOM", "CVX",                                  # energy
-    "MCD", "KO", "WMT",                           # consumer
-    "CAT", "BA",                                   # industrial
-    "SPY", "QQQ",                                  # ETFs
-    "TSLA", "COIN",                                # volatile
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "GOOGL",
+    "AMZN",  # tech
+    "JPM",
+    "GS",  # finance
+    "JNJ",
+    "PFE",  # healthcare
+    "XOM",
+    "CVX",  # energy
+    "MCD",
+    "KO",
+    "WMT",  # consumer
+    "CAT",
+    "BA",  # industrial
+    "SPY",
+    "QQQ",  # ETFs
+    "TSLA",
+    "COIN",  # volatile
 ]
 
 
@@ -107,7 +119,11 @@ def main() -> None:
                     msg = resp.text[:80] if resp.text else "no body"
                     last_err = f"HTTP {resp.status_code}: {msg}"
                     backoff = 2 ** (attempt - 1)
-                    print(f"retry {attempt}/{args.max_retries - 1} after {backoff}s ({resp.status_code}) ... ", end="", flush=True)
+                    print(
+                        f"retry {attempt}/{args.max_retries - 1} after {backoff}s ({resp.status_code}) ... ",
+                        end="",
+                        flush=True,
+                    )
                     time.sleep(backoff)
                     continue
                 else:
@@ -122,7 +138,11 @@ def main() -> None:
                 last_err = str(e)
                 if attempt < args.max_retries:
                     backoff = 2 ** (attempt - 1)
-                    print(f"retry {attempt}/{args.max_retries - 1} after {backoff}s ({e.__class__.__name__}) ... ", end="", flush=True)
+                    print(
+                        f"retry {attempt}/{args.max_retries - 1} after {backoff}s ({e.__class__.__name__}) ... ",
+                        end="",
+                        flush=True,
+                    )
                     time.sleep(backoff)
                     continue
                 # Final attempt exhausted

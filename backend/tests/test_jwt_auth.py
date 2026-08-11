@@ -5,6 +5,7 @@ JWT verification tests for get_user_id — covers both Supabase signing schemes:
     rejected every ES256 token, 401-ing all authed endpoints after sign-in).
   - HS256 (legacy shared secret).
 """
+
 import importlib as _il
 
 import jwt
@@ -34,6 +35,7 @@ class _FakeSigningKey:
 
 class _FakeJWKSClient:
     """Stand-in for PyJWKClient that returns a fixed public key."""
+
     def __init__(self, public_key: object) -> None:
         self._public_key = public_key
 

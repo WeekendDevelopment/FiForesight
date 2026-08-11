@@ -2,6 +2,9 @@
 Fibonacci retracement helper tests (F25) — calculate_fibonacci_levels.
 Pure unit tests, no network. Mirrors test_regime.py / test_screener.py style.
 """
+
+import itertools
+
 from backend.models import calculate_fibonacci_levels
 
 _RATIOS = ["0.0", "0.236", "0.382", "0.5", "0.618", "0.786", "1.0"]
@@ -21,7 +24,7 @@ def test_levels_ordered_and_bounded():
     assert levels["1.0"] == fib["swing_low"] == 10.0
     # Level prices are monotonically decreasing from 0.0 → 1.0.
     ordered = [levels[r] for r in _RATIOS]
-    assert all(a > b for a, b in zip(ordered, ordered[1:]))
+    assert all(a > b for a, b in itertools.pairwise(ordered))
 
 
 def test_direction_up_when_low_precedes_high():

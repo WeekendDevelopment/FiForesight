@@ -3,9 +3,10 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Callable
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
-from typing import Any, Callable, Dict, List, Optional
 
 import yfinance as yf
 
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 # ── Rate-limit guard ──────────────────────────────────────────────────────────
 # Caps concurrent yfinance HTTP calls. Prevents Yahoo Finance 429s when many
 # tickers or ETFs are fetched in parallel during simulation setup.
-_YF_SEM: Optional[asyncio.Semaphore] = None
+_YF_SEM: asyncio.Semaphore | None = None
 
 
 def _yf_sem() -> asyncio.Semaphore:
@@ -29,71 +30,71 @@ def _yf_sem() -> asyncio.Semaphore:
 # ETF compositions reflect real market state at query time — top holdings
 # change as constituents are added/removed, so this stays current without
 # manual curation.  Conservative = large-cap stable; Aggressive = thematic/growth.
-SECTOR_ETF_MAP: Dict[str, Dict[str, List[str]]] = {
+SECTOR_ETF_MAP: dict[str, dict[str, list[str]]] = {
     "Technology": {
         "conservative": ["XLK"],
-        "moderate":     ["XLK", "VGT"],
-        "aggressive":   ["ARKW", "WCLD"],
+        "moderate": ["XLK", "VGT"],
+        "aggressive": ["ARKW", "WCLD"],
     },
     "Healthcare": {
         "conservative": ["XLV"],
-        "moderate":     ["XLV", "VHT"],
-        "aggressive":   ["ARKG"],
+        "moderate": ["XLV", "VHT"],
+        "aggressive": ["ARKG"],
     },
     "Finance": {
         "conservative": ["XLF"],
-        "moderate":     ["XLF", "KBE"],
-        "aggressive":   ["KBWB", "FINX"],
+        "moderate": ["XLF", "KBE"],
+        "aggressive": ["KBWB", "FINX"],
     },
     "Energy": {
         "conservative": ["XLE"],
-        "moderate":     ["XLE", "ICLN"],
-        "aggressive":   ["XOP", "TAN"],
+        "moderate": ["XLE", "ICLN"],
+        "aggressive": ["XOP", "TAN"],
     },
     "Consumer": {
         "conservative": ["XLP"],
-        "moderate":     ["XLY", "VCR"],
-        "aggressive":   ["FDIS", "IBUY"],
+        "moderate": ["XLY", "VCR"],
+        "aggressive": ["FDIS", "IBUY"],
     },
     "Industrial": {
         "conservative": ["XLI"],
-        "moderate":     ["XLI", "VIS"],
-        "aggressive":   ["ROKT", "DRIV"],
+        "moderate": ["XLI", "VIS"],
+        "aggressive": ["ROKT", "DRIV"],
     },
 }
 
 # ── Static fallback pool ──────────────────────────────────────────────────────
 # Used only when all ETF holdings fetches fail (network down, API change, etc.)
-SECTOR_POOL: Dict[str, Dict[str, List[str]]] = {
+SECTOR_POOL: dict[str, dict[str, list[str]]] = {
     "Technology": {
         "conservative": ["MSFT", "AAPL", "GOOGL"],
-        "moderate":     ["MSFT", "AAPL", "NVDA", "META", "GOOGL"],
-        "aggressive":   ["NVDA", "AMD", "META", "PLTR", "SMCI"],
+        "moderate": ["MSFT", "AAPL", "NVDA", "META", "GOOGL"],
+        "aggressive": ["NVDA", "AMD", "META", "PLTR", "SMCI"],
     },
     "Healthcare": {
         "conservative": ["JNJ", "UNH", "ABT"],
-        "moderate":     ["UNH", "ABBV", "LLY", "PFE", "JNJ"],
-        "aggressive":   ["MRNA", "CRSP", "DXCM", "RXRX", "NVAX"],
+        "moderate": ["UNH", "ABBV", "LLY", "PFE", "JNJ"],
+        "aggressive": ["MRNA", "CRSP", "DXCM", "RXRX", "NVAX"],
     },
     "Finance": {
         "conservative": ["JPM", "BRK-B", "V"],
-        "moderate":     ["JPM", "GS", "V", "MA", "BAC"],
-        "aggressive":   ["COIN", "HOOD", "SOFI", "SQ", "UPST"],
+        "moderate": ["JPM", "GS", "V", "MA", "BAC"],
+        "aggressive": ["COIN", "HOOD", "SOFI", "SQ", "UPST"],
     },
     "Energy": {
         "conservative": ["XOM", "CVX", "NEE"],
-        "moderate":     ["XOM", "CVX", "OXY", "FSLR", "NEE"],
-        "aggressive":   ["ENPH", "PLUG", "AR", "CHPT", "BLNK"],
+        "moderate": ["XOM", "CVX", "OXY", "FSLR", "NEE"],
+        "aggressive": ["ENPH", "PLUG", "AR", "CHPT", "BLNK"],
     },
     "Consumer": {
         "conservative": ["WMT", "PG", "KO"],
-        "moderate":     ["AMZN", "COST", "SBUX", "WMT", "NKE"],
-        "aggressive":   ["TSLA", "DKNG", "DASH", "LYFT", "ABNB"],
+        "moderate": ["AMZN", "COST", "SBUX", "WMT", "NKE"],
+        "aggressive": ["TSLA", "DKNG", "DASH", "LYFT", "ABNB"],
     },
     "Industrial": {
         "conservative": ["CAT", "DE", "HON"],
-        "moderate":     ["GE", "CAT", "BA", "DE", "HON"],
-        "aggressive":   ["RKLB", "JOBY", "ACHR", "IONQ", "SPCE"],
+        "moderate": ["GE", "CAT", "BA", "DE", "HON"],
+        "aggressive": ["RKLB", "JOBY", "ACHR", "IONQ", "SPCE"],
     },
 }
 
@@ -101,13 +102,14 @@ BENCHMARK_SYMBOL = "SPY"
 
 # 24-hour in-memory cache for ETF top-holdings.
 # A single process restart clears it; that's fine — one cold fetch per day per ETF.
-_ETF_HOLDINGS_CACHE: Dict[str, tuple] = {}  # etf_symbol -> ([tickers], fetched_unix_ts)
+_ETF_HOLDINGS_CACHE: dict[str, tuple] = {}  # etf_symbol -> ([tickers], fetched_unix_ts)
 _ETF_CACHE_TTL = 86_400  # seconds
 
 
 # ── ETF holdings fetcher ──────────────────────────────────────────────────────
 
-async def _fetch_etf_holdings(etf_symbol: str) -> List[str]:
+
+async def _fetch_etf_holdings(etf_symbol: str) -> list[str]:
     """
     Return the top holding tickers for an ETF, cached 24 h.
     Tries two yfinance strategies before giving up gracefully.
@@ -117,7 +119,7 @@ async def _fetch_etf_holdings(etf_symbol: str) -> List[str]:
         logger.debug("[SIM] ETF cache hit: %s (%d symbols)", etf_symbol, len(cached[0]))
         return cached[0]
 
-    symbols: List[str] = []
+    symbols: list[str] = []
     try:
         async with _yf_sem():
             ticker = yf.Ticker(etf_symbol)
@@ -146,11 +148,9 @@ async def _fetch_etf_holdings(etf_symbol: str) -> List[str]:
     except Exception as exc:
         logger.warning("[SIM] _fetch_etf_holdings(%s) outer error: %s", etf_symbol, exc)
 
-    symbols = [
-        str(s).upper().strip()
-        for s in symbols
-        if s and str(s).strip() not in ("", "nan")
-    ][:20]
+    symbols = [str(s).upper().strip() for s in symbols if s and str(s).strip() not in ("", "nan")][
+        :20
+    ]
 
     if symbols:
         _ETF_HOLDINGS_CACHE[etf_symbol] = (symbols, time.time())
@@ -163,11 +163,12 @@ async def _fetch_etf_holdings(etf_symbol: str) -> List[str]:
 
 # ── Candidate pool builder ────────────────────────────────────────────────────
 
+
 async def _build_candidate_pool(
-    sectors: List[str],
+    sectors: list[str],
     risk_level: str,
     max_candidates: int = 15,
-) -> tuple[List[str], str]:
+) -> tuple[list[str], str]:
     """
     Tier-1 (dynamic): per-sector ETF top-holdings — time-appropriate, cache-backed.
     Tier-2 (static):  per-sector SECTOR_POOL fallback for sectors whose ETF
@@ -177,19 +178,19 @@ async def _build_candidate_pool(
     or 'mixed' when some sectors resolved dynamically and others fell back.
     """
     # Collect per-sector ETF lists, deduped but order-preserving.
-    sector_etfs: Dict[str, List[str]] = {}
+    sector_etfs: dict[str, list[str]] = {}
     for sector in sectors:
         sector_map = SECTOR_ETF_MAP.get(sector, {})
         sector_etfs[sector] = list(sector_map.get(risk_level, sector_map.get("moderate", [])))
 
     # Fetch all unique ETFs once, then stitch back per-sector.
-    unique_etfs: List[str] = []
+    unique_etfs: list[str] = []
     for etfs in sector_etfs.values():
         for etf in etfs:
             if etf not in unique_etfs:
                 unique_etfs.append(etf)
 
-    etf_holdings: Dict[str, List[str]] = {}
+    etf_holdings: dict[str, list[str]] = {}
     if unique_etfs:
         results = await asyncio.gather(
             *[_fetch_etf_holdings(e) for e in unique_etfs], return_exceptions=True
@@ -197,12 +198,12 @@ async def _build_candidate_pool(
         for etf, result in zip(unique_etfs, results):
             etf_holdings[etf] = result if isinstance(result, list) else []
 
-    candidates: List[str] = []
+    candidates: list[str] = []
     etf_resolved_sectors = 0
     static_fallback_sectors = 0
 
     for sector in sectors:
-        sector_candidates: List[str] = []
+        sector_candidates: list[str] = []
         for etf in sector_etfs.get(sector, []):
             for sym in etf_holdings.get(etf, []):
                 if sym not in sector_candidates:
@@ -213,7 +214,8 @@ async def _build_candidate_pool(
         else:
             # Per-sector static fallback — don't drop this sector on ETF failure.
             logger.warning(
-                "[SIM] ETF discovery empty for sector %r — using static pool", sector,
+                "[SIM] ETF discovery empty for sector %r — using static pool",
+                sector,
             )
             static_fallback_sectors += 1
             pool = SECTOR_POOL.get(sector, {})
@@ -236,19 +238,23 @@ async def _build_candidate_pool(
 
     logger.info(
         "[SIM] Candidate pool: %d symbols (etf_sectors=%d, static_sectors=%d, source=%s)",
-        len(candidates), etf_resolved_sectors, static_fallback_sectors, source,
+        len(candidates),
+        etf_resolved_sectors,
+        static_fallback_sectors,
+        source,
     )
     return candidates[:max_candidates], source
 
 
 # ── RSI helper ────────────────────────────────────────────────────────────────
 
-def _calc_rsi(closes: List[float], period: int = 14) -> float:
+
+def _calc_rsi(closes: list[float], period: int = 14) -> float:
     if len(closes) < period + 1:
         return 50.0
     deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
     recent = deltas[-period:]
-    gains  = [d for d in recent if d > 0]
+    gains = [d for d in recent if d > 0]
     losses = [-d for d in recent if d < 0]
     avg_gain = sum(gains) / period
     avg_loss = sum(losses) / period
@@ -262,9 +268,9 @@ def _calc_rsi(closes: List[float], period: int = 14) -> float:
 async def _analyze_ticker(
     symbol: str,
     yf_svc: Any,
-    run_forecast_fn: Callable[..., Dict],
-    influx_svc: Optional[Any],
-) -> Optional[Dict]:
+    run_forecast_fn: Callable[..., dict],
+    influx_svc: Any | None,
+) -> dict | None:
     """Fetch OHLCV data and run ensemble ML forecast for one ticker."""
     try:
         yf_sym = yf_svc._to_yf_symbol(symbol) if hasattr(yf_svc, "_to_yf_symbol") else symbol
@@ -278,15 +284,17 @@ async def _analyze_ticker(
             return None
 
         ohlcv_cols = [c for c in ["Open", "High", "Low", "Close", "Volume"] if c in df.columns]
-        df_clean   = df[ohlcv_cols].dropna()
+        df_clean = df[ohlcv_cols].dropna()
         if len(df_clean) < 20:
-            logger.warning("[SIM] %s: insufficient data after cleaning (%d rows)", symbol, len(df_clean))
+            logger.warning(
+                "[SIM] %s: insufficient data after cleaning (%d rows)", symbol, len(df_clean)
+            )
             return None
 
-        closes  = df_clean["Close"].tolist()
-        opens   = df_clean["Open"].tolist()   if "Open"   in df_clean.columns else None
-        highs   = df_clean["High"].tolist()   if "High"   in df_clean.columns else None
-        lows    = df_clean["Low"].tolist()    if "Low"    in df_clean.columns else None
+        closes = df_clean["Close"].tolist()
+        opens = df_clean["Open"].tolist() if "Open" in df_clean.columns else None
+        highs = df_clean["High"].tolist() if "High" in df_clean.columns else None
+        lows = df_clean["Low"].tolist() if "Low" in df_clean.columns else None
         volumes = df_clean["Volume"].tolist() if "Volume" in df_clean.columns else None
 
         async with _yf_sem():
@@ -300,13 +308,13 @@ async def _analyze_ticker(
                 if acc:
                     maes = [
                         acc.get("prophet", {}).get("mae", 1.0),
-                        acc.get("sarima",  {}).get("mae", 1.0),
-                        acc.get("rf",      {}).get("mae", 1.0),
+                        acc.get("sarima", {}).get("mae", 1.0),
+                        acc.get("rf", {}).get("mae", 1.0),
                     ]
                     sample_count = min(
                         acc.get("prophet", {}).get("samples", 0),
-                        acc.get("sarima",  {}).get("samples", 0),
-                        acc.get("rf",      {}).get("samples", 0),
+                        acc.get("sarima", {}).get("samples", 0),
+                        acc.get("rf", {}).get("samples", 0),
                     )
                     total_inv = sum(1.0 / m if m > 0 else 1.0 for m in maes)
                     hist_weights = [(1.0 / m if m > 0 else 1.0) / total_inv for m in maes]
@@ -315,40 +323,45 @@ async def _analyze_ticker(
 
         forecast = await asyncio.to_thread(
             run_forecast_fn,
-            closes, symbol,
-            opens, highs, lows, volumes,
-            hist_weights, sample_count,
+            closes,
+            symbol,
+            opens,
+            highs,
+            lows,
+            volumes,
+            hist_weights,
+            sample_count,
         )
 
         live_price = info.get("current_price") or float(closes[-1])
-        mc         = forecast.get("monte_carlo") or {}
+        mc = forecast.get("monte_carlo") or {}
         return {
-            "symbol":       symbol,
-            "name":         info.get("short_name", symbol),
-            "sector":       info.get("sector", "Unknown"),
+            "symbol": symbol,
+            "name": info.get("short_name", symbol),
+            "sector": info.get("sector", "Unknown"),
             "currentPrice": float(live_price),
-            "forecast":     forecast,
-            "rsi":          _calc_rsi(closes),
-            "var_95":       mc.get("var_95"),
-            "prob_gain":    mc.get("prob_gain"),
+            "forecast": forecast,
+            "rsi": _calc_rsi(closes),
+            "var_95": mc.get("var_95"),
+            "prob_gain": mc.get("prob_gain"),
         }
     except Exception as exc:
         logger.error("[SIM] _analyze_ticker(%s) failed: %s", symbol, exc)
         return None
 
 
-def _score(stock: Dict, risk_level: str) -> float:
-    forecast  = stock.get("forecast", {})
-    days      = forecast.get("forecast_days", [])
-    conf_avg  = sum(d.get("confidence_pct", 50) for d in days) / max(len(days), 1)
-    current   = stock["currentPrice"]
-    high_5d   = forecast.get("high", current)
-    low_5d    = forecast.get("low",  current)
-    mid       = (high_5d + low_5d) / 2
-    upside    = ((mid - current) / current * 100) if current > 0 else 0
-    rsi       = stock.get("rsi", 50)
-    rsi_pen   = max(0, rsi - 70) + max(0, 30 - rsi)
-    score     = conf_avg * 0.5 + upside * 0.3 - rsi_pen * 0.2
+def _score(stock: dict, risk_level: str) -> float:
+    forecast = stock.get("forecast", {})
+    days = forecast.get("forecast_days", [])
+    conf_avg = sum(d.get("confidence_pct", 50) for d in days) / max(len(days), 1)
+    current = stock["currentPrice"]
+    high_5d = forecast.get("high", current)
+    low_5d = forecast.get("low", current)
+    mid = (high_5d + low_5d) / 2
+    upside = ((mid - current) / current * 100) if current > 0 else 0
+    rsi = stock.get("rsi", 50)
+    rsi_pen = max(0, rsi - 70) + max(0, 30 - rsi)
+    score = conf_avg * 0.5 + upside * 0.3 - rsi_pen * 0.2
     if risk_level == "conservative":
         score += conf_avg * 0.2
     elif risk_level == "aggressive":
@@ -357,18 +370,18 @@ def _score(stock: Dict, risk_level: str) -> float:
 
 
 async def _bulk_jury(
-    stocks: List[Dict],
+    stocks: list[dict],
     risk_level: str,
-    analyst_jury_svc: Optional[Any],
-) -> Dict[str, Dict]:
+    analyst_jury_svc: Any | None,
+) -> dict[str, dict]:
     """Concurrent per-stock Groq calls so one failure never drops the whole batch."""
     if not stocks or not analyst_jury_svc:
         return {}
 
-    async def _rate_one(s: Dict) -> tuple:
-        sym    = s["symbol"]
-        f      = s.get("forecast", {})
-        cur    = s["currentPrice"]
+    async def _rate_one(s: dict) -> tuple:
+        sym = s["symbol"]
+        f = s.get("forecast", {})
+        cur = s["currentPrice"]
         upside = ((f.get("high", cur) - cur) / cur * 100) if cur > 0 else 0
         prompt = (
             f"Rate for a {risk_level} investor.\n"
@@ -379,7 +392,7 @@ async def _bulk_jury(
             '"confidence":50,"note":"1 concise sentence"}'
         )
         try:
-            raw  = await analyst_jury_svc.call_groq(
+            raw = await analyst_jury_svc.call_groq(
                 "llama-3.3-70b-versatile",
                 "You are a portfolio advisor. Output only valid JSON, nothing else.",
                 prompt,
@@ -396,7 +409,7 @@ async def _bulk_jury(
             return sym, {"symbol": sym, "rating": "Hold", "confidence": 50, "note": ""}
 
     results = await asyncio.gather(*[_rate_one(s) for s in stocks], return_exceptions=True)
-    verdicts: Dict[str, Dict] = {}
+    verdicts: dict[str, dict] = {}
     for item in results:
         if isinstance(item, Exception):
             logger.error("[SIM] _bulk_jury: unexpected gather error: %s", item)
@@ -407,19 +420,23 @@ async def _bulk_jury(
 
 
 async def suggest_portfolio(
-    sectors: List[str],
+    sectors: list[str],
     risk_level: str,
     budget: float,
     yf_svc: Any,
-    run_forecast_fn: Callable[..., Dict],
-    influx_svc: Optional[Any],
-    analyst_jury_svc: Optional[Any],
-) -> Dict[str, Any]:
+    run_forecast_fn: Callable[..., dict],
+    influx_svc: Any | None,
+    analyst_jury_svc: Any | None,
+) -> dict[str, Any]:
     """Analyze sector candidates → rank → return portfolio suggestions."""
     candidates, source = await _build_candidate_pool(sectors, risk_level)
     logger.info(
         "[SIM] source=%s  risk=%s  sectors=%s  candidates(%d)=%s",
-        source, risk_level, sectors, len(candidates), candidates,
+        source,
+        risk_level,
+        sectors,
+        len(candidates),
+        candidates,
     )
 
     results = await asyncio.gather(
@@ -428,7 +445,11 @@ async def suggest_portfolio(
     valid = [r for r in results if r is not None]
 
     if not valid:
-        return {"error": "Could not analyze any candidates", "suggestions": [], "candidateSource": source}
+        return {
+            "error": "Could not analyze any candidates",
+            "suggestions": [],
+            "candidateSource": source,
+        }
 
     top = sorted(valid, key=lambda s: _score(s, risk_level), reverse=True)[:6]
     verdicts = await _bulk_jury(top, risk_level, analyst_jury_svc)
@@ -451,70 +472,69 @@ async def suggest_portfolio(
 
     suggestions = []
     for stock in top:
-        sym     = stock["symbol"]
-        price   = stock["currentPrice"]
-        f       = stock["forecast"]
+        sym = stock["symbol"]
+        price = stock["currentPrice"]
+        f = stock["forecast"]
         verdict = verdicts.get(sym, {})
-        shares  = int(alloc_per / price) if price > 0 else 0
-        mc      = f.get("monte_carlo") or {}
+        shares = int(alloc_per / price) if price > 0 else 0
+        mc = f.get("monte_carlo") or {}
 
-        suggestions.append({
-            "symbol":         sym,
-            "name":           stock["name"],
-            "sector":         stock["sector"],
-            "currentPrice":   round(price, 4),
-            "forecastHigh":   round(f.get("high", price), 4),
-            "forecastLow":    round(f.get("low",  price), 4),
-            "forecastConf":   f.get("conf", "medium"),
-            "forecastDays":   f.get("forecast_days", []),
-            "direction":      "Bullish" if f.get("high", price) > price else "Bearish",
-            "rsi":            stock.get("rsi", 50),
-            "juryRating":     verdict.get("rating", "Hold"),
-            "juryNote":       verdict.get("note", ""),
-            "juryConfidence": verdict.get("confidence", 50),
-            "allocationPct":  round(100 / n, 1) if n else 0,
-            "allocationUsd":  round(shares * price, 2),
-            "shares":         shares,
-            "var_95":         mc.get("var_95"),
-            "prob_gain":      mc.get("prob_gain"),
-        })
+        suggestions.append(
+            {
+                "symbol": sym,
+                "name": stock["name"],
+                "sector": stock["sector"],
+                "currentPrice": round(price, 4),
+                "forecastHigh": round(f.get("high", price), 4),
+                "forecastLow": round(f.get("low", price), 4),
+                "forecastConf": f.get("conf", "medium"),
+                "forecastDays": f.get("forecast_days", []),
+                "direction": "Bullish" if f.get("high", price) > price else "Bearish",
+                "rsi": stock.get("rsi", 50),
+                "juryRating": verdict.get("rating", "Hold"),
+                "juryNote": verdict.get("note", ""),
+                "juryConfidence": verdict.get("confidence", 50),
+                "allocationPct": round(100 / n, 1) if n else 0,
+                "allocationUsd": round(shares * price, 2),
+                "shares": shares,
+                "var_95": mc.get("var_95"),
+                "prob_gain": mc.get("prob_gain"),
+            }
+        )
 
     # Weighted portfolio VaR: sum of (per-share VaR × shares) across all positions
     portfolio_var_95 = round(
-        sum(
-            (s.get("var_95") or 0.0) * s.get("shares", 0)
-            for s in suggestions
-        ),
+        sum((s.get("var_95") or 0.0) * s.get("shares", 0) for s in suggestions),
         2,
     )
 
     spy_shares = int(budget / spy_price) if spy_price > 0 else 0
 
     return {
-        "suggestions":     suggestions,
+        "suggestions": suggestions,
         "benchmark": {
-            "symbol":        BENCHMARK_SYMBOL,
-            "name":          "S&P 500 ETF (SPY)",
-            "currentPrice":  round(spy_price, 4),
+            "symbol": BENCHMARK_SYMBOL,
+            "name": "S&P 500 ETF (SPY)",
+            "currentPrice": round(spy_price, 4),
             "allocationUsd": round(spy_shares * spy_price, 2),
-            "shares":        spy_shares,
+            "shares": spy_shares,
         },
-        "riskLevel":        risk_level,
-        "sectors":          sectors,
-        "budget":           budget,
-        "candidateSource":  source,
-        "portfolioVaR95":   portfolio_var_95,
+        "riskLevel": risk_level,
+        "sectors": sectors,
+        "budget": budget,
+        "candidateSource": source,
+        "portfolioVaR95": portfolio_var_95,
     }
 
 
 async def get_portfolio_performance(
-    holdings: List[Dict],
+    holdings: list[dict],
     start_date: str,
     spy_buy_price: float,
     budget: float,
     yf_svc: Any,
     interval: str = "1d",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Fetch price history from start_date → now for all holdings + SPY.
     interval: yfinance interval string — '1m','5m','15m','1h','1d' etc.
@@ -535,7 +555,7 @@ async def get_portfolio_performance(
             start_str = start_date[:10]
 
         all_symbols = list({h["symbol"] for h in holdings} | {BENCHMARK_SYMBOL})
-        price_data: Dict[str, Dict[str, float]] = {}
+        price_data: dict[str, dict[str, float]] = {}
 
         def _fmt_key(idx: Any) -> str:
             if interval == "1d":
@@ -544,7 +564,9 @@ async def get_portfolio_performance(
 
         async def _fetch(symbol: str) -> None:
             try:
-                yf_sym = yf_svc._to_yf_symbol(symbol) if hasattr(yf_svc, '_to_yf_symbol') else symbol
+                yf_sym = (
+                    yf_svc._to_yf_symbol(symbol) if hasattr(yf_svc, "_to_yf_symbol") else symbol
+                )
                 ticker = yf.Ticker(yf_sym)
                 async with _yf_sem():
                     hist = await asyncio.to_thread(
@@ -552,8 +574,7 @@ async def get_portfolio_performance(
                     )
                 if not hist.empty:
                     price_data[symbol] = {
-                        _fmt_key(idx): round(float(row["Close"]), 4)
-                        for idx, row in hist.iterrows()
+                        _fmt_key(idx): round(float(row["Close"]), 4) for idx, row in hist.iterrows()
                     }
             except Exception as exc:
                 logger.warning("[SIM] history fetch %s (%s): %s", symbol, interval, exc)
@@ -561,16 +582,18 @@ async def get_portfolio_performance(
         await asyncio.gather(*[_fetch(s) for s in all_symbols])
 
         spy_prices = price_data.get(BENCHMARK_SYMBOL, {})
-        all_dates  = sorted(set().union(*[set(p.keys()) for p in price_data.values()]))
+        all_dates = sorted(set().union(*[set(p.keys()) for p in price_data.values()]))
 
         # For intraday intervals yfinance only accepts a date (not datetime) as
         # start, so it returns data from market open even if the simulation was
         # started mid-session.  Trim to the actual simulation start timestamp so
         # the chart always begins at the moment the user clicked "Start Race".
-        sim_start_hm: Optional[str] = None
+        sim_start_hm: str | None = None
         if interval != "1d":
             try:
-                sim_start_hm = dt.astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M")
+                sim_start_hm = dt.astimezone(ZoneInfo("America/New_York")).strftime(
+                    "%Y-%m-%d %H:%M"
+                )
             except Exception as exc:
                 logger.debug(
                     "[SIM] intraday start conversion failed; keeping full series: %s",
@@ -581,7 +604,7 @@ async def get_portfolio_performance(
         # Carry-forward seed: the most recent pre-start bar (if any) becomes the
         # initial last-known price, so the first plotted point uses a real quote
         # rather than snapping back to buyPrice / spy_buy_price on the left edge.
-        last_prices: Dict[str, float] = {}
+        last_prices: dict[str, float] = {}
         last_spy_price = spy_buy_price
         if sim_start_hm is not None:
             for h in holdings:
@@ -603,10 +626,10 @@ async def get_portfolio_performance(
 
         spy_ref_shares = initial_cost / spy_buy_price if spy_buy_price > 0 else 0
 
-        port_values: List[float] = []
-        spy_values:  List[float] = []
-        port_returns: List[float] = []
-        spy_returns:  List[float] = []
+        port_values: list[float] = []
+        spy_values: list[float] = []
+        port_returns: list[float] = []
+        spy_returns: list[float] = []
 
         for date in all_dates:
             for h in holdings:
@@ -619,56 +642,63 @@ async def get_portfolio_performance(
                 last_spy_price = spy_px
 
             port_val = sum(
-                h["shares"] * last_prices.get(h["symbol"], h["buyPrice"])
-                for h in holdings
+                h["shares"] * last_prices.get(h["symbol"], h["buyPrice"]) for h in holdings
             )
-            spy_val  = spy_ref_shares * last_spy_price
+            spy_val = spy_ref_shares * last_spy_price
 
             port_values.append(round(port_val, 2))
             spy_values.append(round(spy_val, 2))
             port_returns.append(round((port_val / initial_cost - 1) * 100, 3))
-            spy_returns.append(round((spy_val  / initial_cost - 1) * 100, 3))
+            spy_returns.append(round((spy_val / initial_cost - 1) * 100, 3))
 
         holdings_pnl = []
         for h in holdings:
-            sym_px    = price_data.get(h["symbol"], {})
+            sym_px = price_data.get(h["symbol"], {})
             cur_price = float(list(sym_px.values())[-1]) if sym_px else h["buyPrice"]
-            cost      = h["shares"] * h["buyPrice"]
-            value     = h["shares"] * cur_price
-            pnl       = value - cost
-            holdings_pnl.append({
-                "symbol":       h["symbol"],
-                "name":         h.get("name", h["symbol"]),
-                "shares":       h["shares"],
-                "buyPrice":     round(h["buyPrice"], 4),
-                "currentPrice": round(cur_price, 4),
-                "value":        round(value, 2),
-                "pnl":          round(pnl, 2),
-                "pnlPct":       round(pnl / cost * 100, 2) if cost > 0 else 0.0,
-            })
+            cost = h["shares"] * h["buyPrice"]
+            value = h["shares"] * cur_price
+            pnl = value - cost
+            holdings_pnl.append(
+                {
+                    "symbol": h["symbol"],
+                    "name": h.get("name", h["symbol"]),
+                    "shares": h["shares"],
+                    "buyPrice": round(h["buyPrice"], 4),
+                    "currentPrice": round(cur_price, 4),
+                    "value": round(value, 2),
+                    "pnl": round(pnl, 2),
+                    "pnlPct": round(pnl / cost * 100, 2) if cost > 0 else 0.0,
+                }
+            )
 
         return {
-            "dates":                 all_dates,
-            "portfolioValues":       port_values,
-            "spyValues":             spy_values,
-            "portfolioReturns":      port_returns,
-            "spyReturns":            spy_returns,
+            "dates": all_dates,
+            "portfolioValues": port_values,
+            "spyValues": spy_values,
+            "portfolioReturns": port_returns,
+            "spyReturns": spy_returns,
             "currentPortfolioValue": port_values[-1] if port_values else budget,
-            "currentSpyValue":       spy_values[-1]  if spy_values  else budget,
-            "portfolioReturn":       port_returns[-1] if port_returns else 0.0,
-            "spyReturn":             spy_returns[-1]  if spy_returns  else 0.0,
-            "holdings":              holdings_pnl,
-            "interval":              interval,
+            "currentSpyValue": spy_values[-1] if spy_values else budget,
+            "portfolioReturn": port_returns[-1] if port_returns else 0.0,
+            "spyReturn": spy_returns[-1] if spy_returns else 0.0,
+            "holdings": holdings_pnl,
+            "interval": interval,
         }
     except Exception as exc:
         logger.error("[SIM] get_portfolio_performance failed: %s", exc)
         return _empty_perf(budget)
 
 
-def _empty_perf(budget: float) -> Dict[str, Any]:
+def _empty_perf(budget: float) -> dict[str, Any]:
     return {
-        "dates": [], "portfolioValues": [], "spyValues": [],
-        "portfolioReturns": [], "spyReturns": [],
-        "currentPortfolioValue": budget, "currentSpyValue": budget,
-        "portfolioReturn": 0.0, "spyReturn": 0.0, "holdings": [],
+        "dates": [],
+        "portfolioValues": [],
+        "spyValues": [],
+        "portfolioReturns": [],
+        "spyReturns": [],
+        "currentPortfolioValue": budget,
+        "currentSpyValue": budget,
+        "portfolioReturn": 0.0,
+        "spyReturn": 0.0,
+        "holdings": [],
     }

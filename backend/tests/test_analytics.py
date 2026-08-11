@@ -2,13 +2,14 @@
 Analytics router tests — forecast accuracy + sentiment trend.
 All InfluxDB / ForecastStore queries are mocked; no network required.
 """
-from datetime import datetime, timedelta, timezone
-from unittest.mock import patch, MagicMock
+
 import importlib as _il
+from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
 
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
 
 from backend.routers import analytics
@@ -21,7 +22,9 @@ _test_app.state.limiter = limiter
 
 
 async def _rl_handler(req, exc: RateLimitExceeded) -> JSONResponse:
-    return JSONResponse(status_code=429, content={"detail": "Too many requests — please slow down."})
+    return JSONResponse(
+        status_code=429, content={"detail": "Too many requests — please slow down."}
+    )
 
 
 _test_app.add_exception_handler(RateLimitExceeded, _rl_handler)
@@ -33,6 +36,7 @@ client = TestClient(_test_app)
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
 
+
 def _ts(days_ago: int) -> datetime:
     return datetime.now(timezone.utc) - timedelta(days=days_ago)
 
@@ -40,12 +44,12 @@ def _ts(days_ago: int) -> datetime:
 def _forecast_record(days_ago: int, last_price: float, p, s, r, e_d1) -> dict:
     """Mirror the row shape returned by ForecastStore.query_forecast_records."""
     return {
-        "_time":      _ts(days_ago),
+        "_time": _ts(days_ago),
         "last_price": last_price,
-        "p_d1":       p,
-        "s_d1":       s,
-        "r_d1":       r,
-        "e_d1":       e_d1,
+        "p_d1": p,
+        "s_d1": s,
+        "r_d1": r,
+        "e_d1": e_d1,
     }
 
 
@@ -63,11 +67,12 @@ def _patch_store(model_acc=None, ensemble_mae=None, records=None, outcomes=None)
 # Accuracy — populated path
 # ---------------------------------------------------------------------------
 
+
 def test_accuracy_full_shape() -> None:
     model_acc = {
         "prophet": {"mae": 4.1, "samples": 12},
-        "sarima":  {"mae": 4.8, "samples": 12},
-        "rf":      {"mae": 3.6, "samples": 12},
+        "sarima": {"mae": 4.8, "samples": 12},
+        "rf": {"mae": 3.6, "samples": 12},
     }
     ensemble_mae = {f"ensemble_d{i}": {"mae": 2.0 + i * 0.5, "samples": 10} for i in range(1, 6)}
     # Forecast at d-3, last_price 100, all models predict up; actual close 105 (d-2) = up.
@@ -79,13 +84,19 @@ def test_accuracy_full_shape() -> None:
     assert resp.status_code == 200
     d = resp.json()
     for key in (
-        "symbol", "model_mae", "best_model", "ensemble_mae_by_horizon",
-        "directional_accuracy", "forecast_vs_actual", "samples", "generated_at",
+        "symbol",
+        "model_mae",
+        "best_model",
+        "ensemble_mae_by_horizon",
+        "directional_accuracy",
+        "forecast_vs_actual",
+        "samples",
+        "generated_at",
     ):
         assert key in d, f"missing key: {key}"
     assert d["symbol"] == "NVDA"
     assert d["model_mae"] == {"prophet": 4.1, "sarima": 4.8, "random_forest": 3.6}
-    assert d["best_model"] == "random_forest"          # lowest MAE
+    assert d["best_model"] == "random_forest"  # lowest MAE
     assert len(d["ensemble_mae_by_horizon"]) == 5
     assert d["ensemble_mae_by_horizon"][0] == {"horizon": "d1", "mae": 2.5}
     assert d["samples"] == 1
@@ -114,7 +125,7 @@ def test_accuracy_skips_missing_model_prediction() -> None:
     with _patch_store(records=records, outcomes=outcomes):
         resp = client.get("/analytics/accuracy/NVDA")
     da = resp.json()["directional_accuracy"]
-    assert da["sarima"] is None          # no valid samples
+    assert da["sarima"] is None  # no valid samples
     assert da["prophet"] == 1.0
 
 
@@ -123,7 +134,7 @@ def test_accuracy_filters_999_sentinel() -> None:
     with _patch_store(model_acc=model_acc):
         resp = client.get("/analytics/accuracy/NVDA")
     d = resp.json()
-    assert "prophet" not in d["model_mae"]    # 999 sentinel dropped
+    assert "prophet" not in d["model_mae"]  # 999 sentinel dropped
     assert d["model_mae"] == {"random_forest": 3.0}
     assert d["best_model"] == "random_forest"
 
@@ -131,6 +142,7 @@ def test_accuracy_filters_999_sentinel() -> None:
 # ---------------------------------------------------------------------------
 # Accuracy — empty path
 # ---------------------------------------------------------------------------
+
 
 def test_accuracy_empty_returns_200_samples_zero() -> None:
     with _patch_store():  # everything empty
@@ -187,6 +199,7 @@ def test_accuracy_symbol_uppercased() -> None:
 # Sentiment
 # ---------------------------------------------------------------------------
 
+
 def test_sentiment_history_shape() -> None:
     history = [
         {"date": "2026-06-01", "compound": 0.42, "label": "Bullish"},
@@ -200,7 +213,7 @@ def test_sentiment_history_shape() -> None:
     d = resp.json()
     assert d["symbol"] == "NVDA"
     assert d["history"] == history
-    assert d["current"] == history[-1]    # latest point
+    assert d["current"] == history[-1]  # latest point
 
 
 def test_sentiment_empty_returns_200_null_current() -> None:

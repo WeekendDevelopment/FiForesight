@@ -6,6 +6,7 @@ bounded concurrency + timeout, a bad symbol is logged and skipped (returns
 ``None``) so it never aborts the batch. Callers (routers/watchlist.py) cache
 each row in Redis independently.
 """
+
 import asyncio
 import logging
 
@@ -13,13 +14,14 @@ import yfinance as yf
 
 logger = logging.getLogger(__name__)
 
-_SEM = asyncio.Semaphore(8)   # cap concurrent yfinance calls
+_SEM = asyncio.Semaphore(8)  # cap concurrent yfinance calls
 _TIMEOUT = 8.0
 
 
 async def _fetch_metrics(symbol: str) -> dict | None:
     """Build one watchlist metrics row for ``symbol``; ``None`` on failure/timeout."""
     async with _SEM:
+
         def _get() -> dict:
             t = yf.Ticker(symbol)
             info = t.info or {}

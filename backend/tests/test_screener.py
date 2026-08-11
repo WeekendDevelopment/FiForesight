@@ -2,30 +2,150 @@
 Equity Screener endpoint tests (F24) — POST /screener.
 build_universe_snapshot is mocked with a fixed 10-row universe; no network.
 """
+
 from collections.abc import Generator
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI, Request
-from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
 
 from backend.routers import market
 
-
 # 10 fake rows spanning a few sectors with varied PE / RSI / beta / cap.
 _FAKE_UNIVERSE = [
-    {"symbol": "AAA", "name": "Alpha",   "sector": "Technology", "marketCap": 3_000e9, "peRatio": 35.0, "forwardPE": 30.0, "beta": 1.2, "dividendYield": 0.5, "revenueGrowth": 12.0, "rsi": 55.0, "price": 100.0},
-    {"symbol": "BBB", "name": "Bravo",   "sector": "Technology", "marketCap": 2_000e9, "peRatio": 28.0, "forwardPE": 24.0, "beta": 1.1, "dividendYield": None, "revenueGrowth": 8.0,  "rsi": 45.0, "price": 200.0},
-    {"symbol": "CCC", "name": "Charlie", "sector": "Technology", "marketCap": 1_500e9, "peRatio": 50.0, "forwardPE": 40.0, "beta": 1.5, "dividendYield": 0.2, "revenueGrowth": 20.0, "rsi": 72.0, "price": 300.0},
-    {"symbol": "DDD", "name": "Delta",   "sector": "Financial",  "marketCap": 500e9,   "peRatio": 12.0, "forwardPE": 11.0, "beta": 0.9, "dividendYield": 2.5, "revenueGrowth": 4.0,  "rsi": 30.0, "price": 50.0},
-    {"symbol": "EEE", "name": "Echo",    "sector": "Financial",  "marketCap": 400e9,   "peRatio": 10.0, "forwardPE": 9.0,  "beta": 1.0, "dividendYield": 3.0, "revenueGrowth": 2.0,  "rsi": 41.0, "price": 40.0},
-    {"symbol": "FFF", "name": "Foxtrot", "sector": "Healthcare", "marketCap": 700e9,   "peRatio": 18.0, "forwardPE": 16.0, "beta": 0.7, "dividendYield": 1.5, "revenueGrowth": 6.0,  "rsi": 60.0, "price": 120.0},
-    {"symbol": "GGG", "name": "Golf",    "sector": "Healthcare", "marketCap": 300e9,   "peRatio": 22.0, "forwardPE": 19.0, "beta": 0.8, "dividendYield": 1.0, "revenueGrowth": 5.0,  "rsi": 48.0, "price": 80.0},
-    {"symbol": "HHH", "name": "Hotel",   "sector": "Energy",     "marketCap": 250e9,   "peRatio": 9.0,  "forwardPE": 8.5,  "beta": 1.3, "dividendYield": 4.0, "revenueGrowth": -2.0, "rsi": 25.0, "price": 60.0},
-    {"symbol": "III", "name": "India",   "sector": "Energy",     "marketCap": 200e9,   "peRatio": None, "forwardPE": 7.0,  "beta": 1.4, "dividendYield": 4.5, "revenueGrowth": -5.0, "rsi": None, "price": 55.0},
-    {"symbol": "JJJ", "name": "Juliet",  "sector": "Consumer",   "marketCap": 600e9,   "peRatio": 26.0, "forwardPE": 23.0, "beta": 0.6, "dividendYield": 0.8, "revenueGrowth": 7.0,  "rsi": 58.0, "price": 150.0},
+    {
+        "symbol": "AAA",
+        "name": "Alpha",
+        "sector": "Technology",
+        "marketCap": 3_000e9,
+        "peRatio": 35.0,
+        "forwardPE": 30.0,
+        "beta": 1.2,
+        "dividendYield": 0.5,
+        "revenueGrowth": 12.0,
+        "rsi": 55.0,
+        "price": 100.0,
+    },
+    {
+        "symbol": "BBB",
+        "name": "Bravo",
+        "sector": "Technology",
+        "marketCap": 2_000e9,
+        "peRatio": 28.0,
+        "forwardPE": 24.0,
+        "beta": 1.1,
+        "dividendYield": None,
+        "revenueGrowth": 8.0,
+        "rsi": 45.0,
+        "price": 200.0,
+    },
+    {
+        "symbol": "CCC",
+        "name": "Charlie",
+        "sector": "Technology",
+        "marketCap": 1_500e9,
+        "peRatio": 50.0,
+        "forwardPE": 40.0,
+        "beta": 1.5,
+        "dividendYield": 0.2,
+        "revenueGrowth": 20.0,
+        "rsi": 72.0,
+        "price": 300.0,
+    },
+    {
+        "symbol": "DDD",
+        "name": "Delta",
+        "sector": "Financial",
+        "marketCap": 500e9,
+        "peRatio": 12.0,
+        "forwardPE": 11.0,
+        "beta": 0.9,
+        "dividendYield": 2.5,
+        "revenueGrowth": 4.0,
+        "rsi": 30.0,
+        "price": 50.0,
+    },
+    {
+        "symbol": "EEE",
+        "name": "Echo",
+        "sector": "Financial",
+        "marketCap": 400e9,
+        "peRatio": 10.0,
+        "forwardPE": 9.0,
+        "beta": 1.0,
+        "dividendYield": 3.0,
+        "revenueGrowth": 2.0,
+        "rsi": 41.0,
+        "price": 40.0,
+    },
+    {
+        "symbol": "FFF",
+        "name": "Foxtrot",
+        "sector": "Healthcare",
+        "marketCap": 700e9,
+        "peRatio": 18.0,
+        "forwardPE": 16.0,
+        "beta": 0.7,
+        "dividendYield": 1.5,
+        "revenueGrowth": 6.0,
+        "rsi": 60.0,
+        "price": 120.0,
+    },
+    {
+        "symbol": "GGG",
+        "name": "Golf",
+        "sector": "Healthcare",
+        "marketCap": 300e9,
+        "peRatio": 22.0,
+        "forwardPE": 19.0,
+        "beta": 0.8,
+        "dividendYield": 1.0,
+        "revenueGrowth": 5.0,
+        "rsi": 48.0,
+        "price": 80.0,
+    },
+    {
+        "symbol": "HHH",
+        "name": "Hotel",
+        "sector": "Energy",
+        "marketCap": 250e9,
+        "peRatio": 9.0,
+        "forwardPE": 8.5,
+        "beta": 1.3,
+        "dividendYield": 4.0,
+        "revenueGrowth": -2.0,
+        "rsi": 25.0,
+        "price": 60.0,
+    },
+    {
+        "symbol": "III",
+        "name": "India",
+        "sector": "Energy",
+        "marketCap": 200e9,
+        "peRatio": None,
+        "forwardPE": 7.0,
+        "beta": 1.4,
+        "dividendYield": 4.5,
+        "revenueGrowth": -5.0,
+        "rsi": None,
+        "price": 55.0,
+    },
+    {
+        "symbol": "JJJ",
+        "name": "Juliet",
+        "sector": "Consumer",
+        "marketCap": 600e9,
+        "peRatio": 26.0,
+        "forwardPE": 23.0,
+        "beta": 0.6,
+        "dividendYield": 0.8,
+        "revenueGrowth": 7.0,
+        "rsi": 58.0,
+        "price": 150.0,
+    },
 ]
 
 
@@ -49,8 +169,9 @@ def _build_app() -> TestClient:
 
 
 def _post(client: TestClient, body: dict) -> dict:
-    with patch.object(market, "build_universe_snapshot",
-                      AsyncMock(return_value=list(_FAKE_UNIVERSE))):
+    with patch.object(
+        market, "build_universe_snapshot", AsyncMock(return_value=list(_FAKE_UNIVERSE))
+    ):
         resp = client.post("/screener", json=body)
     assert resp.status_code == 200, resp.text
     return resp.json()

@@ -12,12 +12,12 @@ All functions raise SupabaseConfigError when SUPABASE_URL / SUPABASE_ANON_KEY ar
 unset, and SupabaseRestError on a non-2xx PostgREST response. Routers translate
 these into clean HTTP errors — tracebacks never reach the client.
 """
+
 import asyncio
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
 import httpx
-
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -47,7 +47,7 @@ def _base_url() -> str:
     return f"{Config.SUPABASE_URL.rstrip('/')}/rest/v1/{_TABLE}"
 
 
-def _headers(user_jwt: str, *, prefer: str | None = None) -> Dict[str, str]:
+def _headers(user_jwt: str, *, prefer: str | None = None) -> dict[str, str]:
     headers = {
         "apikey": Config.SUPABASE_ANON_KEY,
         "Authorization": f"Bearer {user_jwt}",
@@ -59,7 +59,7 @@ def _headers(user_jwt: str, *, prefer: str | None = None) -> Dict[str, str]:
     return headers
 
 
-async def list_holdings(user_jwt: str) -> List[Dict[str, Any]]:
+async def list_holdings(user_jwt: str) -> list[dict[str, Any]]:
     """Return the authenticated user's holdings (RLS-scoped), newest first."""
     url = _base_url()
     params = {
@@ -76,7 +76,9 @@ async def list_holdings(user_jwt: str) -> List[Dict[str, Any]]:
         logger.error(
             "[PORTFOLIO] list_holdings: PostgREST returned HTTP %s from %s — "
             "body: %s — check migration 0001/0002 applied and SUPABASE_URL/SUPABASE_ANON_KEY are correct.",
-            resp.status_code, url, _safe_body(resp),
+            resp.status_code,
+            url,
+            _safe_body(resp),
         )
         raise SupabaseRestError(resp.status_code, _safe_body(resp))
     data = resp.json()
@@ -85,7 +87,7 @@ async def list_holdings(user_jwt: str) -> List[Dict[str, Any]]:
 
 async def upsert_holding(
     user_jwt: str, symbol: str, shares: float, cost_basis: float, currency: str = "USD"
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Insert a holding, or replace shares/cost_basis/currency if the user already holds it.
 
     Relies on the `holdings_user_symbol_unique` constraint + PostgREST
@@ -97,7 +99,9 @@ async def upsert_holding(
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.post(
                 url,
-                headers=_headers(user_jwt, prefer="resolution=merge-duplicates,return=representation"),
+                headers=_headers(
+                    user_jwt, prefer="resolution=merge-duplicates,return=representation"
+                ),
                 params={"on_conflict": "user_id,symbol"},
                 json=payload,
             )
@@ -107,7 +111,9 @@ async def upsert_holding(
     if resp.status_code not in (200, 201):
         logger.error(
             "[PORTFOLIO] upsert_holding(%s): PostgREST returned HTTP %s — body: %s",
-            symbol, resp.status_code, _safe_body(resp),
+            symbol,
+            resp.status_code,
+            _safe_body(resp),
         )
         raise SupabaseRestError(resp.status_code, _safe_body(resp))
     rows = resp.json()
@@ -134,7 +140,9 @@ async def delete_holding(user_jwt: str, holding_id: str) -> bool:
     if resp.status_code not in (200, 204):
         logger.error(
             "[PORTFOLIO] delete_holding(%s): PostgREST returned HTTP %s — body: %s",
-            holding_id, resp.status_code, _safe_body(resp),
+            holding_id,
+            resp.status_code,
+            _safe_body(resp),
         )
         raise SupabaseRestError(resp.status_code, _safe_body(resp))
     try:
@@ -168,7 +176,7 @@ def _watchlist_url() -> str:
     return f"{Config.SUPABASE_URL.rstrip('/')}/rest/v1/{_WATCHLIST_TABLE}"
 
 
-def _wl_headers(user_jwt: str, *, prefer: str | None = None) -> Dict[str, str]:
+def _wl_headers(user_jwt: str, *, prefer: str | None = None) -> dict[str, str]:
     headers = {
         "apikey": Config.SUPABASE_ANON_KEY,
         "Authorization": f"Bearer {user_jwt}",
@@ -180,7 +188,7 @@ def _wl_headers(user_jwt: str, *, prefer: str | None = None) -> Dict[str, str]:
     return headers
 
 
-async def list_watchlist(user_jwt: str) -> List[Dict[str, Any]]:
+async def list_watchlist(user_jwt: str) -> list[dict[str, Any]]:
     """Return the authenticated user's watchlist rows (RLS-scoped), newest first."""
     url = _watchlist_url()
     params = {"select": "id,symbol,added_at", "order": "added_at.desc"}
@@ -194,13 +202,17 @@ async def list_watchlist(user_jwt: str) -> List[Dict[str, Any]]:
         logger.error("[WATCHLIST] list: network error: %s", exc)
         raise SupabaseRestError(0, f"Network error: {exc}") from exc
     if resp.status_code != 200:
-        logger.error("[WATCHLIST] list: PostgREST returned HTTP %s — body: %s", resp.status_code, _safe_body(resp))
+        logger.error(
+            "[WATCHLIST] list: PostgREST returned HTTP %s — body: %s",
+            resp.status_code,
+            _safe_body(resp),
+        )
         raise SupabaseRestError(resp.status_code, _safe_body(resp))
     data = resp.json()
     return data if isinstance(data, list) else []
 
 
-async def upsert_watchlist(user_jwt: str, symbol: str) -> Dict[str, Any]:
+async def upsert_watchlist(user_jwt: str, symbol: str) -> dict[str, Any]:
     """Insert a watchlist entry; no-op (200) if symbol already exists for this user."""
     url = _watchlist_url()
     payload = {"symbol": symbol.upper()}
@@ -209,7 +221,9 @@ async def upsert_watchlist(user_jwt: str, symbol: str) -> Dict[str, Any]:
             resp = await asyncio.wait_for(
                 client.post(
                     url,
-                    headers=_wl_headers(user_jwt, prefer="resolution=merge-duplicates,return=representation"),
+                    headers=_wl_headers(
+                        user_jwt, prefer="resolution=merge-duplicates,return=representation"
+                    ),
                     params={"on_conflict": "user_id,symbol"},
                     json=payload,
                 ),
@@ -219,7 +233,12 @@ async def upsert_watchlist(user_jwt: str, symbol: str) -> Dict[str, Any]:
         logger.error("[WATCHLIST] upsert(%s): network error: %s", symbol, exc)
         raise SupabaseRestError(0, f"Network error: {exc}") from exc
     if resp.status_code not in (200, 201):
-        logger.error("[WATCHLIST] upsert(%s): PostgREST returned HTTP %s — body: %s", symbol, resp.status_code, _safe_body(resp))
+        logger.error(
+            "[WATCHLIST] upsert(%s): PostgREST returned HTTP %s — body: %s",
+            symbol,
+            resp.status_code,
+            _safe_body(resp),
+        )
         raise SupabaseRestError(resp.status_code, _safe_body(resp))
     rows = resp.json()
     return rows[0] if isinstance(rows, list) and rows else (rows if isinstance(rows, dict) else {})
@@ -242,7 +261,12 @@ async def delete_watchlist_item(user_jwt: str, symbol: str) -> bool:
         logger.error("[WATCHLIST] delete(%s): network error: %s", symbol, exc)
         raise SupabaseRestError(0, f"Network error: {exc}") from exc
     if resp.status_code not in (200, 204):
-        logger.error("[WATCHLIST] delete(%s): PostgREST returned HTTP %s — body: %s", symbol, resp.status_code, _safe_body(resp))
+        logger.error(
+            "[WATCHLIST] delete(%s): PostgREST returned HTTP %s — body: %s",
+            symbol,
+            resp.status_code,
+            _safe_body(resp),
+        )
         raise SupabaseRestError(resp.status_code, _safe_body(resp))
     try:
         rows = resp.json()

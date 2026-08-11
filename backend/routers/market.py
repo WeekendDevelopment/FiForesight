@@ -4,21 +4,20 @@ import logging
 import math
 import re
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import httpx
 import pandas as pd
 import yfinance as yf
+from backtester_service import STRATEGIES, run_backtest
+from config import Config
+from dependencies import fred_svc, insider_svc, limiter, yf_svc
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
-from slowapi.util import get_remote_address
-from scipy.stats import norm
-
-from config import Config
-from dependencies import yf_svc, limiter, fred_svc, insider_svc
 from redis_cache import cache_get, cache_set
+from scipy.stats import norm
 from screener_service import build_universe_snapshot
-from backtester_service import run_backtest, STRATEGIES
+from slowapi.util import get_remote_address
 
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-:]{1,15}$")
 
@@ -34,11 +33,12 @@ def _safe_int(v: Any) -> int:
     except (TypeError, ValueError):
         return 0
 
+
 # ---------------------------------------------------------------------------
 # DCF Intrinsic Value
 # ---------------------------------------------------------------------------
-RISK_FREE_RATE      = 0.045   # ~10Y Treasury yield
-EQUITY_RISK_PREMIUM = 0.055   # Damodaran
+RISK_FREE_RATE = 0.045  # ~10Y Treasury yield
+EQUITY_RISK_PREMIUM = 0.055  # Damodaran
 
 
 def _bs_greeks(S: float, K: float, T: float, r: float, sigma: float, is_call: bool):
@@ -54,12 +54,16 @@ def _bs_greeks(S: float, K: float, T: float, r: float, sigma: float, is_call: bo
     d2 = d1 - sigma * math.sqrt(T)
     if is_call:
         delta = norm.cdf(d1)
-        theta = (-(S * norm.pdf(d1) * sigma) / (2 * math.sqrt(T))
-                 - r * K * math.exp(-r * T) * norm.cdf(d2)) / 365
+        theta = (
+            -(S * norm.pdf(d1) * sigma) / (2 * math.sqrt(T))
+            - r * K * math.exp(-r * T) * norm.cdf(d2)
+        ) / 365
     else:
         delta = norm.cdf(d1) - 1
-        theta = (-(S * norm.pdf(d1) * sigma) / (2 * math.sqrt(T))
-                 + r * K * math.exp(-r * T) * norm.cdf(-d2)) / 365
+        theta = (
+            -(S * norm.pdf(d1) * sigma) / (2 * math.sqrt(T))
+            + r * K * math.exp(-r * T) * norm.cdf(-d2)
+        ) / 365
     return (round(delta, 3), round(theta, 4))
 
 
@@ -74,7 +78,7 @@ def _run_dcf(
     pv = 0.0
     cf = fcf
     for yr in range(1, years + 1):
-        cf *= (1 + growth)
+        cf *= 1 + growth
         pv += cf / ((1 + wacc) ** yr)
     # Gordon Growth terminal value
     tv = cf * (1 + terminal_growth) / max(wacc - terminal_growth, 0.001)
@@ -129,13 +133,11 @@ async def dcf_valuation(request: Request, symbol: str):
             info = retry
             await cache_set(info_cache_key, info, ttl_seconds=3600)
 
-    fundamentals_complete = not (
-        _missing(info.get("beta")) or _missing(info.get("revenue_growth"))
-    )
+    fundamentals_complete = not (_missing(info.get("beta")) or _missing(info.get("revenue_growth")))
 
     # Raw data
-    fcf           = info.get("free_cash_flow")
-    beta          = info.get("beta")
+    fcf = info.get("free_cash_flow")
+    beta = info.get("beta")
     revenue_growth = info.get("revenue_growth")
     current_price = info.get("current_price", 0)
 
@@ -143,9 +145,7 @@ async def dcf_valuation(request: Request, symbol: str):
     ticker_obj = await asyncio.to_thread(lambda: yf.Ticker(symbol.upper()))
     ticker_info = await asyncio.to_thread(lambda: ticker_obj.info)
     shares = (
-        ticker_info.get("sharesOutstanding")
-        or ticker_info.get("impliedSharesOutstanding")
-        or 1
+        ticker_info.get("sharesOutstanding") or ticker_info.get("impliedSharesOutstanding") or 1
     )
 
     # FCF fallback: info may not carry freeCashflow in newer yfinance builds.
@@ -194,38 +194,41 @@ async def dcf_valuation(request: Request, symbol: str):
 
     # Growth rate
     g = float(revenue_growth) if revenue_growth and revenue_growth != "N/A" else 0.05
-    g = max(-0.20, min(g, 0.40))   # clamp to ±20-40%
+    g = max(-0.20, min(g, 0.40))  # clamp to ±20-40%
 
     TERMINAL_GROWTH = 0.025
 
     def scenario(wacc_delta: float, growth_mult: float) -> dict:
-        w  = max(wacc_base + wacc_delta, TERMINAL_GROWTH + 0.001)
+        w = max(wacc_base + wacc_delta, TERMINAL_GROWTH + 0.001)
         gr = g * growth_mult
-        total_pv  = _run_dcf(float(fcf), gr, w, TERMINAL_GROWTH)
+        total_pv = _run_dcf(float(fcf), gr, w, TERMINAL_GROWTH)
         per_share = round(total_pv / shares, 2)
-        upside    = (
+        upside = (
             round((per_share - float(current_price)) / float(current_price) * 100, 1)
-            if current_price else 0
+            if current_price
+            else 0
         )
         return {
-            "wacc":            round(w  * 100, 2),
-            "growth_rate":     round(gr * 100, 2),
+            "wacc": round(w * 100, 2),
+            "growth_rate": round(gr * 100, 2),
             "intrinsic_value": per_share,
-            "upside_pct":      upside,
+            "upside_pct": upside,
         }
 
-    logger.info(f"[DCF] {symbol.upper()} — FCF={fcf:.0f} beta={b:.2f} wacc_base={wacc_base:.3f} g={g:.3f}")
+    logger.info(
+        f"[DCF] {symbol.upper()} — FCF={fcf:.0f} beta={b:.2f} wacc_base={wacc_base:.3f} g={g:.3f}"
+    )
     return {
-        "symbol":             symbol.upper(),
-        "current_price":      round(float(current_price), 2),
-        "bear":               scenario(+0.02, 0.7),
-        "base":               scenario(0.0,   1.0),
-        "bull":               scenario(-0.02, 1.3),
+        "symbol": symbol.upper(),
+        "current_price": round(float(current_price), 2),
+        "bear": scenario(+0.02, 0.7),
+        "base": scenario(0.0, 1.0),
+        "bull": scenario(-0.02, 1.3),
         "shares_outstanding": int(shares),
-        "fcf_billions":       round(float(fcf) / 1e9, 2),
-        "wacc_base":          round(wacc_base * 100, 2),
-        "growth_rate_base":   round(g * 100, 2),
-        "method":             "FCF",
+        "fcf_billions": round(float(fcf) / 1e9, 2),
+        "wacc_base": round(wacc_base * 100, 2),
+        "growth_rate_base": round(g * 100, 2),
+        "method": "FCF",
         # False when yfinance returned partial fundamentals and beta/growth fell
         # back to defaults — lets the frontend flag a lower-confidence valuation.
         "fundamentals_complete": fundamentals_complete,
@@ -236,9 +239,10 @@ async def dcf_valuation(request: Request, symbol: str):
 # Options Chain
 # ---------------------------------------------------------------------------
 
+
 @router.get("/options/{symbol}")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def options_chain(request: Request, symbol: str, expiry: Optional[str] = None) -> Dict[str, Any]:
+async def options_chain(request: Request, symbol: str, expiry: str | None = None) -> dict[str, Any]:
     """Returns an options chain (calls + puts) for the given symbol.
 
     Filters to strikes within ±25% of current price to keep payload small.
@@ -250,15 +254,15 @@ async def options_chain(request: Request, symbol: str, expiry: Optional[str] = N
     if not _SYMBOL_RE.match(symbol):
         raise HTTPException(status_code=422, detail="Invalid symbol.")
 
-    def _fetch() -> Optional[Dict[str, Any]]:
+    def _fetch() -> dict[str, Any] | None:
         ticker = yf.Ticker(symbol.upper())
         expirations = ticker.options
         if not expirations:
             return None
         # Honour the requested expiry only when it's a real one; else nearest.
         selected_expiry = expiry if (expiry and expiry in expirations) else expirations[0]
-        chain  = ticker.option_chain(selected_expiry)
-        price  = (
+        chain = ticker.option_chain(selected_expiry)
+        price = (
             ticker.info.get("currentPrice")
             or ticker.info.get("regularMarketPrice")
             or ticker.info.get("previousClose")
@@ -271,13 +275,13 @@ async def options_chain(request: Request, symbol: str, expiry: Optional[str] = N
 
         # Time to expiry in years for the Greeks (floor at 1 day).
         try:
-            exp_date = datetime.strptime(selected_expiry, "%Y-%m-%d").date()
-            days_to_expiry = (exp_date - date.today()).days
+            exp_date = date.fromisoformat(selected_expiry)
+            days_to_expiry = (exp_date - datetime.now(timezone.utc).date()).days
         except ValueError:
             days_to_expiry = 30
         T = max(days_to_expiry, 1) / 365
 
-        def _clean(df: Any, is_call: bool) -> List[Dict[str, Any]]:
+        def _clean(df: Any, is_call: bool) -> list[dict[str, Any]]:
             rows = []
             for _, r in df.iterrows():
                 strike = float(r.get("strike", 0))
@@ -287,33 +291,35 @@ async def options_chain(request: Request, symbol: str, expiry: Optional[str] = N
                 if not math.isfinite(raw_iv) or raw_iv < 0:
                     raw_iv = 0.0
                 delta, theta = _bs_greeks(price, strike, T, RISK_FREE_RATE, raw_iv, is_call)
-                rows.append({
-                    "strike":        round(strike, 2),
-                    "last":          round(float(r.get("lastPrice",        0)), 2),
-                    "bid":           round(float(r.get("bid",              0)), 2),
-                    "ask":           round(float(r.get("ask",              0)), 2),
-                    "change":        round(float(r.get("change",           0)), 2),
-                    "change_pct":    round(float(r.get("percentChange",    0)), 2),
-                    "volume":        _safe_int(r.get("volume",       0)),
-                    "open_interest": _safe_int(r.get("openInterest", 0)),
-                    "implied_vol":   round(raw_iv * 100, 1),
-                    "delta":         delta,
-                    "theta":         theta,
-                    "in_the_money":  bool(r.get("inTheMoney", False)),
-                    "type":          "call" if is_call else "put",
-                })
+                rows.append(
+                    {
+                        "strike": round(strike, 2),
+                        "last": round(float(r.get("lastPrice", 0)), 2),
+                        "bid": round(float(r.get("bid", 0)), 2),
+                        "ask": round(float(r.get("ask", 0)), 2),
+                        "change": round(float(r.get("change", 0)), 2),
+                        "change_pct": round(float(r.get("percentChange", 0)), 2),
+                        "volume": _safe_int(r.get("volume", 0)),
+                        "open_interest": _safe_int(r.get("openInterest", 0)),
+                        "implied_vol": round(raw_iv * 100, 1),
+                        "delta": delta,
+                        "theta": theta,
+                        "in_the_money": bool(r.get("inTheMoney", False)),
+                        "type": "call" if is_call else "put",
+                    }
+                )
             return rows
 
         calls = _clean(chain.calls, True)
-        puts  = _clean(chain.puts,  False)
+        puts = _clean(chain.puts, False)
 
-        def _atm_iv(rows: List[Dict[str, Any]]) -> float:
+        def _atm_iv(rows: list[dict[str, Any]]) -> float:
             """Mean implied vol of contracts within 5% of spot (ATM)."""
             atm = [r["implied_vol"] for r in rows if abs(r["strike"] - price) / price <= 0.05]
             return round(sum(atm) / len(atm), 1) if atm else 0.0
 
         iv_avg_calls = _atm_iv(calls)
-        iv_avg_puts  = _atm_iv(puts)
+        iv_avg_puts = _atm_iv(puts)
         stats = {
             "put_call_ratio": round(
                 sum(p["open_interest"] for p in puts)
@@ -321,18 +327,18 @@ async def options_chain(request: Request, symbol: str, expiry: Optional[str] = N
                 2,
             ),
             "iv_avg_calls": iv_avg_calls,
-            "iv_avg_puts":  iv_avg_puts,
-            "iv_skew":      round(iv_avg_puts - iv_avg_calls, 1),
+            "iv_avg_puts": iv_avg_puts,
+            "iv_skew": round(iv_avg_puts - iv_avg_calls, 1),
         }
 
         return {
-            "symbol":        symbol.upper(),
-            "expiry":        selected_expiry,
-            "expirations":   list(expirations[:8]),
+            "symbol": symbol.upper(),
+            "expiry": selected_expiry,
+            "expirations": list(expirations[:8]),
             "current_price": round(price, 2),
-            "calls":         calls,
-            "puts":          puts,
-            "stats":         stats,
+            "calls": calls,
+            "puts": puts,
+            "stats": stats,
         }
 
     try:
@@ -357,43 +363,88 @@ async def options_chain(request: Request, symbol: str, expiry: Optional[str] = N
 # symbol -> company name. yfinance's FastInfo carries no display_name, and
 # calling .info for every ticker would blow the 45s budget — so names for the
 # (hardcoded) watchlist are resolved from this static map, no API cost.
-EARNINGS_NAMES: Dict[str, str] = {
-    "AAPL": "Apple", "MSFT": "Microsoft", "NVDA": "NVIDIA", "AMZN": "Amazon",
-    "GOOGL": "Alphabet", "META": "Meta Platforms", "TSLA": "Tesla", "AVGO": "Broadcom",
-    "BRK-B": "Berkshire Hathaway", "JPM": "JPMorgan Chase", "LLY": "Eli Lilly",
-    "V": "Visa", "UNH": "UnitedHealth", "XOM": "Exxon Mobil", "MA": "Mastercard",
-    "JNJ": "Johnson & Johnson", "PG": "Procter & Gamble", "HD": "Home Depot",
-    "COST": "Costco", "ABBV": "AbbVie", "MRK": "Merck", "CVX": "Chevron",
-    "CRM": "Salesforce", "WMT": "Walmart", "BAC": "Bank of America", "NFLX": "Netflix",
-    "AMD": "Advanced Micro Devices", "KO": "Coca-Cola", "PEP": "PepsiCo",
-    "TMO": "Thermo Fisher", "ACN": "Accenture", "LIN": "Linde", "MCD": "McDonald's",
-    "ABT": "Abbott Laboratories", "CSCO": "Cisco", "ORCL": "Oracle", "GE": "GE Aerospace",
-    "TXN": "Texas Instruments", "ADBE": "Adobe", "PM": "Philip Morris", "DHR": "Danaher",
-    "INTC": "Intel", "QCOM": "Qualcomm", "NEE": "NextEra Energy", "RTX": "RTX Corp",
-    "UPS": "United Parcel Service", "AMGN": "Amgen", "INTU": "Intuit",
-    "IBM": "IBM", "SBUX": "Starbucks", "CAT": "Caterpillar", "GS": "Goldman Sachs",
-    "BLK": "BlackRock", "SPGI": "S&P Global", "AXP": "American Express",
-    "NOW": "ServiceNow", "ISRG": "Intuitive Surgical",
+EARNINGS_NAMES: dict[str, str] = {
+    "AAPL": "Apple",
+    "MSFT": "Microsoft",
+    "NVDA": "NVIDIA",
+    "AMZN": "Amazon",
+    "GOOGL": "Alphabet",
+    "META": "Meta Platforms",
+    "TSLA": "Tesla",
+    "AVGO": "Broadcom",
+    "BRK-B": "Berkshire Hathaway",
+    "JPM": "JPMorgan Chase",
+    "LLY": "Eli Lilly",
+    "V": "Visa",
+    "UNH": "UnitedHealth",
+    "XOM": "Exxon Mobil",
+    "MA": "Mastercard",
+    "JNJ": "Johnson & Johnson",
+    "PG": "Procter & Gamble",
+    "HD": "Home Depot",
+    "COST": "Costco",
+    "ABBV": "AbbVie",
+    "MRK": "Merck",
+    "CVX": "Chevron",
+    "CRM": "Salesforce",
+    "WMT": "Walmart",
+    "BAC": "Bank of America",
+    "NFLX": "Netflix",
+    "AMD": "Advanced Micro Devices",
+    "KO": "Coca-Cola",
+    "PEP": "PepsiCo",
+    "TMO": "Thermo Fisher",
+    "ACN": "Accenture",
+    "LIN": "Linde",
+    "MCD": "McDonald's",
+    "ABT": "Abbott Laboratories",
+    "CSCO": "Cisco",
+    "ORCL": "Oracle",
+    "GE": "GE Aerospace",
+    "TXN": "Texas Instruments",
+    "ADBE": "Adobe",
+    "PM": "Philip Morris",
+    "DHR": "Danaher",
+    "INTC": "Intel",
+    "QCOM": "Qualcomm",
+    "NEE": "NextEra Energy",
+    "RTX": "RTX Corp",
+    "UPS": "United Parcel Service",
+    "AMGN": "Amgen",
+    "INTU": "Intuit",
+    "IBM": "IBM",
+    "SBUX": "Starbucks",
+    "CAT": "Caterpillar",
+    "GS": "Goldman Sachs",
+    "BLK": "BlackRock",
+    "SPGI": "S&P Global",
+    "AXP": "American Express",
+    "NOW": "ServiceNow",
+    "ISRG": "Intuitive Surgical",
     # Semis / large caps the team tracks but were missing (issue #283).
-    "MU": "Micron Technology", "LRCX": "Lam Research", "KLAC": "KLA Corp",
-    "ADI": "Analog Devices", "PANW": "Palo Alto Networks", "SNPS": "Synopsys",
+    "MU": "Micron Technology",
+    "LRCX": "Lam Research",
+    "KLAC": "KLA Corp",
+    "ADI": "Analog Devices",
+    "PANW": "Palo Alto Networks",
+    "SNPS": "Synopsys",
     "CDNS": "Cadence Design",
 }
 
 EARNINGS_WATCHLIST = list(EARNINGS_NAMES.keys())
 
 
-def _next_future_earnings_date(t: "yf.Ticker") -> Optional[str]:
+def _next_future_earnings_date(t: "yf.Ticker") -> str | None:
     """Fallback when ``t.calendar`` has no date: pull the next future date from
     ``t.get_earnings_dates`` (a DataFrame indexed by Timestamp). Returns an ISO
     ``YYYY-MM-DD`` string or None. Never raises — caller's try/except still
     guards, but a bad ticker here degrades to None rather than aborting."""
     try:
         df = t.get_earnings_dates(limit=8)
-    except Exception:  # noqa: BLE001 — yfinance can raise on a missing ticker
+    except Exception:
         try:
             df = getattr(t, "earnings_dates", None)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
     if df is None or not hasattr(df, "index") or len(df) == 0:
         return None
@@ -411,24 +462,24 @@ def _next_future_earnings_date(t: "yf.Ticker") -> Optional[str]:
 async def earnings_calendar(request: Request):
     """Returns upcoming earnings dates for S&P 500 top constituents. Cached 6h."""
     from redis_cache import cache_get, cache_set
+
     CACHE_KEY = "earnings:calendar"
     cached = await cache_get(CACHE_KEY)
     if cached:
         return cached
 
     def _fetch_earnings():
-        results: Dict[str, List[Dict[str, Any]]] = {}
+        results: dict[str, list[dict[str, Any]]] = {}
         for ticker in EARNINGS_WATCHLIST:
             try:
                 t = yf.Ticker(ticker)
                 cal = t.calendar  # dict or DataFrame depending on yfinance version
-                date_val: Optional[str] = None
+                date_val: str | None = None
                 if cal is not None and hasattr(cal, "loc"):  # DataFrame
                     if "Earnings Date" in cal.index:
                         dates = cal.loc["Earnings Date"]
                         date_val = (
-                            str(dates.iloc[0])[:10]
-                            if hasattr(dates, "iloc") else str(dates)[:10]
+                            str(dates.iloc[0])[:10] if hasattr(dates, "iloc") else str(dates)[:10]
                         )
                 elif isinstance(cal, dict):
                     raw = cal.get("Earnings Date", [None])
@@ -448,22 +499,26 @@ async def earnings_calendar(request: Request):
                 # fast_info is cheaper than .info for market cap; names come
                 # from the static map (FastInfo has no display_name).
                 info = t.fast_info
-                short_name = EARNINGS_NAMES.get(ticker) or getattr(info, "display_name", ticker) or ticker
+                short_name = (
+                    EARNINGS_NAMES.get(ticker) or getattr(info, "display_name", ticker) or ticker
+                )
                 market_cap = getattr(info, "market_cap", 0) or 0
 
-                results.setdefault(date_val, []).append({
-                    "symbol": ticker,
-                    "name": short_name,
-                    "market_cap": market_cap,
-                    "date": date_val,
-                })
+                results.setdefault(date_val, []).append(
+                    {
+                        "symbol": ticker,
+                        "name": short_name,
+                        "market_cap": market_cap,
+                        "date": date_val,
+                    }
+                )
             except Exception as _exc:
                 logger.debug("[EARNINGS] skipping ticker %s: %s", ticker, _exc)
                 continue
 
         # Sort each day's entries by market cap desc, keep top 12 so a busy
         # earnings day doesn't silently drop mid-caps (issue #283).
-        calendar: Dict[str, List[Dict[str, Any]]] = {}
+        calendar: dict[str, list[dict[str, Any]]] = {}
         for date_str, entries in results.items():
             entries.sort(key=lambda x: x["market_cap"], reverse=True)
             calendar[date_str] = entries[:12]
@@ -489,6 +544,7 @@ async def earnings_calendar(request: Request):
 
 # --- Nasdaq IPO calendar (free, no key) parsing helpers ---------------------
 
+
 def _nasdaq_date_to_iso(s: Any) -> str:
     """Convert Nasdaq's ``M/D/YYYY`` date to ISO ``YYYY-MM-DD`` ('' if invalid)."""
     if not isinstance(s, str):
@@ -503,12 +559,12 @@ def _nasdaq_date_to_iso(s: Any) -> str:
         return ""
 
 
-def _parse_price_string(s: Any) -> Tuple[Optional[float], Optional[float]]:
+def _parse_price_string(s: Any) -> tuple[float | None, float | None]:
     """``"135.00"`` -> (135.0, 135.0); ``"15.00-17.00"`` -> (15.0, 17.0)."""
     if not isinstance(s, str) or not s.strip():
         return None, None
 
-    def _n(x: str) -> Optional[float]:
+    def _n(x: str) -> float | None:
         try:
             return float(x.strip())
         except (TypeError, ValueError):
@@ -523,7 +579,7 @@ def _parse_price_string(s: Any) -> Tuple[Optional[float], Optional[float]]:
     return None, None
 
 
-def _parse_loose_int(s: Any) -> Optional[int]:
+def _parse_loose_int(s: Any) -> int | None:
     """Parse ``"555,555,555"`` / ``"$86,000,000"`` -> int (None if unparseable)."""
     if s is None:
         return None
@@ -533,9 +589,7 @@ def _parse_loose_int(s: Any) -> Optional[int]:
         return None
 
 
-def _normalize_nasdaq_row(
-    row: Dict[str, Any], status: str, action: str
-) -> Optional[Dict[str, Any]]:
+def _normalize_nasdaq_row(row: dict[str, Any], status: str, action: str) -> dict[str, Any] | None:
     """Map a Nasdaq IPO-calendar row onto the shared IPO card shape."""
     symbol = str(row.get("proposedTickerSymbol") or row.get("symbol") or "").strip()
     company = str(row.get("companyName") or "").strip()
@@ -543,26 +597,29 @@ def _normalize_nasdaq_row(
         return None
     low, high = _parse_price_string(row.get("proposedSharePrice"))
     iso = _nasdaq_date_to_iso(
-        row.get("expectedPriceDate") or row.get("pricedDate")
-        or row.get("priceDate") or row.get("filedDate") or row.get("dealDate")
+        row.get("expectedPriceDate")
+        or row.get("pricedDate")
+        or row.get("priceDate")
+        or row.get("filedDate")
+        or row.get("dealDate")
     )
     return {
-        "symbol":     symbol,
-        "company":    company or "Unknown",
-        "exchange":   str(row.get("proposedExchange") or row.get("exchange") or "").strip(),
-        "date":       iso,
-        "price_low":  low,
+        "symbol": symbol,
+        "company": company or "Unknown",
+        "exchange": str(row.get("proposedExchange") or row.get("exchange") or "").strip(),
+        "date": iso,
+        "price_low": low,
         "price_high": high,
-        "shares":     _parse_loose_int(row.get("sharesOffered")),
+        "shares": _parse_loose_int(row.get("sharesOffered")),
         "market_cap": _parse_loose_int(row.get("dollarValueOfSharesOffered")),
-        "actions":    action,
-        "status":     status,
+        "actions": action,
+        "status": status,
     }
 
 
 @router.get("/ipo/calendar")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def ipo_calendar(request: Request, refresh: bool = False) -> Dict[str, Any]:
+async def ipo_calendar(request: Request, refresh: bool = False) -> dict[str, Any]:
     """Upcoming (next 90d) + recent (last 30d) public offerings.
 
     Source chain (degrades on failure):
@@ -571,21 +628,22 @@ async def ipo_calendar(request: Request, refresh: bool = False) -> Dict[str, Any
     Cached 4h in Redis; pass ``?refresh=true`` to force a live re-fetch.
     """
     from redis_cache import cache_get, cache_set
+
     CACHE_KEY = "ipo:calendar"
     if not refresh:
         cached = await cache_get(CACHE_KEY)
         if cached:
             return cached
 
-    today = date.today()
+    today = datetime.now(timezone.utc).date()
 
-    async def _fetch_nasdaq() -> List[Dict[str, Any]]:
+    async def _fetch_nasdaq() -> list[dict[str, Any]]:
         """Free Nasdaq IPO calendar — upcoming + priced/filed/withdrawn, no key.
 
         The endpoint is queried per calendar month, so we sweep the months that
         cover the last ~30 and next ~90 days and de-dupe by deal id.
         """
-        months: List[str] = []
+        months: list[str] = []
         base = today.year * 12 + (today.month - 1)
         for delta in range(-1, 4):  # previous month .. +3 months
             total = base + delta
@@ -596,11 +654,10 @@ async def ipo_calendar(request: Request, refresh: bool = False) -> Dict[str, Any
             "Accept": "application/json",
         }
         async with httpx.AsyncClient(timeout=10.0, headers=headers) as client:
-            async def _month(mo: str) -> Optional[Dict[str, Any]]:
+
+            async def _month(mo: str) -> dict[str, Any] | None:
                 try:
-                    r = await client.get(
-                        f"https://api.nasdaq.com/api/ipo/calendar?date={mo}"
-                    )
+                    r = await client.get(f"https://api.nasdaq.com/api/ipo/calendar?date={mo}")
                     r.raise_for_status()
                     return r.json()
                 except Exception as exc:
@@ -609,20 +666,18 @@ async def ipo_calendar(request: Request, refresh: bool = False) -> Dict[str, Any
 
             payloads = await asyncio.gather(*[_month(mo) for mo in months])
 
-        datas = [
-            d for d in ((p or {}).get("data") for p in payloads) if isinstance(d, dict)
-        ]
+        datas = [d for d in ((p or {}).get("data") for p in payloads) if isinstance(d, dict)]
 
-        def _rows(data: Dict[str, Any], table: str) -> List[Dict[str, Any]]:
+        def _rows(data: dict[str, Any], table: str) -> list[dict[str, Any]]:
             tbl = data.get(table) or {}
             if table == "upcoming":
                 tbl = tbl.get("upcomingTable") or {}
             return tbl.get("rows") or []
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         seen: set = set()
 
-        def _ingest(rows: List[Dict[str, Any]], status: str, action: str) -> None:
+        def _ingest(rows: list[dict[str, Any]], status: str, action: str) -> None:
             for row in rows:
                 norm = _normalize_nasdaq_row(row, status, action)
                 if norm is None:
@@ -648,7 +703,7 @@ async def ipo_calendar(request: Request, refresh: bool = False) -> Dict[str, Any
             raise RuntimeError("Nasdaq returned no IPO rows")
         return results
 
-    async def _fetch_edgar_fallback() -> List[Dict[str, Any]]:
+    async def _fetch_edgar_fallback() -> list[dict[str, Any]]:
         """Lightweight fallback: recent S-1 filings from EDGAR full-text search."""
         from_date = (today - timedelta(days=30)).isoformat()
         url = (
@@ -663,26 +718,28 @@ async def ipo_calendar(request: Request, refresh: bool = False) -> Dict[str, Any
             resp.raise_for_status()
             raw = resp.json()
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         hits = ((raw or {}).get("hits", {}) or {}).get("hits", []) or []
         for hit in hits[:20]:
             src = hit.get("_source", {}) or {}
             names = src.get("display_names") or []
-            results.append({
-                "symbol":     "",
-                "company":    names[0] if names else "Unknown",
-                "exchange":   "US",
-                "date":       src.get("file_date", "") or "",
-                "price_low":  None,
-                "price_high": None,
-                "shares":     None,
-                "market_cap": None,
-                "actions":    "S-1 Filed",
-                "status":     "recent",
-            })
+            results.append(
+                {
+                    "symbol": "",
+                    "company": names[0] if names else "Unknown",
+                    "exchange": "US",
+                    "date": src.get("file_date", "") or "",
+                    "price_low": None,
+                    "price_high": None,
+                    "shares": None,
+                    "market_cap": None,
+                    "actions": "S-1 Filed",
+                    "status": "recent",
+                }
+            )
         return results
 
-    data: Optional[List[Dict[str, Any]]] = None
+    data: list[dict[str, Any]] | None = None
     source = "edgar"
 
     # 1) Free Nasdaq IPO calendar — the default upcoming + recent source.
@@ -706,17 +763,15 @@ async def ipo_calendar(request: Request, refresh: bool = False) -> Dict[str, Any
             raise HTTPException(status_code=502, detail="IPO data provider error")
 
     # Upcoming first (ascending by date), then recent (most recent first).
-    upcoming = sorted(
-        [x for x in data if x["status"] == "upcoming"], key=lambda x: x["date"]
-    )
+    upcoming = sorted([x for x in data if x["status"] == "upcoming"], key=lambda x: x["date"])
     recent = sorted(
         [x for x in data if x["status"] == "recent"], key=lambda x: x["date"], reverse=True
     )[:60]  # cap the recent list so a busy filing window can't bloat the payload
 
     payload = {
-        "upcoming":     upcoming,
-        "recent":       recent,
-        "source":       source,
+        "upcoming": upcoming,
+        "recent": recent,
+        "source": source,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
     await cache_set(CACHE_KEY, payload, ttl_seconds=14400)  # 4h TTL
@@ -746,9 +801,10 @@ SECTOR_ETF_MAP = {
 
 @router.get("/sectors/heatmap")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def get_sector_heatmap(request: Request) -> List[Dict[str, Any]]:
+async def get_sector_heatmap(request: Request) -> list[dict[str, Any]]:
     """11 GICS sector ETFs with 1D + 5D % returns. Cached 15 min."""
     from redis_cache import cache_get, cache_set
+
     CACHE_KEY = "sectors:heatmap:f23"
     cached = await cache_get(CACHE_KEY)
     if cached:
@@ -764,12 +820,15 @@ async def get_sector_heatmap(request: Request) -> List[Dict[str, Any]]:
             # A single-ticker download isn't grouped by ticker.
             return raw["Close"].dropna()
 
-    def _download_rows(etfs: List[str]) -> Dict[str, Dict[str, Any]]:
+    def _download_rows(etfs: list[str]) -> dict[str, dict[str, Any]]:
         raw = yf.download(
-            " ".join(etfs), period="6d", auto_adjust=True,
-            progress=False, group_by="ticker",
+            " ".join(etfs),
+            period="6d",
+            auto_adjust=True,
+            progress=False,
+            group_by="ticker",
         )
-        out: Dict[str, Dict[str, Any]] = {}
+        out: dict[str, dict[str, Any]] = {}
         # iterate the canonical map so each row keeps its full sector name
         for sector, etf in SECTOR_ETF_MAP.items():
             if etf not in etfs:
@@ -792,7 +851,7 @@ async def get_sector_heatmap(request: Request) -> List[Dict[str, Any]]:
                 logger.warning(f"sector heatmap {etf}: {e}")
         return out
 
-    def _fetch() -> List[Dict[str, Any]]:
+    def _fetch() -> list[dict[str, Any]]:
         all_etfs = list(SECTOR_ETF_MAP.values())
         rows = _download_rows(all_etfs)
         # yfinance intermittently drops a ticker from a grouped batch (transient).
@@ -822,7 +881,7 @@ async def get_sector_heatmap(request: Request) -> List[Dict[str, Any]]:
 
 @router.get("/sectors/rotation")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def sector_rotation(request: Request) -> List[Dict[str, Any]]:
+async def sector_rotation(request: Request) -> list[dict[str, Any]]:
     """Relative strength of each GICS sector ETF vs SPY over 1M/3M/6M.
 
     Returns a list of {sector, etf, rs_1m, rs_3m, rs_6m, rs_momentum,
@@ -846,19 +905,23 @@ async def sector_rotation(request: Request) -> List[Dict[str, Any]]:
         except KeyError:
             return raw["Close"].dropna()
 
-    def _ret(closes: pd.Series, bars: int) -> Optional[float]:
+    def _ret(closes: pd.Series, bars: int) -> float | None:
         if len(closes) <= bars:
             return None
         return (closes.iloc[-1] / closes.iloc[-bars - 1] - 1) * 100
 
-    def _fetch() -> List[Dict[str, Any]]:
+    def _fetch() -> list[dict[str, Any]]:
         raw = yf.download(
-            " ".join(tickers), period="7mo", interval="1d",
-            auto_adjust=True, progress=False, group_by="ticker",
+            " ".join(tickers),
+            period="7mo",
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+            group_by="ticker",
         )
         spy = _closes(raw, "SPY")
         spy_1m, spy_3m, spy_6m = _ret(spy, 21), _ret(spy, 63), _ret(spy, 126)
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for sector, etf in SECTOR_ETF_MAP.items():
             try:
                 c = _closes(raw, etf)
@@ -868,7 +931,9 @@ async def sector_rotation(request: Request) -> List[Dict[str, Any]]:
                 rs_1m = round(r1 - spy_1m, 2) if r1 is not None and spy_1m is not None else None
                 rs_3m = round(r3 - spy_3m, 2) if r3 is not None and spy_3m is not None else None
                 rs_6m = round(r6 - spy_6m, 2) if r6 is not None and spy_6m is not None else None
-                momentum = round((rs_1m - rs_3m), 2) if rs_1m is not None and rs_3m is not None else None
+                momentum = (
+                    round((rs_1m - rs_3m), 2) if rs_1m is not None and rs_3m is not None else None
+                )
                 level = rs_3m if rs_3m is not None else (rs_1m or 0)
                 mom = momentum if momentum is not None else 0
                 if level >= 0 and mom >= 0:
@@ -879,15 +944,21 @@ async def sector_rotation(request: Request) -> List[Dict[str, Any]]:
                     quadrant = "improving"
                 else:
                     quadrant = "lagging"
-                rows.append({
-                    "sector": sector, "etf": etf, "rs_1m": rs_1m,
-                    "rs_3m": rs_3m, "rs_6m": rs_6m, "rs_momentum": momentum,
-                    "quadrant": quadrant,
-                    "ret_1m": round(r1, 2) if r1 is not None else None,
-                })
+                rows.append(
+                    {
+                        "sector": sector,
+                        "etf": etf,
+                        "rs_1m": rs_1m,
+                        "rs_3m": rs_3m,
+                        "rs_6m": rs_6m,
+                        "rs_momentum": momentum,
+                        "quadrant": quadrant,
+                        "ret_1m": round(r1, 2) if r1 is not None else None,
+                    }
+                )
             except Exception as e:
                 logger.warning(f"sector rotation {etf}: {e}")
-        rows.sort(key=lambda x: (x["rs_1m"] if x["rs_1m"] is not None else -999), reverse=True)
+        rows.sort(key=lambda x: x["rs_1m"] if x["rs_1m"] is not None else -999, reverse=True)
         return rows
 
     try:
@@ -906,14 +977,14 @@ async def sector_rotation(request: Request) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 MARKET_OVERVIEW_TICKERS = [
-    ("SPY",  "S&P 500"),
-    ("QQQ",  "NASDAQ"),
-    ("DIA",  "Dow Jones"),
-    ("IWM",  "Russell 2000"),
+    ("SPY", "S&P 500"),
+    ("QQQ", "NASDAQ"),
+    ("DIA", "Dow Jones"),
+    ("IWM", "Russell 2000"),
     ("^VIX", "VIX"),
     ("^TNX", "10Y Yield"),
-    ("GLD",  "Gold"),
-    ("USO",  "Oil"),
+    ("GLD", "Gold"),
+    ("USO", "Oil"),
 ]
 
 
@@ -922,6 +993,7 @@ MARKET_OVERVIEW_TICKERS = [
 async def morning_briefing(request: Request):
     """Market overview: % change for key indices + ETFs. Cached 15 min."""
     from redis_cache import cache_get, cache_set
+
     CACHE_KEY = "briefing:market"
     cached = await cache_get(CACHE_KEY)
     if cached:
@@ -933,15 +1005,28 @@ async def morning_briefing(request: Request):
             try:
                 hist = yf.Ticker(ticker).history(period="5d", interval="1d")
                 if hist is None or len(hist) < 2:
-                    results.append({"ticker": ticker, "label": label, "change_pct": None, "price": None})
+                    results.append(
+                        {"ticker": ticker, "label": label, "change_pct": None, "price": None}
+                    )
                     continue
                 prev_close = float(hist["Close"].iloc[-2])
                 last_close = float(hist["Close"].iloc[-1])
-                change_pct = round((last_close - prev_close) / prev_close * 100, 2) if prev_close else None
-                results.append({"ticker": ticker, "label": label, "change_pct": change_pct, "price": round(last_close, 2)})
+                change_pct = (
+                    round((last_close - prev_close) / prev_close * 100, 2) if prev_close else None
+                )
+                results.append(
+                    {
+                        "ticker": ticker,
+                        "label": label,
+                        "change_pct": change_pct,
+                        "price": round(last_close, 2),
+                    }
+                )
             except Exception as _exc:
                 logger.debug("[BRIEFING] fetch failed for %s: %s", ticker, _exc)
-                results.append({"ticker": ticker, "label": label, "change_pct": None, "price": None})
+                results.append(
+                    {"ticker": ticker, "label": label, "change_pct": None, "price": None}
+                )
         return results
 
     try:
@@ -979,14 +1064,10 @@ _CRYPTO_QUOTES = {"USD", "USDT", "USDC", "USDD", "DAI", "EUR", "GBP", "BTC", "ET
 def _is_crypto_symbol(symbol: str) -> bool:
     """True for Coinbase-style crypto pairs like ``BTC-USD`` / ``ETH-USDT``."""
     parts = symbol.upper().split("-")
-    return (
-        len(parts) == 2
-        and parts[0].isalnum()
-        and parts[1] in _CRYPTO_QUOTES
-    )
+    return len(parts) == 2 and parts[0].isalnum() and parts[1] in _CRYPTO_QUOTES
 
 
-def _build_orderbook(symbol: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _build_orderbook(symbol: str, payload: dict[str, Any]) -> dict[str, Any] | None:
     """Shape an Alpaca latest-quote payload into the order-book response.
 
     The free IEX feed exposes top-of-book (one bid + one ask level). The
@@ -1003,10 +1084,10 @@ def _build_orderbook(symbol: str, payload: Dict[str, Any]) -> Optional[Dict[str,
     if bid_price <= 0 and ask_price <= 0:
         return None
 
-    bids: List[Dict[str, Any]] = (
+    bids: list[dict[str, Any]] = (
         [{"price": round(bid_price, 2), "size": bid_size}] if bid_price > 0 else []
     )
-    asks: List[Dict[str, Any]] = (
+    asks: list[dict[str, Any]] = (
         [{"price": round(ask_price, 2), "size": ask_size}] if ask_price > 0 else []
     )
 
@@ -1036,15 +1117,16 @@ def _build_orderbook(symbol: str, payload: Dict[str, Any]) -> Optional[Dict[str,
 
 
 def _build_coinbase_book(
-    symbol: str, payload: Dict[str, Any], depth: int = ORDERBOOK_DEPTH
-) -> Optional[Dict[str, Any]]:
+    symbol: str, payload: dict[str, Any], depth: int = ORDERBOOK_DEPTH
+) -> dict[str, Any] | None:
     """Shape a Coinbase ``/book?level=2`` payload into the order-book response.
 
     Coinbase returns ``[[price, size, num_orders], ...]`` with bids sorted
     best-first (descending price) and asks best-first (ascending price).
     """
-    def _levels(rows: Any) -> List[Dict[str, Any]]:
-        out: List[Dict[str, Any]] = []
+
+    def _levels(rows: Any) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
         for row in (rows or [])[:depth]:
             try:
                 price = float(row[0])
@@ -1095,7 +1177,7 @@ def _build_coinbase_book(
     }
 
 
-async def _fetch_alpaca_book(sym: str) -> Dict[str, Any]:
+async def _fetch_alpaca_book(sym: str) -> dict[str, Any]:
     """Top-of-book for a stock symbol via the Alpaca free IEX feed."""
     if not Config.ALPACA_API_KEY or not Config.ALPACA_SECRET_KEY:
         raise HTTPException(
@@ -1143,7 +1225,7 @@ async def _fetch_alpaca_book(sym: str) -> Dict[str, Any]:
     return result
 
 
-async def _fetch_coinbase_book(sym: str) -> Dict[str, Any]:
+async def _fetch_coinbase_book(sym: str) -> dict[str, Any]:
     """Free multi-level depth for a crypto pair via Coinbase's public API."""
     url = f"{COINBASE_API_URL}/products/{sym}/book"
     try:
@@ -1178,7 +1260,7 @@ async def _fetch_coinbase_book(sym: str) -> Dict[str, Any]:
 
 @router.get("/orderbook/{symbol}")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def order_book(request: Request, symbol: str) -> Dict[str, Any]:
+async def order_book(request: Request, symbol: str) -> dict[str, Any]:
     """Order book snapshot with spread + bid/ask imbalance metrics.
 
     Crypto pairs (``BTC-USD``) return genuine free Level-2 depth from
@@ -1188,6 +1270,7 @@ async def order_book(request: Request, symbol: str) -> Dict[str, Any]:
     sym = symbol.upper()
 
     from redis_cache import cache_get, cache_set
+
     cache_key = f"orderbook:{sym}"
     cached = await cache_get(cache_key)
     if cached:
@@ -1206,9 +1289,10 @@ async def order_book(request: Request, symbol: str) -> Dict[str, Any]:
 # Alternative Data (Feature 15) — FRED macro snapshot + SEC EDGAR insider flow
 # ---------------------------------------------------------------------------
 
+
 @router.get("/macro/snapshot")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def macro_snapshot(request: Request) -> Dict[str, Any]:
+async def macro_snapshot(request: Request) -> dict[str, Any]:
     """FRED macro snapshot — 10Y yield, CPI, unemployment, fed funds, yield curve.
 
     Each series carries ``{value, delta_30d}``; the payload also flags yield-curve
@@ -1221,7 +1305,7 @@ async def macro_snapshot(request: Request) -> Dict[str, Any]:
 
 @router.get("/insider/{symbol}")
 @limiter.limit(lambda: Config.RATE_LIMIT_INSIDER, key_func=get_remote_address)
-async def insider_transactions(request: Request, symbol: str) -> List[Dict[str, Any]]:
+async def insider_transactions(request: Request, symbol: str) -> list[dict[str, Any]]:
     """Recent (last 30d) SEC EDGAR Form 4 insider filings for ``symbol``.
 
     Returns a list of ``{filer, type, shares, price, date, sec_link}``. Empty
@@ -1236,7 +1320,7 @@ async def insider_transactions(request: Request, symbol: str) -> List[Dict[str, 
 
 @router.get("/analyst-targets/{symbol}")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def analyst_targets(request: Request, symbol: str) -> Dict[str, Any]:
+async def analyst_targets(request: Request, symbol: str) -> dict[str, Any]:
     """Wall Street analyst price targets + rating breakdown for ``symbol``.
 
     Returns target low/mean/median/high, the current price, the number of
@@ -1256,14 +1340,14 @@ async def analyst_targets(request: Request, symbol: str) -> Dict[str, Any]:
     if cached:
         return cached
 
-    def _fetch() -> Dict[str, Any]:
+    def _fetch() -> dict[str, Any]:
         t = yf.Ticker(sym)
         targets = t.analyst_price_targets or {}
 
         # numberOfAnalysts / current price aren't part of analyst_price_targets in
         # current yfinance builds — read .info as a fallback so the card has the
         # full picture on real data (info uses targetMeanPrice-style key names).
-        info: Dict[str, Any] = {}
+        info: dict[str, Any] = {}
         try:
             info = t.info or {}
         except Exception:
@@ -1275,7 +1359,7 @@ async def analyst_targets(request: Request, symbol: str) -> Dict[str, Any]:
                     return v
             return None
 
-        def _num_or_none(v: Any) -> Optional[float]:
+        def _num_or_none(v: Any) -> float | None:
             """Coerce to a finite number, mapping None/NaN/inf/garbage to None.
 
             yfinance can hand back NaN/inf; Starlette's JSONResponse serializes
@@ -1300,14 +1384,18 @@ async def analyst_targets(request: Request, symbol: str) -> Dict[str, Any]:
 
         return {
             "symbol": sym,
-            "currentPrice": _num_or_none(_pick(targets.get("currentPrice"),
-                                               targets.get("current"), info.get("currentPrice"))),
+            "currentPrice": _num_or_none(
+                _pick(targets.get("currentPrice"), targets.get("current"), info.get("currentPrice"))
+            ),
             "targetLow": _num_or_none(_pick(targets.get("low"), info.get("targetLowPrice"))),
             "targetMean": _num_or_none(_pick(targets.get("mean"), info.get("targetMeanPrice"))),
-            "targetMedian": _num_or_none(_pick(targets.get("median"), info.get("targetMedianPrice"))),
+            "targetMedian": _num_or_none(
+                _pick(targets.get("median"), info.get("targetMedianPrice"))
+            ),
             "targetHigh": _num_or_none(_pick(targets.get("high"), info.get("targetHighPrice"))),
-            "numberOfAnalysts": _num_or_none(_pick(targets.get("numberOfAnalysts"),
-                                                   info.get("numberOfAnalystOpinions"))),
+            "numberOfAnalysts": _num_or_none(
+                _pick(targets.get("numberOfAnalysts"), info.get("numberOfAnalystOpinions"))
+            ),
             **recs,
         }
 
@@ -1324,7 +1412,7 @@ async def analyst_targets(request: Request, symbol: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Stock Report Card
 # ---------------------------------------------------------------------------
-def _band(value: Optional[float], points: List[Tuple[float, int]]) -> Optional[int]:
+def _band(value: float | None, points: list[tuple[float, int]]) -> int | None:
     """Map ``value`` to a 0-100 score via ascending ``[(threshold, score)]`` pairs.
 
     Returns the score of the first threshold ``>= value``; falls through to the
@@ -1337,14 +1425,14 @@ def _band(value: Optional[float], points: List[Tuple[float, int]]) -> Optional[i
     return points[-1][1]
 
 
-def _avg(scores: List[Optional[int]]) -> Optional[int]:
+def _avg(scores: list[int | None]) -> int | None:
     vals = [s for s in scores if s is not None]
     return round(sum(vals) / len(vals)) if vals else None
 
 
 @router.get("/report-card/{symbol}")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def report_card(request: Request, symbol: str) -> Dict[str, Any]:
+async def report_card(request: Request, symbol: str) -> dict[str, Any]:
     """Value/Growth/Profitability/Momentum/Financial-Health 0-100 sub-scores +
     overall grade for ``symbol``, heuristically derived from yfinance ``.info``.
 
@@ -1363,8 +1451,8 @@ async def report_card(request: Request, symbol: str) -> Dict[str, Any]:
     if cached:
         return cached
 
-    def _fetch() -> Dict[str, Any]:
-        info: Dict[str, Any] = {}
+    def _fetch() -> dict[str, Any]:
+        info: dict[str, Any] = {}
         try:
             info = yf.Ticker(sym).info or {}
         except Exception:
@@ -1373,44 +1461,64 @@ async def report_card(request: Request, symbol: str) -> Dict[str, Any]:
         pe = info.get("trailingPE")
         pb = info.get("priceToBook")
         peg = info.get("pegRatio")
-        value = _avg([
-            _band(pe, [(10, 100), (15, 85), (25, 65), (40, 40), (80, 20), (1e9, 5)]),
-            _band(pb, [(1, 100), (3, 80), (6, 55), (10, 30), (1e9, 10)]),
-            _band(peg, [(1, 100), (1.5, 80), (2, 60), (3, 35), (1e9, 15)]),
-        ])
+        value = _avg(
+            [
+                _band(pe, [(10, 100), (15, 85), (25, 65), (40, 40), (80, 20), (1e9, 5)]),
+                _band(pb, [(1, 100), (3, 80), (6, 55), (10, 30), (1e9, 10)]),
+                _band(peg, [(1, 100), (1.5, 80), (2, 60), (3, 35), (1e9, 15)]),
+            ]
+        )
 
         rev_g = info.get("revenueGrowth")
         earn_g = info.get("earningsGrowth")
-        growth = _avg([
-            _band(-(rev_g) if rev_g is not None else None,
-                  [(-0.25, 100), (-0.10, 80), (0, 55), (0.05, 30), (1e9, 10)]),
-            _band(-(earn_g) if earn_g is not None else None,
-                  [(-0.25, 100), (-0.10, 80), (0, 55), (0.05, 30), (1e9, 10)]),
-        ])
+        growth = _avg(
+            [
+                _band(
+                    -(rev_g) if rev_g is not None else None,
+                    [(-0.25, 100), (-0.10, 80), (0, 55), (0.05, 30), (1e9, 10)],
+                ),
+                _band(
+                    -(earn_g) if earn_g is not None else None,
+                    [(-0.25, 100), (-0.10, 80), (0, 55), (0.05, 30), (1e9, 10)],
+                ),
+            ]
+        )
 
         pm = info.get("profitMargins")
         roe = info.get("returnOnEquity")
-        profit = _avg([
-            _band(-(pm) if pm is not None else None,
-                  [(-0.25, 100), (-0.15, 80), (-0.05, 55), (0, 30), (1e9, 10)]),
-            _band(-(roe) if roe is not None else None,
-                  [(-0.25, 100), (-0.15, 80), (-0.05, 55), (0, 30), (1e9, 10)]),
-        ])
+        profit = _avg(
+            [
+                _band(
+                    -(pm) if pm is not None else None,
+                    [(-0.25, 100), (-0.15, 80), (-0.05, 55), (0, 30), (1e9, 10)],
+                ),
+                _band(
+                    -(roe) if roe is not None else None,
+                    [(-0.25, 100), (-0.15, 80), (-0.05, 55), (0, 30), (1e9, 10)],
+                ),
+            ]
+        )
 
         price = info.get("currentPrice") or info.get("regularMarketPrice")
         hi = info.get("fiftyTwoWeekHigh")
         lo = info.get("fiftyTwoWeekLow")
         pct_range = ((price - lo) / (hi - lo)) if (price and hi and lo and hi > lo) else None
-        momentum = _band(-(pct_range) if pct_range is not None else None,
-                          [(-0.9, 100), (-0.7, 80), (-0.5, 60), (-0.3, 40), (1e9, 20)])
+        momentum = _band(
+            -(pct_range) if pct_range is not None else None,
+            [(-0.9, 100), (-0.7, 80), (-0.5, 60), (-0.3, 40), (1e9, 20)],
+        )
 
         d2e = info.get("debtToEquity")
         cr = info.get("currentRatio")
-        health = _avg([
-            _band(d2e, [(40, 100), (80, 80), (150, 55), (250, 30), (1e9, 10)]),
-            _band(-(cr) if cr is not None else None,
-                  [(-2, 100), (-1.5, 80), (-1, 55), (-0.5, 30), (1e9, 10)]),
-        ])
+        health = _avg(
+            [
+                _band(d2e, [(40, 100), (80, 80), (150, 55), (250, 30), (1e9, 10)]),
+                _band(
+                    -(cr) if cr is not None else None,
+                    [(-2, 100), (-1.5, 80), (-1, 55), (-0.5, 30), (1e9, 10)],
+                ),
+            ]
+        )
 
         cats = {
             "value": value,
@@ -1420,9 +1528,19 @@ async def report_card(request: Request, symbol: str) -> Dict[str, Any]:
             "financialHealth": health,
         }
         overall = _avg(list(cats.values()))
-        grade = (None if overall is None else
-                 "A" if overall >= 80 else "B" if overall >= 65 else
-                 "C" if overall >= 50 else "D" if overall >= 35 else "F")
+        grade = (
+            None
+            if overall is None
+            else "A"
+            if overall >= 80
+            else "B"
+            if overall >= 65
+            else "C"
+            if overall >= 50
+            else "D"
+            if overall >= 35
+            else "F"
+        )
         return {"symbol": sym, "overall": overall, "grade": grade, "categories": cats}
 
     try:
@@ -1437,7 +1555,7 @@ async def report_card(request: Request, symbol: str) -> Dict[str, Any]:
 
 @router.get("/dividends/{symbol}")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def dividends(request: Request, symbol: str) -> Dict[str, Any]:
+async def dividends(request: Request, symbol: str) -> dict[str, Any]:
     """Dividend / income profile for ``symbol``. Redis-cached 6h; 502 on fetch
     failure. Non-payers return {"symbol", "paysDividend": False}. 60/min."""
     from redis_cache import cache_get, cache_set
@@ -1454,7 +1572,7 @@ async def dividends(request: Request, symbol: str) -> Dict[str, Any]:
     if cached:
         return cached
 
-    def _fetch() -> Dict[str, Any]:
+    def _fetch() -> dict[str, Any]:
         t = yf.Ticker(sym)
         info = {}
         try:
@@ -1484,8 +1602,10 @@ async def dividends(request: Request, symbol: str) -> Dict[str, Any]:
             if divs is not None and len(divs) >= 2:
                 cutoff = divs.index.max()
                 last_12 = divs[divs.index > (cutoff - pd.Timedelta(days=365))].sum()
-                prev_12 = divs[(divs.index <= (cutoff - pd.Timedelta(days=365))) &
-                               (divs.index > (cutoff - pd.Timedelta(days=730)))].sum()
+                prev_12 = divs[
+                    (divs.index <= (cutoff - pd.Timedelta(days=365)))
+                    & (divs.index > (cutoff - pd.Timedelta(days=730)))
+                ].sum()
                 if prev_12 > 0:
                     growth_pct = round((last_12 / prev_12 - 1) * 100, 1)
         except Exception:
@@ -1531,25 +1651,34 @@ async def dividends(request: Request, symbol: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 class ScreenerFilter(BaseModel):
     """Filter/sort criteria for the curated-universe screener. All bounds optional."""
-    sector: Optional[str] = None          # e.g. "Technology"
-    minPE: Optional[float] = None
-    maxPE: Optional[float] = None
-    minRSI: Optional[float] = None
-    maxRSI: Optional[float] = None
-    minBeta: Optional[float] = None
-    maxBeta: Optional[float] = None
-    minDividendYield: Optional[float] = None
-    sortBy: str = "marketCap"             # marketCap | peRatio | rsi | dividendYield
-    sortDir: str = "desc"                 # asc | desc
+
+    sector: str | None = None  # e.g. "Technology"
+    minPE: float | None = None
+    maxPE: float | None = None
+    minRSI: float | None = None
+    maxRSI: float | None = None
+    minBeta: float | None = None
+    maxBeta: float | None = None
+    minDividendYield: float | None = None
+    sortBy: str = "marketCap"  # marketCap | peRatio | rsi | dividendYield
+    sortDir: str = "desc"  # asc | desc
     limit: int = 25
 
 
-_SCREENER_SORT_KEYS = {"marketCap", "peRatio", "forwardPE", "beta", "rsi", "dividendYield", "revenueGrowth"}
+_SCREENER_SORT_KEYS = {
+    "marketCap",
+    "peRatio",
+    "forwardPE",
+    "beta",
+    "rsi",
+    "dividendYield",
+    "revenueGrowth",
+}
 
 
 @router.post("/screener")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def run_screener(request: Request, filters: ScreenerFilter) -> Dict[str, Any]:
+async def run_screener(request: Request, filters: ScreenerFilter) -> dict[str, Any]:
     """Filter & sort the curated ~50-stock universe (F24).
 
     Builds the universe snapshot on-demand (one yfinance row per ticker), caches
@@ -1580,12 +1709,15 @@ async def run_screener(request: Request, filters: ScreenerFilter) -> Dict[str, A
     if filters.maxBeta is not None:
         rows = [r for r in rows if r.get("beta") is not None and r["beta"] <= filters.maxBeta]
     if filters.minDividendYield is not None:
-        rows = [r for r in rows
-                if r.get("dividendYield") is not None and r["dividendYield"] >= filters.minDividendYield]
+        rows = [
+            r
+            for r in rows
+            if r.get("dividendYield") is not None and r["dividendYield"] >= filters.minDividendYield
+        ]
 
     sort_key = filters.sortBy if filters.sortBy in _SCREENER_SORT_KEYS else "marketCap"
     reverse = filters.sortDir == "desc"
-    rows = sorted(rows, key=lambda x: (x.get(sort_key) or 0), reverse=reverse)
+    rows = sorted(rows, key=lambda x: x.get(sort_key) or 0, reverse=reverse)
 
     limit = max(1, min(filters.limit, 50))
     return {"results": rows[:limit], "total": len(rows)}
@@ -1601,7 +1733,7 @@ _TREEMAP_ETF_PROXIES = {"SPY", "QQQ", "IWM"}
 
 @router.get("/market/treemap")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def market_treemap(request: Request) -> List[Dict[str, Any]]:
+async def market_treemap(request: Request) -> list[dict[str, Any]]:
     """Stock-level market map rows: {symbol, name, sector, marketCap, changePct}.
 
     Universe/fundamentals come from the (1h-cached) screener snapshot; fresh 1d
@@ -1624,7 +1756,8 @@ async def market_treemap(request: Request) -> List[Dict[str, Any]]:
             await cache_set("screener:universe", snapshot, ttl_seconds=3600)  # 1h TTL
 
     rows = [
-        r for r in (snapshot or [])
+        r
+        for r in (snapshot or [])
         if r.get("marketCap") and r.get("symbol") not in _TREEMAP_ETF_PROXIES
     ]
     if not rows:
@@ -1632,12 +1765,16 @@ async def market_treemap(request: Request) -> List[Dict[str, Any]]:
 
     symbols = [r["symbol"] for r in rows]
 
-    def _fetch_changes() -> Dict[str, float]:
+    def _fetch_changes() -> dict[str, float]:
         raw = yf.download(
-            " ".join(symbols), period="5d", interval="1d",
-            auto_adjust=True, progress=False, group_by="ticker",
+            " ".join(symbols),
+            period="5d",
+            interval="1d",
+            auto_adjust=True,
+            progress=False,
+            group_by="ticker",
         )
-        out: Dict[str, float] = {}
+        out: dict[str, float] = {}
         for sym in symbols:
             try:
                 closes = raw[sym]["Close"].dropna()
@@ -1684,15 +1821,16 @@ async def market_treemap(request: Request) -> List[Dict[str, Any]]:
 
 class BacktestRequest(BaseModel):
     """Body for the rule-based strategy backtester (F28)."""
+
     symbol: str
     strategy: str = "sma_cross"
-    params: Dict[str, Any] = {}
-    period: str = "2y"   # 1y | 2y | 5y
+    params: dict[str, Any] = {}
+    period: str = "2y"  # 1y | 2y | 5y
 
 
 @router.post("/backtest")
 @limiter.limit(lambda: Config.RATE_LIMIT_BACKTEST, key_func=get_remote_address)
-async def backtest(request: Request, body: BacktestRequest) -> Dict[str, Any]:
+async def backtest(request: Request, body: BacktestRequest) -> dict[str, Any]:
     """Run a curated long-only strategy over a yfinance window. On-demand,
     no persistence. Redis-cached 1h by (symbol,strategy,params,period)."""
     import hashlib
@@ -1703,13 +1841,16 @@ async def backtest(request: Request, body: BacktestRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=422, detail="Invalid symbol.")
     if body.strategy not in STRATEGIES:
         raise HTTPException(status_code=422, detail="Unknown strategy.")
-    key = "backtest:" + hashlib.md5(
-        json.dumps(
-            {"s": sym, "st": body.strategy, "p": body.params, "pe": body.period},
-            sort_keys=True,
-        ).encode(),
-        usedforsecurity=False,
-    ).hexdigest()
+    key = (
+        "backtest:"
+        + hashlib.md5(
+            json.dumps(
+                {"s": sym, "st": body.strategy, "p": body.params, "pe": body.period},
+                sort_keys=True,
+            ).encode(),
+            usedforsecurity=False,
+        ).hexdigest()
+    )
     cached = await cache_get(key)
     if cached:
         return cached
@@ -1743,7 +1884,7 @@ _SEARCH_SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-]{1,15}$")
 
 @router.get("/symbols/search")
 @limiter.limit(lambda: Config.RATE_LIMIT_READONLY, key_func=get_remote_address)
-async def symbol_search(request: Request, q: str = "") -> List[Dict[str, Any]]:
+async def symbol_search(request: Request, q: str = "") -> list[dict[str, Any]]:
     """Live ticker search across exchanges for the command palette.
 
     Proxies Yahoo's keyless search endpoint, keeping only analyzable quote
@@ -1760,7 +1901,7 @@ async def symbol_search(request: Request, q: str = "") -> List[Dict[str, Any]]:
     if cached is not None:
         return cached
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     try:
         async with httpx.AsyncClient(timeout=8) as client:
             resp = await client.get(
@@ -1776,13 +1917,15 @@ async def symbol_search(request: Request, q: str = "") -> List[Dict[str, Any]]:
                 continue
             if str(quote.get("quoteType") or "").upper() not in _SEARCH_QUOTE_TYPES:
                 continue
-            results.append({
-                "symbol":   symbol,
-                "name":     str(quote.get("shortname") or quote.get("longname") or "").strip(),
-                "exchange": str(quote.get("exchDisp") or quote.get("exchange") or "").strip(),
-                "type":     str(quote.get("quoteType") or "").upper(),
-            })
-    except Exception as e:  # noqa: BLE001 — degrade to [] (palette falls back to static list)
+            results.append(
+                {
+                    "symbol": symbol,
+                    "name": str(quote.get("shortname") or quote.get("longname") or "").strip(),
+                    "exchange": str(quote.get("exchDisp") or quote.get("exchange") or "").strip(),
+                    "type": str(quote.get("quoteType") or "").upper(),
+                }
+            )
+    except Exception as e:
         logger.warning(f"[SYMSEARCH] '{query}' failed: {e}")
         return []
 

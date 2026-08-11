@@ -3,9 +3,10 @@
 
 yfinance, InfluxDB, and the Redis cache are all mocked; no network required.
 """
+
 from contextlib import AbstractContextManager
-from typing import Any, Tuple
-from unittest.mock import patch, AsyncMock, MagicMock
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pandas as pd
@@ -25,24 +26,25 @@ client = TestClient(_test_app)
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_ohlcv_df(rows: int, freq: str, start: str = "2026-01-02 09:30") -> pd.DataFrame:
     """OHLCV frame with a tz-aware UTC DatetimeIndex, shaped like a yfinance
     download result (single-level columns)."""
-    idx  = pd.date_range(start, periods=rows, freq=freq, tz="UTC")
+    idx = pd.date_range(start, periods=rows, freq=freq, tz="UTC")
     base = np.linspace(100.0, 120.0, rows)
     return pd.DataFrame(
         {
-            "Open":   base,
-            "High":   base + 1.0,
-            "Low":    base - 1.0,
-            "Close":  base + 0.5,
+            "Open": base,
+            "High": base + 1.0,
+            "Low": base - 1.0,
+            "Close": base + 0.5,
             "Volume": np.full(rows, 1_000_000.0),
         },
         index=idx,
     )
 
 
-def _cache_patches() -> Tuple[AbstractContextManager[Any], AbstractContextManager[Any]]:
+def _cache_patches() -> tuple[AbstractContextManager[Any], AbstractContextManager[Any]]:
     """Force a cache miss and a no-op cache write."""
     return (
         patch("backend.routers.history.cache_get", AsyncMock(return_value=None)),
@@ -54,6 +56,7 @@ def _cache_patches() -> Tuple[AbstractContextManager[Any], AbstractContextManage
 # Shape + metrics
 # ---------------------------------------------------------------------------
 
+
 def test_history_intraday_shape_and_metrics() -> None:
     """1d/5m is intraday: skips InfluxDB, returns VWAP-bearing bars + stats."""
     df = _make_ohlcv_df(40, "5min")
@@ -63,8 +66,8 @@ def test_history_intraday_shape_and_metrics() -> None:
 
     assert resp.status_code == 200
     d = resp.json()
-    assert d["symbol"]   == "AAPL"   # uppercased
-    assert d["period"]   == "1d"
+    assert d["symbol"] == "AAPL"  # uppercased
+    assert d["period"] == "1d"
     assert d["interval"] == "5m"
     assert len(d["history"]) == 40
 
@@ -86,11 +89,14 @@ def test_history_daily_yfinance_fallback() -> None:
     yfinance. Daily bars carry no VWAP."""
     df = _make_ohlcv_df(120, "D", start="2026-01-02")
     mock_influx = MagicMock()
-    mock_influx.query_history.return_value = []   # below the min-rows threshold
+    mock_influx.query_history.return_value = []  # below the min-rows threshold
     cg, cs = _cache_patches()
-    with cg, cs, \
-         patch("backend.routers.history.influx_svc", mock_influx), \
-         patch("yfinance.download", MagicMock(return_value=df)):
+    with (
+        cg,
+        cs,
+        patch("backend.routers.history.influx_svc", mock_influx),
+        patch("yfinance.download", MagicMock(return_value=df)),
+    ):
         resp = client.get("/history?symbol=MSFT&period=3mo&interval=1d")
 
     assert resp.status_code == 200
@@ -104,6 +110,7 @@ def test_history_daily_yfinance_fallback() -> None:
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
+
 
 def test_history_invalid_interval_for_period_returns_400() -> None:
     cg, cs = _cache_patches()
@@ -130,6 +137,7 @@ def test_history_empty_data_returns_404() -> None:
 # Intraday freshness + VWAP completeness (F29 / #287c / #285)
 # ---------------------------------------------------------------------------
 
+
 def test_history_intraday_every_bar_carries_vwap() -> None:
     """Every intraday bar must carry a `vwap` field (the chart's VWAP overlay
     reads it per-bar). A missing field on any bar regresses the overlay."""
@@ -154,7 +162,7 @@ def test_history_intraday_not_truncated_before_latest_bar() -> None:
         resp = client.get("/history?symbol=AAPL&period=1d&interval=5m")
 
     bars = resp.json()["history"]
-    assert len(bars) == len(df)               # no bars dropped
+    assert len(bars) == len(df)  # no bars dropped
     assert bars[-1]["time"] == expected_last_time
 
 
@@ -163,6 +171,7 @@ def test_intraday_ttl_short_during_market_hours() -> None:
     surfaces the latest minutes, and relaxes outside session hours (#287c)."""
     from datetime import datetime
     from zoneinfo import ZoneInfo
+
     import backend.routers.history as hist
 
     eastern = ZoneInfo("America/New_York")

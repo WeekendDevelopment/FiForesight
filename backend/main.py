@@ -5,15 +5,25 @@ import traceback
 from contextlib import asynccontextmanager
 
 import uvicorn
+from config import Config, SanitizeHttpxFilter
+from dependencies import limiter
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from redis_cache import close_redis, init_redis
+from routers import (
+    alerts,
+    analytics,
+    backtest,
+    history,
+    market,
+    portfolio,
+    predict,
+    simulation,
+    trade,
+    watchlist,
+)
 from slowapi.errors import RateLimitExceeded
-
-from config import Config, SanitizeHttpxFilter
-from dependencies import limiter
-from redis_cache import init_redis, close_redis
-from routers import predict, simulation, trade, market, history, backtest, analytics, portfolio, alerts, watchlist
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -31,6 +41,7 @@ async def lifespan(app: FastAPI):
     # Warm the FRED macro snapshot (Feature 15) so the first /macro and /predict
     # requests hit a warm 1h cache. Non-blocking and non-fatal.
     import asyncio as _asyncio
+
     from dependencies import fred_svc
 
     async def _warm_fred() -> None:
@@ -67,9 +78,13 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 # --- CORS --------------------------------------------------------------------
 _origins = [o.strip() for o in Config.ALLOWED_ORIGINS.split(",") if o.strip() and o.strip() != "*"]
 if not _origins:
-    logger.error("[CORS] ALLOWED_ORIGINS resolved to an empty list — no cross-origin requests will be permitted.")
+    logger.error(
+        "[CORS] ALLOWED_ORIGINS resolved to an empty list — no cross-origin requests will be permitted."
+    )
 elif len(_origins) != len([o.strip() for o in Config.ALLOWED_ORIGINS.split(",") if o.strip()]):
-    logger.error("[CORS] ALLOWED_ORIGINS contained a wildcard '*' entry — it was removed. Set explicit origins only.")
+    logger.error(
+        "[CORS] ALLOWED_ORIGINS contained a wildcard '*' entry — it was removed. Set explicit origins only."
+    )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
@@ -77,6 +92,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
 
 # --- Global exception handler ------------------------------------------------
 @app.exception_handler(Exception)

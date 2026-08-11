@@ -10,6 +10,7 @@ Coverage:
   • >30 symbols are capped; invalid symbol chars are filtered out
   • no symbols → [] without calling the fetcher
 """
+
 from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
@@ -33,33 +34,49 @@ _app.include_router(watchlist.router)
 client = TestClient(_app, raise_server_exceptions=False)
 
 _AAPL = {
-    "symbol": "AAPL", "price": 150.0, "changePct": 1.2, "peRatio": 28.5,
-    "rsi": 55.0, "pctFrom52wHigh": -5.25, "marketCap": 2_500_000_000_000,
+    "symbol": "AAPL",
+    "price": 150.0,
+    "changePct": 1.2,
+    "peRatio": 28.5,
+    "rsi": 55.0,
+    "pctFrom52wHigh": -5.25,
+    "marketCap": 2_500_000_000_000,
     "nextEarnings": "2025-01-30",
 }
 _MSFT = {
-    "symbol": "MSFT", "price": 400.0, "changePct": -0.8, "peRatio": 32.0,
-    "rsi": 48.0, "pctFrom52wHigh": -2.1, "marketCap": 3_000_000_000_000,
+    "symbol": "MSFT",
+    "price": 400.0,
+    "changePct": -0.8,
+    "peRatio": 32.0,
+    "rsi": 48.0,
+    "pctFrom52wHigh": -2.1,
+    "marketCap": 3_000_000_000_000,
     "nextEarnings": "2025-01-28",
 }
 
 
 def test_metrics_shape() -> None:
-    with patch.object(watchlist, "fetch_watchlist_metrics",
-                       AsyncMock(return_value=[_AAPL, _MSFT])):
+    with patch.object(watchlist, "fetch_watchlist_metrics", AsyncMock(return_value=[_AAPL, _MSFT])):
         resp = client.get("/watchlist/metrics?symbols=AAPL,MSFT")
     assert resp.status_code == 200
     data = resp.json()
     assert len(data) == 2
     row = next(r for r in data if r["symbol"] == "AAPL")
-    for key in ("price", "changePct", "peRatio", "rsi", "pctFrom52wHigh", "marketCap", "nextEarnings"):
+    for key in (
+        "price",
+        "changePct",
+        "peRatio",
+        "rsi",
+        "pctFrom52wHigh",
+        "marketCap",
+        "nextEarnings",
+    ):
         assert key in row
 
 
 def test_bad_symbol_skipped() -> None:
     """One symbol's fetch fails (service returns only the survivor) → no 500."""
-    with patch.object(watchlist, "fetch_watchlist_metrics",
-                       AsyncMock(return_value=[_MSFT])):
+    with patch.object(watchlist, "fetch_watchlist_metrics", AsyncMock(return_value=[_MSFT])):
         resp = client.get("/watchlist/metrics?symbols=BADTICKERX,MSFT")
     assert resp.status_code == 200
     data = resp.json()
@@ -75,9 +92,19 @@ def test_symbol_cap_and_validation() -> None:
 
     async def _fake(symbols: list[str]) -> list[dict]:
         called_with.extend(symbols)
-        return [{"symbol": s, "price": 1.0, "changePct": None, "peRatio": None,
-                  "rsi": None, "pctFrom52wHigh": None, "marketCap": None,
-                  "nextEarnings": None} for s in symbols]
+        return [
+            {
+                "symbol": s,
+                "price": 1.0,
+                "changePct": None,
+                "peRatio": None,
+                "rsi": None,
+                "pctFrom52wHigh": None,
+                "marketCap": None,
+                "nextEarnings": None,
+            }
+            for s in symbols
+        ]
 
     with patch.object(watchlist, "fetch_watchlist_metrics", side_effect=_fake):
         resp = client.get(f"/watchlist/metrics?symbols={','.join(many)},BAD SYMBOL!")

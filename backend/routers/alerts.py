@@ -24,26 +24,28 @@ Endpoints
   POST   /alerts/evaluate              — [cron] run the evaluator
   POST   /alerts/digest                — [cron] send the daily briefing digest
 """
+
 import hmac
 import logging
 import re
-from typing import Any, Dict, Optional
-
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import BaseModel, field_validator
+from typing import Any
 
 import alerts_evaluator
 import alerts_store
 import supabase_rest
 from config import Config
-from dependencies import limiter, require_user, yf_svc, forecast_store, _user_rate_key
+from dependencies import _user_rate_key, forecast_store, limiter, require_user, yf_svc
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from notifications import web_push_configured
+from pydantic import BaseModel, field_validator
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 _SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-:]{1,15}$")
-_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 _VALID_TYPES = {"price_cross", "rsi_threshold", "pct_move", "earnings_soon", "forecast_breakout"}
 _VALID_OPERATORS = {"above", "below"}
@@ -65,7 +67,8 @@ def _handle_store_error(exc: Exception) -> HTTPException:
         logger.error(
             "[ALERTS] Supabase REST error (HTTP %s): %s — "
             "if 404/42P01, the 0003_alerts / 0004_push_subscriptions migration may not be applied.",
-            exc.status_code, exc,
+            exc.status_code,
+            exc,
         )
         return HTTPException(status_code=502, detail="Could not reach the alerts store.")
     logger.error("[ALERTS] unexpected store error: %s", exc)
@@ -76,11 +79,12 @@ def _handle_store_error(exc: Exception) -> HTTPException:
 # Schemas + validation
 # ---------------------------------------------------------------------------
 
+
 class RuleCreate(BaseModel):
     symbol: str
     type: str
-    operator: Optional[str] = None
-    threshold: Optional[float] = None
+    operator: str | None = None
+    threshold: float | None = None
     active: bool = True
 
     @field_validator("symbol")
@@ -101,7 +105,7 @@ class RuleCreate(BaseModel):
 
     @field_validator("operator")
     @classmethod
-    def _validate_operator(cls, v: Optional[str]) -> Optional[str]:
+    def _validate_operator(cls, v: str | None) -> str | None:
         if v is None or v == "":
             return None
         v = v.strip().lower()
@@ -141,13 +145,13 @@ def _validate_combo(rule: RuleCreate) -> None:
 
 
 class RuleUpdate(BaseModel):
-    active: Optional[bool] = None
-    threshold: Optional[float] = None
+    active: bool | None = None
+    threshold: float | None = None
 
 
 class PushSubscription(BaseModel):
     endpoint: str
-    keys: Dict[str, str]
+    keys: dict[str, str]
 
     @field_validator("endpoint")
     @classmethod
@@ -166,13 +170,14 @@ class Unsubscribe(BaseModel):
 # Rules CRUD
 # ---------------------------------------------------------------------------
 
+
 @router.get("/alerts/rules")
 @limiter.limit(lambda: Config.RATE_LIMIT_ALERTS, key_func=_user_rate_key)
 async def list_rules(
     request: Request,
     user_id: str = Depends(require_user),
     authorization: str = Header(default=""),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     try:
         rules = await alerts_store.list_rules(_bearer(authorization))
     except Exception as exc:
@@ -187,11 +192,16 @@ async def create_rule(
     body: RuleCreate,
     user_id: str = Depends(require_user),
     authorization: str = Header(default=""),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     _validate_combo(body)
     try:
         rule = await alerts_store.create_rule(
-            _bearer(authorization), body.symbol, body.type, body.operator, body.threshold, body.active
+            _bearer(authorization),
+            body.symbol,
+            body.type,
+            body.operator,
+            body.threshold,
+            body.active,
         )
     except Exception as exc:
         raise _handle_store_error(exc)
@@ -206,10 +216,10 @@ async def update_rule(
     body: RuleUpdate,
     user_id: str = Depends(require_user),
     authorization: str = Header(default=""),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if not _UUID_RE.match(rule_id):
         raise HTTPException(status_code=422, detail="Invalid rule id.")
-    fields: Dict[str, Any] = {}
+    fields: dict[str, Any] = {}
     if body.active is not None:
         fields["active"] = body.active
     if body.threshold is not None:
@@ -232,7 +242,7 @@ async def delete_rule(
     rule_id: str,
     user_id: str = Depends(require_user),
     authorization: str = Header(default=""),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     if not _UUID_RE.match(rule_id):
         raise HTTPException(status_code=422, detail="Invalid rule id.")
     try:
@@ -250,7 +260,7 @@ async def list_fires(
     request: Request,
     user_id: str = Depends(require_user),
     authorization: str = Header(default=""),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     try:
         fires = await alerts_store.list_fires(_bearer(authorization))
     except Exception as exc:
@@ -262,12 +272,13 @@ async def list_fires(
 # Web Push subscription
 # ---------------------------------------------------------------------------
 
+
 @router.get("/alerts/vapid-public-key")
 @limiter.limit(lambda: Config.RATE_LIMIT_ALERTS, key_func=_user_rate_key)
 async def vapid_public_key(
     request: Request,
     user_id: str = Depends(require_user),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return {
         "public_key": Config.VAPID_PUBLIC_KEY or "",
         "configured": web_push_configured(),
@@ -281,7 +292,7 @@ async def subscribe(
     body: PushSubscription,
     user_id: str = Depends(require_user),
     authorization: str = Header(default=""),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     p256dh = body.keys.get("p256dh", "")
     auth_key = body.keys.get("auth", "")
     if not p256dh or not auth_key:
@@ -302,7 +313,7 @@ async def unsubscribe(
     body: Unsubscribe,
     user_id: str = Depends(require_user),
     authorization: str = Header(default=""),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     try:
         await alerts_store.delete_push_subscription(_bearer(authorization), body.endpoint)
     except Exception as exc:
@@ -313,6 +324,7 @@ async def unsubscribe(
 # ---------------------------------------------------------------------------
 # Internal scheduled endpoints — X-Cron-Secret gated (NOT user JWT)
 # ---------------------------------------------------------------------------
+
 
 def require_cron(x_cron_secret: str = Header(default="", alias="X-Cron-Secret")) -> bool:
     """Guard the evaluator/digest endpoints with a shared secret.
@@ -328,7 +340,7 @@ def require_cron(x_cron_secret: str = Header(default="", alias="X-Cron-Secret"))
 
 
 @router.post("/alerts/evaluate")
-async def run_evaluator(request: Request, _ok: bool = Depends(require_cron)) -> Dict[str, Any]:
+async def run_evaluator(request: Request, _ok: bool = Depends(require_cron)) -> dict[str, Any]:
     if not Config.SUPABASE_SERVICE_ROLE_KEY:
         raise HTTPException(status_code=503, detail="Evaluator requires SUPABASE_SERVICE_ROLE_KEY.")
     try:
@@ -339,7 +351,7 @@ async def run_evaluator(request: Request, _ok: bool = Depends(require_cron)) -> 
 
 
 @router.post("/alerts/digest")
-async def run_digest(request: Request, _ok: bool = Depends(require_cron)) -> Dict[str, Any]:
+async def run_digest(request: Request, _ok: bool = Depends(require_cron)) -> dict[str, Any]:
     if not Config.SUPABASE_SERVICE_ROLE_KEY:
         raise HTTPException(status_code=503, detail="Digest requires SUPABASE_SERVICE_ROLE_KEY.")
     try:

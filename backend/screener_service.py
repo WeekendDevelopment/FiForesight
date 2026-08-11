@@ -6,22 +6,23 @@ bounded (semaphore + per-call timeout). A single bad symbol is logged and skippe
 (returns ``None``) so it never aborts the batch. Callers cache the full snapshot
 in Redis (1h TTL) and apply filters in-memory.
 """
+
 import asyncio
 import logging
 
 import yfinance as yf
-
 from universe import SCREENER_UNIVERSE
 
 logger = logging.getLogger(__name__)
 
-_SEM = asyncio.Semaphore(8)   # cap concurrent yfinance calls
-_TIMEOUT = 12.0               # match the backend external-fetch standard
+_SEM = asyncio.Semaphore(8)  # cap concurrent yfinance calls
+_TIMEOUT = 12.0  # match the backend external-fetch standard
 
 
 async def _fetch_row(symbol: str) -> dict | None:
     """Build one screener row for ``symbol``; ``None`` on any failure/timeout."""
     async with _SEM:
+
         def _get() -> dict:
             t = yf.Ticker(symbol)
             info = t.info or {}
@@ -45,9 +46,11 @@ async def _fetch_row(symbol: str) -> dict | None:
                 "forwardPE": info.get("forwardPE"),
                 "beta": info.get("beta"),
                 "dividendYield": round(info["dividendYield"] * 100, 2)
-                    if info.get("dividendYield") is not None else None,
+                if info.get("dividendYield") is not None
+                else None,
                 "revenueGrowth": round(info["revenueGrowth"] * 100, 1)
-                    if info.get("revenueGrowth") is not None else None,
+                if info.get("revenueGrowth") is not None
+                else None,
                 "rsi": rsi,
                 "price": info.get("currentPrice") or info.get("regularMarketPrice"),
                 "currency": info.get("currency"),
