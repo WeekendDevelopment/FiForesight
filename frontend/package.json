@@ -17,7 +17,7 @@
     "@mui/material": "^7.3.9",
     "@supabase/supabase-js": "^2.108.1",
     "@types/react-plotly.js": "^2.6.4",
-    "axios": "^1.18.1",
+    "axios": "^1.20.0",
     "lightweight-charts": "^5.2.0",
     "lucide-react": "^1.18.0",
     "next": "16.3.6",
