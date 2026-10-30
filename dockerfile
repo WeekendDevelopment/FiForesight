@@ -2,8 +2,8 @@
 FROM node:26-slim AS frontend-builder
 WORKDIR /app/frontend
 
-# Install pnpm
-RUN npm install -g pnpm
+# Install pnpm (pinned to the root package.json "packageManager" version)
+RUN npm install -g pnpm@10.33.0
 
 # Accept NEXT_PUBLIC_APP_ENV as a build argument
 ARG NEXT_PUBLIC_APP_ENV
@@ -43,8 +43,8 @@ RUN pip install --no-cache-dir -r ./backend/requirements.txt
 # Copy root package.json and install dependencies
 COPY package.json pnpm-lock.yaml ./
 
-# Install pnpm
-RUN npm install -g pnpm
+# Install pnpm (pinned to the root package.json "packageManager" version)
+RUN npm install -g pnpm@10.33.0
 
 # Install dependencies
 RUN pnpm install --frozen-lockfile

@@ -1123,9 +1123,11 @@ async def debug():
     try:
         await asyncio.to_thread(influx_svc.has_recent_data, "DEBUG_TEST")
         results["influxdb_reachable"] = True
-    except Exception as e:
+    except Exception:
+        # Never return raw exception text from a public endpoint (CodeQL py/stack-trace-exposure).
+        logger.warning("[debug] InfluxDB connectivity check failed", exc_info=True)
         results["influxdb_reachable"] = False
-        results["influxdb_error"] = str(e)
+        results["influxdb_error"] = "connectivity check failed - see server logs"
 
     # Test yfinance (quick 5-day fetch)
     if YFINANCE_AVAILABLE:
@@ -1144,9 +1146,10 @@ async def debug():
             )
             results["yfinance_reachable"] = not df.empty
             results["yfinance_rows"] = len(df)
-        except Exception as e:
+        except Exception:
+            logger.warning("[debug] yfinance check failed", exc_info=True)
             results["yfinance_reachable"] = False
-            results["yfinance_error"] = str(e)
+            results["yfinance_error"] = "fetch failed - see server logs"
 
     return results
 
