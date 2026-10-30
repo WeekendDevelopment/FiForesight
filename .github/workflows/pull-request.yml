@@ -61,7 +61,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v7
         with:
-          node-version: 'latest'
+          node-version: '24'
 
       - name: Install Dependencies
         working-directory: frontend
@@ -95,7 +95,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v7
         with:
-          node-version: 'latest'
+          node-version: '24'
 
       - name: Install Dependencies
         working-directory: frontend
@@ -154,7 +154,7 @@ jobs:
       - name: Install Ruff
         working-directory: backend
         shell: bash
-        run: pip install ruff
+        run: pip install "ruff==0.16.2"
 
       - name: Run Ruff Linter
         working-directory: backend
