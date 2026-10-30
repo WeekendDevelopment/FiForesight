@@ -85,10 +85,17 @@ jobs:
         with:
           fetch-depth: '0'
 
+      # Pin pnpm to the root package.json "packageManager" value. Floating on
+      # latest pulled pnpm 12, which no longer reads "pnpm.overrides" from
+      # package.json and then rejected the committed lockfile with
+      # ERR_PNPM_LOCKFILE_CONFIG_MISMATCH.
       - name: Setup pnpm
         working-directory: frontend
         shell: bash
-        run: npm install --global pnpm
+        run: |
+          PNPM_VERSION=$(node -p "require('../package.json').packageManager" | cut -d@ -f2)
+          echo "Using pnpm $PNPM_VERSION (from root package.json packageManager)"
+          npm install --global "pnpm@$PNPM_VERSION"
 
       - name: Setup node
         uses: actions/setup-node@v7
